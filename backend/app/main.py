@@ -5,7 +5,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 
-from app.database import create_tables
+from app.database import run_migrations
 
 logging.basicConfig(
     level=logging.INFO,
@@ -25,8 +25,8 @@ async def lifespan(app: FastAPI):
     from app.models.settings_model import PaperlessSettings
     from sqlalchemy import select as sa_select
 
-    # Startup: Create database tables
-    await create_tables()
+    # Run database migrations (Alembic upgrade to head)
+    await asyncio.get_running_loop().run_in_executor(None, run_migrations)
 
     # Auto-start watchdog if it was enabled before shutdown
     if ocr_settings.get("watchdog_enabled"):

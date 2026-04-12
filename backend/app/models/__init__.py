@@ -8,10 +8,12 @@ from app.models.classifier import (
 )
 from app.models.ocr import OcrPageResult
 from app.models.rag import RagConfig, RagChatSession, RagChatMessage, RagIndexingState, ApiKey
+from app.models.cloud_import import CloudSource, CloudImportLog
+from app.models.duplicates import DuplicateIgnore, DuplicateInvoiceCache
 
 __all__ = [
     "PaperlessSettings",
-    "LLMProvider", 
+    "LLMProvider",
     "CustomPrompt",
     "IgnoredTag",
     "AppSettings",
@@ -31,5 +33,9 @@ __all__ = [
     "RagChatMessage",
     "RagIndexingState",
     "ApiKey",
+    "CloudSource",
+    "CloudImportLog",
+    "DuplicateIgnore",
+    "DuplicateInvoiceCache",
 ]
 
