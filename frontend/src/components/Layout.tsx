@@ -25,7 +25,6 @@ import {
   FolderOpen,
   Ban,
   Clock,
-  Github,
   Heart,
   Coffee,
   Search,
@@ -625,7 +624,7 @@ export default function Layout({ children }: LayoutProps) {
                          border border-surface-700/40 hover:border-surface-600/60 transition-all duration-200"
               title="GitHub Repository"
             >
-              <Github className="w-3.5 h-3.5" />
+              <ExternalLink className="w-3.5 h-3.5" />
               <span>GitHub</span>
             </a>
             <a
