@@ -1,4 +1,4 @@
-FROM python:3.11-bookworm
+FROM python:3.14
 
 # Avoid warnings by switching to noninteractive
 ENV DEBIAN_FRONTEND=noninteractive
@@ -55,7 +55,7 @@ RUN curl -fsSL https://downloads.rclone.org/rclone-current-linux-amd64.zip -o /t
 # Install Node.js 20 from NodeSource
 RUN mkdir -p /etc/apt/keyrings \
     && curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key | gpg --dearmor -o /etc/apt/keyrings/nodesource.gpg \
-    && echo "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_20.x nodistro main" > /etc/apt/sources.list.d/nodesource.list \
+    && echo "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_22.x nodistro main" > /etc/apt/sources.list.d/nodesource.list \
     && apt-get update \
     && apt-get install -y --no-install-recommends nodejs \
     && rm -rf /var/lib/apt/lists/*
@@ -73,7 +73,7 @@ RUN groupadd --gid $USER_GID $USERNAME || groupmod -n $USERNAME $(getent group $
     && chmod 0440 /etc/sudoers.d/$USERNAME
 
 # Create virtual environment and install dev tools
-# python:3.11-slim already provides Python 3.11 at /usr/local/bin/python3
+# python:3.14-trixie already provides Python 3.14 at /usr/local/bin/python3
 ENV VIRTUAL_ENV=/opt/venv
 RUN python3 -m venv $VIRTUAL_ENV \
     && $VIRTUAL_ENV/bin/pip install --upgrade pip setuptools wheel \
