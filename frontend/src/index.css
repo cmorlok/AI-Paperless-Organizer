@@ -1,6 +1,49 @@
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+@import "tailwindcss";
+
+@theme {
+  /* Custom color palette */
+  --color-primary-50:  #e6fff5;
+  --color-primary-100: #b3ffe0;
+  --color-primary-200: #80ffcc;
+  --color-primary-300: #4dffb8;
+  --color-primary-400: #1affa3;
+  --color-primary-500: #00e68a;
+  --color-primary-600: #00b36b;
+  --color-primary-700: #00804d;
+  --color-primary-800: #004d2e;
+  --color-primary-900: #001a10;
+
+  --color-surface-50:  #f8fafc;
+  --color-surface-100: #f1f5f9;
+  --color-surface-200: #e2e8f0;
+  --color-surface-300: #cbd5e1;
+  --color-surface-400: #94a3b8;
+  --color-surface-500: #64748b;
+  --color-surface-600: #475569;
+  --color-surface-700: #334155;
+  --color-surface-800: #1e293b;
+  --color-surface-900: #0f172a;
+  --color-surface-950: #020617;
+
+  /* Custom font families */
+  --font-sans:    'JetBrains Mono', 'Fira Code', monospace;
+  --font-display: 'Space Grotesk', system-ui, sans-serif;
+
+  /* Custom animations */
+  --animate-fade-in:    fadeIn 0.5s ease-out;
+  --animate-slide-up:   slideUp 0.4s ease-out;
+  --animate-pulse-slow: pulse 3s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+@keyframes slideUp {
+  from { opacity: 0; transform: translateY(10px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
 
 :root {
   --color-bg: #0f172a;
@@ -53,7 +96,7 @@ body {
 
 @layer components {
   .btn {
-    @apply px-4 py-2 rounded-lg font-medium transition-all duration-200 
+    @apply px-4 py-2 rounded-lg font-medium transition-all duration-200
            focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-surface-900;
   }
 
@@ -72,8 +115,8 @@ body {
   }
 
   .input {
-    @apply w-full px-4 py-2 rounded-lg bg-surface-800 border border-surface-600 
-           text-surface-100 placeholder-surface-500
+    @apply w-full px-4 py-2 rounded-lg bg-surface-800 border border-surface-600
+           text-surface-100 placeholder:text-surface-500
            focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent
            transition-all duration-200;
   }
@@ -99,4 +142,3 @@ body {
     @apply bg-emerald-600/20 text-emerald-400 border border-emerald-500/30;
   }
 }
-
