@@ -10,7 +10,7 @@ import * as api from '../services/api'
 // ── Animated counter ──────────────────────────────────────────────────────────
 function AnimatedNumber({ value, duration = 900 }: { value: number; duration?: number }) {
   const [display, setDisplay] = useState(0)
-  const raf = useRef<number>()
+  const raf = useRef<number | undefined>(undefined)
   useEffect(() => {
     const from = 0
     const start = performance.now()
