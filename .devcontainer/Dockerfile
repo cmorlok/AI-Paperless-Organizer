@@ -1,4 +1,4 @@
-FROM python:3.11-bookworm
+FROM python:3.14
 
 # Avoid warnings by switching to noninteractive
 ENV DEBIAN_FRONTEND=noninteractive
@@ -73,7 +73,7 @@ RUN groupadd --gid $USER_GID $USERNAME || groupmod -n $USERNAME $(getent group $
     && chmod 0440 /etc/sudoers.d/$USERNAME
 
 # Create virtual environment and install dev tools
-# python:3.11-slim already provides Python 3.11 at /usr/local/bin/python3
+# python:3.14-trixie already provides Python 3.14 at /usr/local/bin/python3
 ENV VIRTUAL_ENV=/opt/venv
 RUN python3 -m venv $VIRTUAL_ENV \
     && $VIRTUAL_ENV/bin/pip install --upgrade pip setuptools wheel \
