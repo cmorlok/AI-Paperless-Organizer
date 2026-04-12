@@ -53,11 +53,12 @@ frontend/build/
 *~
 .DS_Store
 Thumbs.db
+.devcontainer/volumes
 
 # =========================
 # Docker
 # =========================
-# Keine Docker-Dateien ignorieren, sie gehören ins Repo
+docker-compose.override.yml
 
 # =========================
 # Database & Data (nutzer-spezifische Laufzeitdaten)

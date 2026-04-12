@@ -1,0 +1,26 @@
+name: ai-paperless-organizer_devcontainer
+
+services:
+  app:
+    build:
+      context: ..
+      dockerfile: .devcontainer/Dockerfile
+      args:
+        # Pass host user ID to match container user with host user
+        # This allows rootless Podman to work without permission issues
+        USER_UID: ${USER_UID:-1000}
+        USER_GID: ${USER_GID:-1000}
+    volumes:
+      - ..:/app:Z
+
+    command: sleep infinity
+    # Podman rootless: Use userns_mode to preserve user ID mapping
+    userns_mode: keep-id
+    env_file:
+      - ../.env
+    networks:
+      - dev-network
+
+networks:
+  dev-network:
+    driver: bridge
