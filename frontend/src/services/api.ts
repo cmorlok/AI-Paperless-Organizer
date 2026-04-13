@@ -95,6 +95,16 @@ export const updateLLMProvider = (id: number, data: any) =>
     body: JSON.stringify(data),
   })
 
+// Update provider connection fields only (LLM-09)
+export const updateLLMProviderConnection = (providerId: number, apiKey: string, apiBaseUrl?: string) =>
+  fetchJson<{ success: boolean }>(`/settings/llm-providers/${providerId}`, {
+    method: 'PATCH',
+    body: JSON.stringify({
+      api_key: apiKey,
+      api_base_url: apiBaseUrl,
+    }),
+  })
+
 export const getPrompts = () => fetchJson<any[]>('/settings/prompts')
 
 export const updatePrompt = (id: number, data: any) =>
@@ -139,6 +149,8 @@ export const updateAppSettings = (data: {
   show_debug_menu?: boolean
   sidebar_compact?: boolean
   classifier_provider?: string
+  classifier_model?: string
+  ocr_model?: string
 }) =>
   fetchJson<{ success: boolean }>('/settings/app', {
     method: 'PUT',

@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { Save, Check, X, Eye, EyeOff, TestTube, Loader2, ChevronDown, ChevronUp, Cpu, Lock, Bug, Trash2, Ban, Key, Copy, Power, Code2 } from 'lucide-react'
+import { Save, Check, X, Eye, EyeOff, TestTube, Loader2, Cpu, Lock, Bug, Trash2, Ban, Key, Copy, Power, Code2 } from 'lucide-react'
 import clsx from 'clsx'
 import * as api from '../services/api'
 
@@ -9,9 +9,6 @@ interface LLMProvider {
   display_name: string
   api_key: string
   api_base_url: string
-  model: string
-  classifier_model: string
-  vision_model: string
   is_active: boolean
   is_configured: boolean
 }
@@ -26,18 +23,16 @@ export default function SettingsPanel() {
 
   // LLM Providers
   const [providers, setProviders] = useState<LLMProvider[]>([])
-  const [expandedProvider, setExpandedProvider] = useState<string | null>(null)
-  const [llmTestResult, setLlmTestResult] = useState<{ success: boolean; message: string } | null>(null)
-  const [testingLLM, setTestingLLM] = useState(false)
-  
-  // Provider edit states
-  const [editingProvider, setEditingProvider] = useState<{[key: string]: LLMProvider}>({})
-  const [savingProvider, setSavingProvider] = useState<string | null>(null)
-  
-  
-  // Ollama installed models (fetched from Ollama API)
-  const [ollamaInstalledModels, setOllamaInstalledModels] = useState<string[]>([])
-  const [ollamaModelsLoading, setOllamaModelsLoading] = useState(false)
+
+  // Unified LLM settings form state (LLM-09, D-06)
+  const [classifierModel, setClassifierModel] = useState('')
+  const [modelSaved, setModelSaved] = useState(false)
+  const [ocrProvider, setOcrProvider] = useState('ollama')
+  const [ocrModel, setOcrModel] = useState('')
+  const [ocrModelSaved, setOcrModelSaved] = useState(false)
+  const [selectedProviderApiKey, setSelectedProviderApiKey] = useState('')
+  const [providerApiBaseUrl, setProviderApiBaseUrl] = useState('')
+  const [connectionSaved, setConnectionSaved] = useState(false)
   
   // App Settings
   const [appSettings, setAppSettings] = useState({
@@ -140,24 +135,13 @@ export default function SettingsPanel() {
     }
   }
 
-  const loadOllamaInstalledModels = async () => {
-    setOllamaModelsLoading(true)
-    try {
-      const res = await api.getClassifierOllamaModels()
-      if (res.connected && res.installed) {
-        setOllamaInstalledModels(res.installed.map((m: any) => m.name))
-      }
-    } catch (e) {
-      console.error('Failed to load Ollama models:', e)
-    } finally {
-      setOllamaModelsLoading(false)
-    }
-  }
-
   const loadAppSettings = async () => {
     try {
       const settings = await api.getAppSettings()
       setAppSettings(settings)
+      // Load classifier_model and ocr_model for unified form (LLM-09)
+      setClassifierModel((settings as any).classifier_model || '')
+      setOcrModel((settings as any).ocr_model || '')
     } catch (e) {
       console.error('Error loading app settings:', e)
     }
@@ -195,21 +179,23 @@ export default function SettingsPanel() {
 
   const loadSettings = async () => {
     try {
-      const [paperlessSettings, llmProviders] = await Promise.all([
+      const [paperlessSettings, llmProviders, appSettingsData] = await Promise.all([
         api.getPaperlessSettings(),
-        api.getLLMProviders()
+        api.getLLMProviders(),
+        api.getAppSettings()
       ])
 
       setPaperlessUrl(paperlessSettings.url)
       setPaperlessToken(paperlessSettings.api_token)
       setProviders(llmProviders)
-      
-      // Initialize edit states
-      const editStates: {[key: string]: LLMProvider} = {}
-      llmProviders.forEach((p: LLMProvider) => {
-        editStates[p.name] = { ...p }
-      })
-      setEditingProvider(editStates)
+      setAppSettings(appSettingsData)
+
+      // Load current LLM settings for unified form (LLM-09)
+      const activeProvider = llmProviders.find((p: LLMProvider) => p.name === appSettingsData.classifier_provider)
+      if (activeProvider) {
+        setSelectedProviderApiKey(activeProvider.api_key === '***' ? '' : activeProvider.api_key)
+        setProviderApiBaseUrl(activeProvider.api_base_url || '')
+      }
     } catch (error) {
       console.error('Error loading settings:', error)
     }
@@ -250,102 +236,6 @@ export default function SettingsPanel() {
       setPaperlessTestResult({ success: false, message: 'Fehler beim Speichern' })
     } finally {
       setPaperlessSaving(false)
-    }
-  }
-
-  const saveProvider = async (providerName: string) => {
-    const editState = editingProvider[providerName]
-    if (!editState) return
-    
-    const provider = providers.find(p => p.name === providerName)
-    if (!provider) return
-
-    setSavingProvider(providerName)
-    try {
-      await api.updateLLMProvider(provider.id, {
-        name: editState.name,
-        display_name: editState.display_name,
-        api_key: editState.api_key,
-        api_base_url: editState.api_base_url,
-        model: editState.model,
-        classifier_model: editState.classifier_model || '',
-        vision_model: editState.vision_model || '',
-        is_active: editState.is_active
-      })
-      
-      // Reload providers
-      const newProviders = await api.getLLMProviders()
-      setProviders(newProviders)
-      
-      // Update edit states
-      const editStates: {[key: string]: LLMProvider} = {}
-      newProviders.forEach((p: LLMProvider) => {
-        editStates[p.name] = { ...p }
-      })
-      setEditingProvider(editStates)
-    } catch (error) {
-      console.error('Error updating provider:', error)
-    } finally {
-      setSavingProvider(null)
-    }
-  }
-
-  const activateProvider = async (providerName: string) => {
-    const provider = providers.find(p => p.name === providerName)
-    if (!provider) return
-
-    setSavingProvider(providerName)
-    try {
-      await api.updateLLMProvider(provider.id, {
-        name: provider.name,
-        display_name: provider.display_name,
-        api_key: editingProvider[providerName]?.api_key || provider.api_key,
-        api_base_url: editingProvider[providerName]?.api_base_url || provider.api_base_url,
-        model: editingProvider[providerName]?.model || provider.model,
-        classifier_model: editingProvider[providerName]?.classifier_model || provider.classifier_model || '',
-        vision_model: editingProvider[providerName]?.vision_model || provider.vision_model || '',
-        is_active: true
-      })
-      
-      const newProviders = await api.getLLMProviders()
-      setProviders(newProviders)
-      
-      const editStates: {[key: string]: LLMProvider} = {}
-      newProviders.forEach((p: LLMProvider) => {
-        editStates[p.name] = { ...p }
-      })
-      setEditingProvider(editStates)
-    } catch (error) {
-      console.error('Error activating provider:', error)
-    } finally {
-      setSavingProvider(null)
-    }
-  }
-
-  const updateEditState = (providerName: string, field: keyof LLMProvider, value: string | boolean) => {
-    setEditingProvider(prev => ({
-      ...prev,
-      [providerName]: {
-        ...prev[providerName],
-        [field]: value
-      }
-    }))
-  }
-
-  const testLLM = async () => {
-    setTestingLLM(true)
-    setLlmTestResult(null)
-    try {
-      const result = await api.testLLMConnection()
-      if (result.success) {
-        setLlmTestResult({ success: true, message: `Verbunden mit ${result.provider} (${result.model})` })
-      } else {
-        setLlmTestResult({ success: false, message: result.error || 'Test fehlgeschlagen' })
-      }
-    } catch (error) {
-      setLlmTestResult({ success: false, message: 'Verbindung fehlgeschlagen' })
-    } finally {
-      setTestingLLM(false)
     }
   }
 
@@ -432,383 +322,163 @@ export default function SettingsPanel() {
         </div>
       </div>
 
-      {/* LLM Providers */}
+      {/* Unified LLM Settings Form (LLM-09, D-06) */}
       <div className="card p-6">
-        <div className="flex items-center justify-between mb-6">
-          <h2 className="font-display font-semibold text-xl text-surface-100">
-            LLM Provider
-          </h2>
-          <button
-            onClick={testLLM}
-            disabled={testingLLM}
-            className="btn btn-secondary flex items-center gap-2"
-          >
-            {testingLLM ? (
-              <Loader2 className="w-4 h-4 animate-spin" />
-            ) : (
-              <TestTube className="w-4 h-4" />
-            )}
-            Aktiven Provider testen
-          </button>
-        </div>
-
-        {llmTestResult && (
-          <div className={clsx(
-            'p-3 rounded-lg flex items-center gap-2 mb-4',
-            llmTestResult.success 
-              ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/30'
-              : 'bg-red-500/10 text-red-400 border border-red-500/30'
-          )}>
-            {llmTestResult.success ? <Check className="w-5 h-5" /> : <X className="w-5 h-5" />}
-            {llmTestResult.message}
-          </div>
-        )}
-
-        <div className="space-y-3">
-          {providers.map((provider) => {
-            const editState = editingProvider[provider.name] || provider
-            const isExpanded = expandedProvider === provider.name
-            
-            return (
-              <div
-                key={provider.id}
-                className={clsx(
-                  'rounded-xl border transition-all duration-200',
-                  provider.is_active 
-                    ? 'bg-primary-500/10 border-primary-500/30' 
-                    : 'bg-surface-800/50 border-surface-600/50'
-                )}
-              >
-                {/* Provider Header */}
-                <div 
-                  className="p-4 flex items-center justify-between cursor-pointer"
-                  onClick={() => setExpandedProvider(isExpanded ? null : provider.name)}
-                >
-                  <div className="flex items-center gap-3">
-                    {isExpanded ? (
-                      <ChevronUp className="w-5 h-5 text-surface-400" />
-                    ) : (
-                      <ChevronDown className="w-5 h-5 text-surface-400" />
-                    )}
-                    <span className="font-medium text-surface-100">
-                      {provider.display_name}
-                    </span>
-                    {provider.is_active && (
-                      <span className="badge badge-primary">Aktiv</span>
-                    )}
-                    {provider.is_configured && !provider.is_active && (
-                      <span className="badge badge-success">Konfiguriert</span>
-                    )}
-                  </div>
-                  {!provider.is_active && (
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation()
-                        activateProvider(provider.name)
-                      }}
-                      disabled={savingProvider === provider.name}
-                      className="btn btn-secondary text-sm"
-                    >
-                      {savingProvider === provider.name ? (
-                        <Loader2 className="w-4 h-4 animate-spin" />
-                      ) : (
-                        'Aktivieren'
-                      )}
-                    </button>
-                  )}
-                </div>
-
-                {/* Provider Details */}
-                {isExpanded && (
-                  <div className="px-4 pb-4 pt-2 border-t border-surface-600/50 space-y-4">
-                    {/* API Key (not for Ollama) */}
-                    {provider.name !== 'ollama' && (
-                      <div>
-                        <label className="block text-sm font-medium text-surface-300 mb-2">
-                          API Key
-                        </label>
-                        <input
-                          type="password"
-                          value={editState.api_key === '***' ? '' : editState.api_key}
-                          onChange={(e) => updateEditState(provider.name, 'api_key', e.target.value)}
-                          placeholder={provider.api_key ? '••••••••••••••••' : 'API Key eingeben'}
-                          className="input"
-                        />
-                        <p className="mt-1 text-xs text-surface-500">
-                          {provider.name === 'openai' && 'Hole deinen Key von platform.openai.com/api-keys'}
-                          {provider.name === 'anthropic' && 'Hole deinen Key von console.anthropic.com'}
-                          {provider.name === 'azure' && 'Azure Portal → Cognitive Services → Keys'}
-                        </p>
-                      </div>
-                    )}
-
-                    {/* Base URL (for Azure and Ollama) */}
-                    {(provider.name === 'azure' || provider.name === 'ollama') && (
-                      <div>
-                        <label className="block text-sm font-medium text-surface-300 mb-2">
-                          {provider.name === 'azure' ? 'Azure Endpoint' : 'Ollama URL'}
-                        </label>
-                        <input
-                          type="url"
-                          value={editState.api_base_url}
-                          onChange={(e) => updateEditState(provider.name, 'api_base_url', e.target.value)}
-                          placeholder={provider.name === 'azure' ? 'https://xxx.openai.azure.com' : 'http://host.docker.internal:11434'}
-                          className="input"
-                        />
-                        {provider.name === 'ollama' && (
-                          <p className="mt-1 text-xs text-surface-500">
-                            Für lokales Ollama: <code className="text-primary-400">http://host.docker.internal:11434</code>
-                          </p>
-                        )}
-                      </div>
-                    )}
-
-                    {/* === OLLAMA: Role-based model selection with live data === */}
-                    {provider.name === 'ollama' ? (
-                      <div className="space-y-4">
-                        <div className="flex items-center justify-between">
-                          <label className="block text-sm font-medium text-surface-300">Modelle</label>
-                          <button
-                            onClick={loadOllamaInstalledModels}
-                            disabled={ollamaModelsLoading}
-                            className="btn text-xs flex items-center gap-1.5 bg-surface-700 hover:bg-surface-600 text-surface-300"
-                          >
-                            {ollamaModelsLoading ? <Loader2 className="w-3 h-3 animate-spin" /> : <Cpu className="w-3 h-3" />}
-                            Installierte Modelle laden
-                          </button>
-                        </div>
-
-                        {/* Bereinigung Model */}
-                        <div className="p-3 bg-surface-700/30 rounded-lg space-y-2">
-                          <label className="block text-sm font-medium text-surface-200">Bereinigung-Modell</label>
-                          <p className="text-xs text-surface-500">Fuer Metadaten-Bereinigung (Tags, Korrespondenten, Dokumententypen zusammenfuehren)</p>
-                          {ollamaInstalledModels.length > 0 ? (
-                            <select
-                              value={editState.model}
-                              onChange={(e) => updateEditState(provider.name, 'model', e.target.value)}
-                              className="input"
-                            >
-                              {!ollamaInstalledModels.includes(editState.model) && editState.model && (
-                                <option value={editState.model}>{editState.model} (nicht gefunden)</option>
-                              )}
-                              {ollamaInstalledModels.map(m => (
-                                <option key={m} value={m}>{m}</option>
-                              ))}
-                            </select>
-                          ) : (
-                            <input
-                              type="text"
-                              value={editState.model}
-                              onChange={(e) => updateEditState(provider.name, 'model', e.target.value)}
-                              placeholder="z.B. llama3.1"
-                              className="input"
-                            />
-                          )}
-                        </div>
-
-                        {/* Klassifizierer Model */}
-                        <div className="p-3 bg-surface-700/30 rounded-lg space-y-2">
-                          <label className="block text-sm font-medium text-surface-200">Klassifizierer-Modell</label>
-                          <p className="text-xs text-surface-500">Fuer Dokument-Klassifizierung (Tags, Typ, Korrespondent zuordnen)</p>
-                          {ollamaInstalledModels.length > 0 ? (
-                            <select
-                              value={editState.classifier_model || ''}
-                              onChange={(e) => updateEditState(provider.name, 'classifier_model', e.target.value)}
-                              className="input"
-                            >
-                              <option value="">Gleich wie Bereinigung ({editState.model || '-'})</option>
-                              {ollamaInstalledModels.map(m => (
-                                <option key={m} value={m}>{m}</option>
-                              ))}
-                            </select>
-                          ) : (
-                            <input
-                              type="text"
-                              value={editState.classifier_model || ''}
-                              onChange={(e) => updateEditState(provider.name, 'classifier_model', e.target.value)}
-                              placeholder={editState.model || 'Gleich wie Bereinigung'}
-                              className="input"
-                            />
-                          )}
-                        </div>
-
-                        {/* Vision Model */}
-                        <div className="p-3 bg-surface-700/30 rounded-lg space-y-2">
-                          <label className="block text-sm font-medium text-surface-200">OCR Vision-Modell</label>
-                          <p className="text-xs text-surface-500">Fuer Texterkennung mit Ollama Vision (wird in OCR-Einstellungen verwaltet)</p>
-                          {ollamaInstalledModels.length > 0 ? (
-                            <select
-                              value={editState.vision_model || ''}
-                              onChange={(e) => updateEditState(provider.name, 'vision_model', e.target.value)}
-                              className="input"
-                            >
-                              <option value="">Nicht gesetzt</option>
-                              {ollamaInstalledModels.map(m => (
-                                <option key={m} value={m}>{m}</option>
-                              ))}
-                            </select>
-                          ) : (
-                            <input
-                              type="text"
-                              value={editState.vision_model || ''}
-                              onChange={(e) => updateEditState(provider.name, 'vision_model', e.target.value)}
-                              placeholder="z.B. qwen3-vl:4b-instruct"
-                              className="input"
-                            />
-                          )}
-                        </div>
-
-                        {ollamaInstalledModels.length === 0 && !ollamaModelsLoading && (
-                          <p className="text-xs text-surface-500">Klicke "Installierte Modelle laden" um Dropdowns zu sehen.</p>
-                        )}
-                      </div>
-                    ) : (
-                      /* === CLOUD PROVIDERS: Simple text inputs === */
-                      <>
-                        <div className="p-3 bg-surface-700/30 rounded-lg space-y-2">
-                          <label className="block text-sm font-medium text-surface-200">Bereinigung-Modell</label>
-                          <p className="text-xs text-surface-500">Fuer Metadaten-Bereinigung (Tags, Korrespondenten, Dokumententypen zusammenfuehren)</p>
-                          <input
-                            type="text"
-                            value={editState.model}
-                            onChange={(e) => updateEditState(provider.name, 'model', e.target.value)}
-                            placeholder={{
-                              openai: 'z.B. gpt-4o, gpt-4o-mini',
-                              anthropic: 'z.B. claude-sonnet-4-20250514',
-                              azure: 'z.B. gpt-4',
-                              mistral: 'z.B. mistral-small-latest',
-                              openrouter: 'z.B. mistralai/mistral-small-2603',
-                            }[provider.name] || 'Modellname eingeben'}
-                            className="input"
-                          />
-                        </div>
-
-                        <div className="p-3 bg-surface-700/30 rounded-lg space-y-2">
-                          <label className="block text-sm font-medium text-surface-200">Klassifizierer-Modell <span className="text-surface-500 font-normal">(optional)</span></label>
-                          <p className="text-xs text-surface-500">Eigenes Modell fuer Dokument-Klassifizierung (leer = Bereinigung-Modell wird verwendet)</p>
-                          <input
-                            type="text"
-                            value={editState.classifier_model || ''}
-                            onChange={(e) => updateEditState(provider.name, 'classifier_model', e.target.value)}
-                            placeholder={editState.model ? `Gleich wie ${editState.model}` : 'Gleich wie Bereinigung-Modell'}
-                            className="input"
-                          />
-                        </div>
-                      </>
-                    )}
-
-                    {/* Save Button */}
-                    <div className="pt-2">
-                      <button
-                        onClick={() => saveProvider(provider.name)}
-                        disabled={savingProvider === provider.name}
-                        className="btn btn-primary flex items-center gap-2"
-                      >
-                        {savingProvider === provider.name ? (
-                          <Loader2 className="w-4 h-4 animate-spin" />
-                        ) : (
-                          <Save className="w-4 h-4" />
-                        )}
-                        Speichern
-                      </button>
-                    </div>
-                  </div>
-                )}
-              </div>
-            )
-          })}
-        </div>
-      </div>
-
-      {/* Job-Zuweisung */}
-      <div className="card p-6">
-        <h2 className="text-lg font-semibold text-surface-100 mb-4 flex items-center gap-2">
+        <h2 className="font-display font-semibold text-xl text-surface-100 mb-6 flex items-center gap-2">
           <Cpu className="w-5 h-5 text-primary-400" />
-          Job-Zuweisung
+          LLM Einstellungen
         </h2>
-        <p className="text-sm text-surface-400 mb-4">
-          Welcher Provider wird fuer welchen Job verwendet?
-        </p>
+
+        {/* Section 1: Classifier LLM */}
+        <div className="mb-8 space-y-4">
+          <h3 className="text-lg font-medium text-surface-100 border-b border-surface-700 pb-2">
+            Klassifizierung & Bereinigung
+          </h3>
+
+          {/* Provider dropdown */}
+          <div>
+            <label className="block text-sm font-medium text-surface-300 mb-2">Provider</label>
+            <select
+              value={appSettings.classifier_provider || 'ollama'}
+              onChange={async (e) => {
+                const providerName = e.target.value
+                setAppSettings(prev => ({ ...prev, classifier_provider: providerName }))
+                await api.updateAppSettings({ classifier_provider: providerName })
+                // Update api_key/base_url state for newly selected provider
+                const provider = providers.find((p: LLMProvider) => p.name === providerName)
+                if (provider) {
+                  setSelectedProviderApiKey(provider.api_key === '***' ? '' : provider.api_key)
+                  setProviderApiBaseUrl(provider.api_base_url || '')
+                }
+              }}
+              className="input w-full"
+            >
+              {providers.map((p: LLMProvider) => (
+                <option key={p.name} value={p.name}>{p.display_name}</option>
+              ))}
+            </select>
+          </div>
+
+          {/* Show api_key for non-Ollama providers */}
+          {appSettings.classifier_provider !== 'ollama' && (
+            <div>
+              <label className="block text-sm font-medium text-surface-300 mb-2">API Key</label>
+              <input
+                type="password"
+                value={selectedProviderApiKey}
+                onChange={(e) => setSelectedProviderApiKey(e.target.value)}
+                placeholder="API Key eingeben"
+                className="input w-full"
+              />
+            </div>
+          )}
+
+          {/* Model field — sets classifier_model in AppSettings */}
+          <div>
+            <label className="block text-sm font-medium text-surface-300 mb-2">Model</label>
+            <input
+              type="text"
+              value={classifierModel}
+              onChange={(e) => setClassifierModel(e.target.value)}
+              placeholder="z.B. gpt-4o-mini, llama3.1, qwen2.5"
+              className="input w-full"
+            />
+            <button
+              onClick={async () => {
+                await api.updateAppSettings({ classifier_model: classifierModel })
+                setModelSaved(true)
+                setTimeout(() => setModelSaved(false), 2000)
+              }}
+              className="btn btn-secondary mt-2"
+            >
+              Model speichern
+            </button>
+            {modelSaved && <span className="ml-2 text-emerald-400 text-sm">Gespeichert</span>}
+          </div>
+
+          {/* api_base_url — conditional display */}
+          {(appSettings.classifier_provider === 'ollama' || appSettings.classifier_provider === 'azure') && (
+            <div>
+              <label className="block text-sm font-medium text-surface-300 mb-2">
+                {appSettings.classifier_provider === 'ollama' ? 'Ollama URL' : 'Azure Endpoint'}
+              </label>
+              <input
+                type="url"
+                value={providerApiBaseUrl}
+                onChange={(e) => setProviderApiBaseUrl(e.target.value)}
+                placeholder={
+                  appSettings.classifier_provider === 'ollama'
+                    ? 'http://localhost:11434'
+                    : 'https://xxx.openai.azure.com'
+                }
+                className="input w-full"
+              />
+            </div>
+          )}
+        </div>
+
+        {/* Section 2: OCR LLM */}
         <div className="space-y-4">
-          {/* Bereinigung */}
-          <div className="flex items-center justify-between p-3 bg-surface-700/50 rounded-lg">
-            <div>
-              <p className="text-sm font-medium text-surface-200">Metadaten-Bereinigung</p>
-              <p className="text-xs text-surface-500">Tags, Korrespondenten, Dokumententypen aufraeumen</p>
-            </div>
+          <h3 className="text-lg font-medium text-surface-100 border-b border-surface-700 pb-2">
+            OCR (Texterkennung)
+          </h3>
+
+          {/* OCR Provider — always Ollama for vision */}
+          <div>
+            <label className="block text-sm font-medium text-surface-300 mb-2">OCR Provider</label>
             <select
-              value={providers.find(p => p.is_active)?.name || ''}
+              value={ocrProvider}
               onChange={async (e) => {
-                const selectedName = e.target.value
-                const selectedProvider = providers.find(p => p.name === selectedName)
-                if (!selectedProvider) return
-                const edit = editingProvider[selectedName]
-                await api.updateLLMProvider(selectedProvider.id, {
-                  name: selectedProvider.name,
-                  display_name: selectedProvider.display_name,
-                  api_key: edit?.api_key || selectedProvider.api_key,
-                  api_base_url: edit?.api_base_url || selectedProvider.api_base_url,
-                  model: edit?.model || selectedProvider.model,
-                  classifier_model: edit?.classifier_model || selectedProvider.classifier_model || '',
-                  vision_model: edit?.vision_model || selectedProvider.vision_model || '',
-                  is_active: true
-                })
-                const newProviders = await api.getLLMProviders()
-                setProviders(newProviders)
-                const editStates: {[key: string]: LLMProvider} = {}
-                newProviders.forEach((p: LLMProvider) => { editStates[p.name] = { ...p } })
-                setEditingProvider(editStates)
+                setOcrProvider(e.target.value)
               }}
-              className="input w-48 text-sm"
+              className="input w-full"
             >
-              {providers.filter(p => p.is_configured || p.name === 'ollama').map(p => (
-                <option key={p.name} value={p.name}>{p.display_name}</option>
-              ))}
+              <option value="ollama">Ollama (Lokal)</option>
             </select>
+            <p className="mt-1 text-xs text-surface-500">OCR verwendet Ollama Vision-Modelle</p>
           </div>
 
-          {/* Klassifizierer */}
-          <div className="flex items-center justify-between p-3 bg-surface-700/50 rounded-lg">
-            <div>
-              <p className="text-sm font-medium text-surface-200">Dokument-Klassifizierer</p>
-              <p className="text-xs text-surface-500">Tags, Typ, Korrespondent, Speicherpfad zuordnen</p>
-            </div>
-            <select
-              value={appSettings.classifier_provider}
-              onChange={async (e) => {
-                const val = e.target.value
-                setAppSettings(prev => ({ ...prev, classifier_provider: val }))
-                await api.updateAppSettings({ classifier_provider: val })
+          {/* OCR Model — sets ocr_model in AppSettings */}
+          <div>
+            <label className="block text-sm font-medium text-surface-300 mb-2">OCR Model</label>
+            <input
+              type="text"
+              value={ocrModel}
+              onChange={(e) => setOcrModel(e.target.value)}
+              placeholder="z.B. qwen2.5:7b, llava:latest"
+              className="input w-full"
+            />
+            <button
+              onClick={async () => {
+                await api.updateAppSettings({ ocr_model: ocrModel })
+                setOcrModelSaved(true)
+                setTimeout(() => setOcrModelSaved(false), 2000)
               }}
-              className="input w-48 text-sm"
+              className="btn btn-secondary mt-2"
             >
-              {providers.map(p => (
-                <option key={p.name} value={p.name}>{p.display_name}</option>
-              ))}
-            </select>
+              OCR Model speichern
+            </button>
+            {ocrModelSaved && <span className="ml-2 text-emerald-400 text-sm">Gespeichert</span>}
           </div>
+        </div>
 
-          {/* Benchmark */}
-          <div className="flex items-center justify-between p-3 bg-surface-700/50 rounded-lg">
-            <div>
-              <p className="text-sm font-medium text-surface-200">Benchmark</p>
-              <p className="text-xs text-surface-500">Mehrere Provider gleichzeitig testen</p>
-            </div>
-            <div className="text-sm text-surface-400">
-              Freie Auswahl im Klassifizierer
-            </div>
-          </div>
-
-          {/* OCR */}
-          <div className="flex items-center justify-between p-3 bg-surface-700/50 rounded-lg">
-            <div>
-              <p className="text-sm font-medium text-surface-200">OCR Vision</p>
-              <p className="text-xs text-surface-500">Texterkennung mit Ollama Vision-Modellen</p>
-            </div>
-            <div className="text-sm text-surface-400">
-              Ollama (eigene OCR-Einstellungen)
-            </div>
-          </div>
+        {/* Save connection settings button */}
+        <div className="mt-6 pt-4 border-t border-surface-700">
+          <button
+            onClick={async () => {
+              const provider = providers.find((p: LLMProvider) => p.name === appSettings.classifier_provider)
+              if (provider) {
+                await api.updateLLMProviderConnection(provider.id, selectedProviderApiKey, providerApiBaseUrl)
+                setConnectionSaved(true)
+                setTimeout(() => setConnectionSaved(false), 2000)
+              }
+            }}
+            className="btn btn-primary flex items-center gap-2"
+          >
+            <Save className="w-4 h-4" />
+            Verbindung speichern
+          </button>
+          {connectionSaved && <span className="ml-3 text-emerald-400 text-sm">Verbindung gespeichert</span>}
         </div>
       </div>
 

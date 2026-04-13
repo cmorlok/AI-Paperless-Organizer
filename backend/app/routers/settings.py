@@ -431,6 +431,8 @@ class AppSettingsSchema(BaseModel):
     show_debug_menu: Optional[bool] = None
     sidebar_compact: Optional[bool] = None
     classifier_provider: Optional[str] = None
+    classifier_model: Optional[str] = None  # Stored in key-value store (LLM-09)
+    ocr_model: Optional[str] = None  # Stored in key-value store (LLM-09)
 
 
 class PasswordVerifySchema(BaseModel):
@@ -459,12 +461,18 @@ async def get_app_settings(db: AsyncSession = Depends(get_db)):
     kv_classifier_provider = await get_setting(LLM_KEY_CLASSIFIER_PROVIDER, db)
     classifier_provider = kv_classifier_provider or getattr(settings, "classifier_provider", "ollama") or "ollama"
     
+    # Get key-value settings for model fields (LLM-09)
+    kv_classifier_model = await get_setting(LLM_KEY_CLASSIFIER_MODEL, db)
+    kv_ocr_model = await get_setting(LLM_KEY_OCR_MODEL, db)
+    
     return {
         "password_enabled": settings.password_enabled,
         "password_set": bool(settings.password_hash),
         "show_debug_menu": settings.show_debug_menu,
         "sidebar_compact": settings.sidebar_compact,
         "classifier_provider": classifier_provider,
+        "classifier_model": kv_classifier_model or "",
+        "ocr_model": kv_ocr_model or "",
     }
 
 
@@ -497,6 +505,14 @@ async def update_app_settings(
         settings.classifier_provider = data.classifier_provider
         # Also update the key-value store (LLM-08)
         await set_setting(LLM_KEY_CLASSIFIER_PROVIDER, data.classifier_provider, "str", db)
+    
+    if data.classifier_model is not None:
+        # Store in key-value store (LLM-09)
+        await set_setting(LLM_KEY_CLASSIFIER_MODEL, data.classifier_model, "str", db)
+    
+    if data.ocr_model is not None:
+        # Store in key-value store (LLM-09)
+        await set_setting(LLM_KEY_OCR_MODEL, data.ocr_model, "str", db)
     
     await db.commit()
     
