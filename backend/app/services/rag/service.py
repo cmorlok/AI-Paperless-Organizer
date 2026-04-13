@@ -643,6 +643,16 @@ class RAGService:
 
     async def get_config_dict(self) -> dict:
         config = await self._get_config()
+        
+        # Merge RagConfig DB values with AppSettings key-value overrides (LLM-08)
+        from app.models.settings_model import LLM_KEY_CLASSIFIER_PROVIDER, LLM_KEY_CLASSIFIER_MODEL
+        from app.database import async_session
+        
+        async with async_session() as db:
+            from app.routers.settings import get_setting
+            chat_provider = await get_setting(LLM_KEY_CLASSIFIER_PROVIDER, db)
+            chat_model = await get_setting(LLM_KEY_CLASSIFIER_MODEL, db)
+        
         return {
             "embedding_provider": config.embedding_provider,
             "embedding_model": config.embedding_model,
@@ -653,8 +663,9 @@ class RAGService:
             "semantic_weight": config.semantic_weight,
             "max_sources": config.max_sources,
             "max_context_tokens": config.max_context_tokens,
-            "chat_model_provider": config.chat_model_provider,
-            "chat_model": config.chat_model,
+            # Use key-value store first, fall back to RagConfig (LLM-08)
+            "chat_model_provider": chat_provider or config.chat_model_provider or "openai",
+            "chat_model": chat_model or config.chat_model or "gpt-4o-mini",
             "chat_system_prompt": config.chat_system_prompt,
             "auto_index_enabled": config.auto_index_enabled,
             "auto_index_interval": config.auto_index_interval,

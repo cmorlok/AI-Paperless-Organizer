@@ -29,23 +29,51 @@ SETTINGS_FILE = Path("/app/data/ocr_settings.json")
 
 
 def load_ocr_settings() -> dict:
-    """Load OCR settings from file, or return defaults."""
-    if SETTINGS_FILE.exists():
-        try:
-            with open(SETTINGS_FILE, "r") as f:
-                settings = json.load(f)
-                if "ollama_urls" not in settings:
-                    settings["ollama_urls"] = [settings.get("ollama_url", DEFAULT_OLLAMA_URL)]
-                return settings
-        except Exception:
-            pass
-    return {
+    """Load OCR settings from file + key-value store (LLM-08), or return defaults."""
+    defaults = {
         "ollama_url": DEFAULT_OLLAMA_URL, 
         "ollama_urls": [DEFAULT_OLLAMA_URL],
         "model": DEFAULT_OCR_MODEL,
         "max_image_size": 1344,
         "smart_skip_enabled": True
     }
+    
+    # Key-value overrides from AppSettings (LLM-08)
+    from app.routers.settings import get_setting
+    from app.models.settings_model import LLM_KEY_OCR_MODEL, LLM_KEY_OCR_PROVIDER
+    import asyncio
+    
+    async def _load_kv():
+        async for db in get_db():
+            model = await get_setting(LLM_KEY_OCR_MODEL, db)
+            provider = await get_setting(LLM_KEY_OCR_PROVIDER, db)
+            return model, provider
+    
+    # Run the async key-value lookup
+    loop = asyncio.get_event_loop()
+    kv_model, kv_provider = loop.run_until_complete(_load_kv())
+    
+    # Load from file
+    file_settings = {}
+    if SETTINGS_FILE.exists():
+        try:
+            with open(SETTINGS_FILE, "r") as f:
+                file_settings = json.load(f)
+                if "ollama_urls" not in file_settings:
+                    file_settings["ollama_urls"] = [file_settings.get("ollama_url", DEFAULT_OLLAMA_URL)]
+        except Exception:
+            pass
+    
+    # Merge: file settings as base, key-value overrides on top (LLM-08)
+    settings = {**defaults, **file_settings}
+    if kv_model:
+        settings["model"] = kv_model
+    if kv_provider:
+        settings["ollama_url"] = kv_provider
+        if "ollama_urls" not in settings:
+            settings["ollama_urls"] = [kv_provider]
+    
+    return settings
 
 
 def save_ocr_settings_to_file(settings: dict):

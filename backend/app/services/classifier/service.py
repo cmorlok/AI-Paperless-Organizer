@@ -12,6 +12,10 @@ from app.models.classifier import (
     ClassifierConfig, StoragePathProfile, CustomFieldMapping, ClassificationHistory,
 )
 from app.models import LLMProvider
+from app.models.settings_model import (
+    LLM_KEY_CLASSIFIER_PROVIDER,
+    LLM_KEY_CLASSIFIER_MODEL,
+)
 from app.services.paperless_client import PaperlessClient
 from app.services.classifier.base_provider import (
     BaseClassifierProvider, ClassificationResult, DocumentContext,
@@ -208,7 +212,13 @@ class DocumentClassifierService:
         return provider
 
     async def _get_classifier_provider_name(self) -> str:
-        """Get the classifier provider name from AppSettings."""
+        """Get the classifier provider name from AppSettings key-value store (LLM-08)."""
+        # Try key-value store first
+        from app.routers.settings import get_setting
+        kv_provider = await get_setting(LLM_KEY_CLASSIFIER_PROVIDER, self.db)
+        if kv_provider:
+            return kv_provider
+        # Fall back to scalar column for backward compatibility
         from app.models import AppSettings
         result = await self.db.execute(select(AppSettings).where(AppSettings.id == 1))
         app_settings = result.scalar_one_or_none()
