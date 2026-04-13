@@ -59,14 +59,18 @@ class PaperlessSettingsSchema(BaseModel):
 
 
 class LLMProviderSchema(BaseModel):
+    """Full LLMProvider update schema (used by PUT, now without model fields per D-05)."""
     name: str
     display_name: str
     api_key: Optional[str] = ""
     api_base_url: Optional[str] = ""
-    model: Optional[str] = ""
-    classifier_model: Optional[str] = ""
-    vision_model: Optional[str] = ""
     is_active: bool = False
+
+
+class LLMProviderPatchSchema(BaseModel):
+    """Patch schema for updating connection fields only (per D-05)."""
+    api_key: Optional[str] = None
+    api_base_url: Optional[str] = None
 
 
 class CustomPromptSchema(BaseModel):
@@ -133,12 +137,12 @@ async def get_llm_providers(db: AsyncSession = Depends(get_db)):
     providers = result.scalars().all()
     
     ALL_DEFAULTS = [
-        {"name": "openai", "display_name": "OpenAI", "model": "gpt-4o"},
-        {"name": "anthropic", "display_name": "Anthropic Claude", "model": "claude-3-5-sonnet-20241022"},
-        {"name": "azure", "display_name": "Azure OpenAI", "model": "gpt-4"},
-        {"name": "ollama", "display_name": "Ollama (Lokal)", "api_base_url": "http://localhost:11434", "model": "llama3.1"},
-        {"name": "mistral", "display_name": "Mistral AI", "model": "mistral-small-latest"},
-        {"name": "openrouter", "display_name": "OpenRouter", "model": "mistralai/mistral-small-2603"},
+        {"name": "openai", "display_name": "OpenAI"},
+        {"name": "anthropic", "display_name": "Anthropic Claude"},
+        {"name": "azure", "display_name": "Azure OpenAI"},
+        {"name": "ollama", "display_name": "Ollama (Lokal)", "api_base_url": "http://localhost:11434"},
+        {"name": "mistral", "display_name": "Mistral AI"},
+        {"name": "openrouter", "display_name": "OpenRouter"},
     ]
 
     if not providers:
@@ -166,9 +170,6 @@ async def get_llm_providers(db: AsyncSession = Depends(get_db)):
             "display_name": p.display_name,
             "api_key": "***" if p.api_key else "",
             "api_base_url": p.api_base_url or "",
-            "model": p.model or "",
-            "classifier_model": getattr(p, "classifier_model", "") or "",
-            "vision_model": getattr(p, "vision_model", "") or "",
             "is_active": p.is_active,
             "is_configured": p.is_configured,
         }
@@ -182,7 +183,7 @@ async def update_llm_provider(
     data: LLMProviderSchema,
     db: AsyncSession = Depends(get_db)
 ):
-    """Update an LLM provider configuration."""
+    """Update an LLM provider configuration (connection fields only per D-05)."""
     result = await db.execute(select(LLMProvider).where(LLMProvider.id == provider_id))
     provider = result.scalar_one_or_none()
     
@@ -199,16 +200,43 @@ async def update_llm_provider(
     if data.api_key and data.api_key != "***":
         provider.api_key = data.api_key
     # else: keep existing provider.api_key
-    provider.api_base_url = data.api_base_url
-    provider.model = data.model
-    if data.classifier_model is not None:
-        provider.classifier_model = data.classifier_model
-    if data.vision_model is not None:
-        provider.vision_model = data.vision_model
+    if data.api_base_url is not None:
+        provider.api_base_url = data.api_base_url
     provider.is_active = data.is_active
-    provider.is_configured = bool(
-        provider.api_key or provider.name == "ollama"
-    )
+    # Update is_configured based on provider type (per D-05)
+    provider.update_configured()
+    
+    await db.commit()
+    return {"success": True}
+
+
+@router.patch("/llm-providers/{provider_id}")
+async def patch_llm_provider(
+    provider_id: int,
+    data: LLMProviderPatchSchema,
+    db: AsyncSession = Depends(get_db)
+):
+    """Update only connection fields (api_key, api_base_url) of an LLM provider.
+
+    Does NOT update model fields — those are set via AppSettings key-value per LLM-08.
+    """
+    result = await db.execute(select(LLMProvider).where(LLMProvider.id == provider_id))
+    provider = result.scalar_one_or_none()
+    
+    if not provider:
+        raise HTTPException(status_code=404, detail="Provider not found")
+    
+    # Only update fields that are provided
+    if data.api_key is not None:
+        # Don't overwrite with empty string if *** is sent (masked = don't change)
+        if data.api_key and data.api_key != "***":
+            provider.api_key = data.api_key
+    
+    if data.api_base_url is not None:
+        provider.api_base_url = data.api_base_url
+    
+    # Update is_configured based on provider type
+    provider.update_configured()
     
     await db.commit()
     return {"success": True}
