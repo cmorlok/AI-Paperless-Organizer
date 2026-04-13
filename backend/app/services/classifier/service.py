@@ -16,8 +16,10 @@ from app.services.paperless_client import PaperlessClient
 from app.services.classifier.base_provider import (
     BaseClassifierProvider, ClassificationResult, DocumentContext,
 )
-from app.services.classifier.openai_provider import OpenAIToolCallingProvider
-from app.services.classifier.ollama_provider import OllamaMultiCallProvider
+from app.services.classifier.litellm_provider import (
+    LitellmToolCallingProvider,
+    LitellmOllamaProvider,
+)
 from app.services.classifier.tool_executor import ToolExecutor
 
 logger = logging.getLogger(__name__)
@@ -234,33 +236,33 @@ class DocumentClassifierService:
         if provider_name == "openai":
             if not llm.api_key:
                 raise ValueError("OpenAI API key not configured. Set it in Settings → LLM.")
-            return OpenAIToolCallingProvider(
+            return LitellmToolCallingProvider(
                 api_key=llm.api_key, model=model, tool_executor=tool_executor,
             )
         elif provider_name == "mistral":
             if not llm.api_key:
                 raise ValueError("Mistral API key not configured. Set it in Settings → LLM.")
-            return OpenAIToolCallingProvider(
+            return LitellmToolCallingProvider(
                 api_key=llm.api_key, model=model, tool_executor=tool_executor,
                 base_url="https://api.mistral.ai/v1", provider_label="Mistral",
             )
         elif provider_name == "openrouter":
             if not llm.api_key:
                 raise ValueError("OpenRouter API key not configured. Set it in Settings → LLM.")
-            return OpenAIToolCallingProvider(
+            return LitellmToolCallingProvider(
                 api_key=llm.api_key, model=model, tool_executor=tool_executor,
                 base_url="https://openrouter.ai/api/v1", provider_label="OpenRouter",
                 extra_headers={"HTTP-Referer": "https://github.com/syberx/AI-Paperless-Organizer"},
             )
         elif provider_name == "ollama":
             host = llm.api_base_url or "http://localhost:11434"
-            return OllamaMultiCallProvider(
+            return LitellmOllamaProvider(
                 host=host, model=model, tool_executor=tool_executor,
             )
         elif provider_name == "anthropic":
             if not llm.api_key:
                 raise ValueError("Anthropic API key not configured. Set it in Settings → LLM.")
-            return OpenAIToolCallingProvider(
+            return LitellmToolCallingProvider(
                 api_key=llm.api_key, model=model, tool_executor=tool_executor,
                 base_url="https://api.anthropic.com/v1", provider_label="Anthropic",
             )
