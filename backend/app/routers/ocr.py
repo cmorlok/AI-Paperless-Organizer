@@ -50,8 +50,13 @@ def load_ocr_settings() -> dict:
             return model, provider
     
     # Run the async key-value lookup
-    loop = asyncio.get_event_loop()
-    kv_model, kv_provider = loop.run_until_complete(_load_kv())
+    loop = None
+    try:
+        loop = asyncio.new_event_loop()
+        kv_model, kv_provider = loop.run_until_complete(_load_kv())
+    finally:
+        if loop:
+            loop.close()
     
     # Load from file
     file_settings = {}
