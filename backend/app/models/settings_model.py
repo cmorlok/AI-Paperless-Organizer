@@ -22,7 +22,11 @@ class PaperlessSettings(Base):
 
 
 class LLMProvider(Base):
-    """LLM Provider configuration – central for all jobs."""
+    """LLM Provider configuration – connection config only (per D-05).
+
+    Model/job routing is stored in AppSettings key-value (LLM_KEY_CLASSIFIER_MODEL etc.).
+    LLMProvider records are seeds/connection definitions.
+    """
     __tablename__ = "llm_providers"
     
     id = Column(Integer, primary_key=True, autoincrement=True)
@@ -30,13 +34,21 @@ class LLMProvider(Base):
     display_name = Column(String(200), nullable=False)
     api_key = Column(String(500), default="")
     api_base_url = Column(String(500), default="")  # For Ollama or Azure
-    model = Column(String(200), default="")  # Default / Bereinigung model
-    classifier_model = Column(String(200), default="")  # Model for classification job (empty = use `model`)
-    vision_model = Column(String(200), default="")  # Vision model for OCR (only Ollama)
-    is_active = Column(Boolean, default=False)  # Active for Bereinigung job
-    is_configured = Column(Boolean, default=False)
+    is_active = Column(Boolean, default=False)
+    is_configured = Column(Boolean, default=False)  # Derived: True for Ollama, bool(api_key) for others
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
+
+    def update_configured(self):
+        """Update is_configured based on provider type and api_key (per D-05)."""
+        if self.name == "ollama":
+            self.is_configured = True
+        else:
+            self.is_configured = bool(self.api_key)
+
+    @property
+    def is_ollama(self) -> bool:
+        return self.name == "ollama"
 
 
 class CustomPrompt(Base):
