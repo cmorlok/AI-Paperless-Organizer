@@ -14,7 +14,7 @@ from collections import defaultdict
 from datetime import datetime
 from typing import Dict, List, Optional, Set, Tuple
 
-import httpx
+import litellm
 from sqlalchemy import select as sa_select, text
 
 from app.database import async_session
@@ -506,7 +506,7 @@ class DuplicateService:
     async def _extract_invoice_data(
         self, content: str, model: str, ollama_url: str
     ) -> Optional[Dict]:
-        """Extract invoice number and amount from document content via Ollama."""
+        """Extract invoice number and amount from document content via LiteLLM."""
         got = await ollama_acquire("duplicates", timeout=120)
         if not got:
             logger.warning("Could not acquire OllamaLock for invoice extraction")
@@ -522,27 +522,20 @@ class DuplicateService:
                 f"Dokumenttext:\n{content}"
             )
 
-            async with httpx.AsyncClient(timeout=60.0) as client:
-                response = await client.post(
-                    f"{ollama_url}/api/chat",
-                    json={
-                        "model": model,
-                        "messages": [
-                            {"role": "user", "content": prompt}
-                        ],
-                        "stream": False,
-                        "options": {
-                            "temperature": 0,
-                            "num_ctx": 4096,
-                        },
-                    },
-                )
-                response.raise_for_status()
-                data = response.json()
-
-            reply = data.get("message", {}).get("content", "")
-
-            # Parse JSON from reply
+            # Per D-01: Ollama-specific params go in extra_body
+            response = await litellm.acompletion(
+                model=f"ollama/{model}",
+                messages=[{"role": "user", "content": prompt}],
+                api_base=ollama_url,
+                extra_body={
+                    "options": {
+                        "temperature": 0,
+                        "num_ctx": 4096,
+                    }
+                },
+                timeout=60.0,
+            )
+            reply = response.choices[0].message.content or ""
             return self._parse_invoice_json(reply)
 
         except Exception as e:
