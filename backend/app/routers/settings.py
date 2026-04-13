@@ -5,10 +5,51 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from app.database import get_db
 from app.models import PaperlessSettings, LLMProvider, CustomPrompt, IgnoredTag, AppSettings
+from app.models.settings_model import (
+    LLM_KEY_CLASSIFIER_PROVIDER,
+    LLM_KEY_CLASSIFIER_MODEL,
+    LLM_KEY_OCR_PROVIDER,
+    LLM_KEY_OCR_MODEL,
+)
 import hashlib
 from app.prompts.default_prompts import DEFAULT_PROMPTS
 
 router = APIRouter()
+
+
+# ── Key-Value Setting Helpers (LLM-08) ─────────────────────────────────────────
+
+async def get_setting(key: str, db: AsyncSession) -> Optional[str]:
+    """Get a setting value by key. Returns None if not found."""
+    result = await db.execute(
+        select(AppSettings).where(AppSettings.key == key)
+    )
+    setting = result.scalar_one_or_none()
+    return setting.value if setting else None
+
+
+async def set_setting(key: str, value: str, value_type: str = "str", db: AsyncSession = None):
+    """Set a setting value. Creates new row if key doesn't exist, updates if it does."""
+    if db is None:
+        async for session in get_db():
+            await set_setting(key, value, value_type, session)
+            return
+    result = await db.execute(
+        select(AppSettings).where(AppSettings.key == key)
+    )
+    setting = result.scalar_one_or_none()
+    if setting:
+        setting.value = value
+        setting.value_type = value_type
+    else:
+        setting = AppSettings(key=key, value=value, value_type=value_type)
+        db.add(setting)
+    await db.commit()
+
+
+class SettingUpdateSchema(BaseModel):
+    value: str
+    value_type: Optional[str] = "str"
 
 
 # Pydantic models for requests/responses
@@ -386,12 +427,16 @@ async def get_app_settings(db: AsyncSession = Depends(get_db)):
         await db.commit()
         await db.refresh(settings)
     
+    # Check key-value store for classifier_provider first (LLM-08)
+    kv_classifier_provider = await get_setting(LLM_KEY_CLASSIFIER_PROVIDER, db)
+    classifier_provider = kv_classifier_provider or getattr(settings, "classifier_provider", "ollama") or "ollama"
+    
     return {
         "password_enabled": settings.password_enabled,
         "password_set": bool(settings.password_hash),
         "show_debug_menu": settings.show_debug_menu,
         "sidebar_compact": settings.sidebar_compact,
-        "classifier_provider": getattr(settings, "classifier_provider", "ollama") or "ollama",
+        "classifier_provider": classifier_provider,
     }
 
 
@@ -422,6 +467,8 @@ async def update_app_settings(
 
     if data.classifier_provider is not None:
         settings.classifier_provider = data.classifier_provider
+        # Also update the key-value store (LLM-08)
+        await set_setting(LLM_KEY_CLASSIFIER_PROVIDER, data.classifier_provider, "str", db)
     
     await db.commit()
     
@@ -458,5 +505,40 @@ async def remove_password(db: AsyncSession = Depends(get_db)):
         settings.password_hash = ""
         await db.commit()
     
+    return {"success": True}
+
+
+# ── Key-Value Settings Endpoints (LLM-08) ──────────────────────────────────────
+
+@router.get("/settings/{key}")
+async def get_setting_endpoint(key: str, db: AsyncSession = Depends(get_db)):
+    """Get a setting value by key."""
+    value = await get_setting(key, db)
+    if value is None:
+        raise HTTPException(status_code=404, detail=f"Setting '{key}' not found")
+    return {"key": key, "value": value}
+
+
+@router.put("/settings/{key}")
+async def set_setting_endpoint(
+    key: str,
+    data: SettingUpdateSchema,
+    db: AsyncSession = Depends(get_db)
+):
+    """Set a setting value."""
+    await set_setting(key, data.value, data.value_type or "str", db)
+    return {"success": True, "key": key, "value": data.value}
+
+
+@router.post("/settings/seed-llm-keys")
+async def seed_llm_keys(db: AsyncSession = Depends(get_db)):
+    """Seed LLM key-value settings from existing LLMProvider records. Run once during migration."""
+    result = await db.execute(select(LLMProvider).where(LLMProvider.is_active == True))
+    provider = result.scalar_one_or_none()
+    if provider:
+        if provider.name:
+            await set_setting(LLM_KEY_CLASSIFIER_PROVIDER, provider.name, "str", db)
+        if hasattr(provider, "classifier_model") and provider.classifier_model:
+            await set_setting(LLM_KEY_CLASSIFIER_MODEL, provider.classifier_model, "str", db)
     return {"success": True}
 
