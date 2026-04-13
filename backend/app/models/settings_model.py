@@ -2,6 +2,12 @@ from sqlalchemy import Column, Integer, String, Boolean, Text, DateTime
 from sqlalchemy.sql import func
 from app.database import Base
 
+# LLM Job Routing Keys (D-04, LLM-08)
+LLM_KEY_CLASSIFIER_PROVIDER = "classifier_provider"
+LLM_KEY_CLASSIFIER_MODEL = "classifier_model"
+LLM_KEY_OCR_PROVIDER = "ocr_provider"
+LLM_KEY_OCR_MODEL = "ocr_model"
+
 
 class PaperlessSettings(Base):
     """Paperless-ngx connection settings."""
@@ -74,6 +80,10 @@ class AppSettings(Base):
     __tablename__ = "app_settings"
     
     id = Column(Integer, primary_key=True, default=1)
+    # Key-value store for LLM job routing (LLM-08)
+    key = Column(String(100), nullable=True, unique=True)  # NULL for scalar rows, string for KV entries
+    value = Column(String(500), nullable=True)
+    value_type = Column(String(20), default="str")  # str, int, bool, json
     # UI Password Protection
     password_enabled = Column(Boolean, default=False)
     password_hash = Column(String(500), default="")  # Hashed password
@@ -86,4 +96,10 @@ class AppSettings(Base):
     classifier_provider = Column(String(100), default="ollama")
 
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
+
+__all__ = [
+    "PaperlessSettings", "LLMProvider", "CustomPrompt", "IgnoredTag", "IgnoredItem",
+    "AppSettings", "LLM_KEY_CLASSIFIER_PROVIDER", "LLM_KEY_CLASSIFIER_MODEL",
+    "LLM_KEY_OCR_PROVIDER", "LLM_KEY_OCR_MODEL",
+]
 
