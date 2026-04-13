@@ -10,7 +10,7 @@ from sqlalchemy import select
 from app.database import get_db
 from app.models import CustomPrompt, IgnoredTag
 from app.services.paperless_client import PaperlessClient, get_paperless_client
-from app.services.llm_provider import LLMProviderService, get_llm_service
+from app.services.litellm_service import LitellmService as LLMProviderService, get_llm_service
 from app.prompts.default_prompts import DEFAULT_PROMPTS
 
 
