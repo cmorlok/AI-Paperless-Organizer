@@ -113,7 +113,7 @@ export const updateLLMProvider = (id: number, data: any) =>
 
 // Update provider connection fields only (LLM-09)
 export const updateLLMProviderConnection = (providerId: number, apiKey: string, apiBaseUrl?: string) =>
-  fetchJson<{ success: boolean }>(`/settings/llm-providers/${providerId}`, {
+  fetchJson<{ success: boolean }>(`/settings/llm-providers/db/${providerId}`, {
     method: 'PATCH',
     body: JSON.stringify({
       api_key: apiKey,
