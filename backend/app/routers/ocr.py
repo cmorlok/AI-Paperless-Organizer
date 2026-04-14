@@ -44,19 +44,17 @@ def load_ocr_settings() -> dict:
     import asyncio
     
     async def _load_kv():
-        async for db in get_db():
+        db_gen = get_db()
+        try:
+            db = await db_gen.__anext__()
             model = await get_setting(LLM_KEY_OCR_MODEL, db)
             provider = await get_setting(LLM_KEY_OCR_PROVIDER, db)
             return model, provider
+        finally:
+            await db_gen.aclose()
     
     # Run the async key-value lookup
-    loop = None
-    try:
-        loop = asyncio.new_event_loop()
-        kv_model, kv_provider = loop.run_until_complete(_load_kv())
-    finally:
-        if loop:
-            loop.close()
+    kv_model, kv_provider = asyncio.run(_load_kv())
     
     # Load from file
     file_settings = {}
@@ -989,7 +987,7 @@ async def _run_compare_job(paperless_client, document_id: int, models: list, tar
             if is_pdf and render_dpi not in dpi_image_cache:
                 compare_state["phase"] = "convert"
                 print(f"[Compare] Rendering PDF at {render_dpi} DPI for {model_name}")
-                dpi_images = await loop.run_in_executor(
+                dpi_images = await asyncio.get_running_loop().run_in_executor(
                     None, lambda dpi=render_dpi: convert_from_bytes(file_bytes, dpi=dpi)
                 )
                 dpi_image_cache[render_dpi] = dpi_images
@@ -1246,7 +1244,7 @@ WICHTIG:
 """
 
     try:
-        used_model = eval_model or llm_service.provider.model
+        used_model = eval_model or "gpt-4o"
         print(f"[Evaluate] Sending {len(results)} OCR results to {llm_service.provider.name} / {used_model}")
         
         raw_response = await llm_service.complete(prompt, model_override=eval_model)

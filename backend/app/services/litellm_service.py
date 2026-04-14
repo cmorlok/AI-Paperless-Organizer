@@ -232,7 +232,7 @@ class LitellmService:
             "configured": True,
             "provider": self.provider.name,
             "display_name": self.provider.display_name,
-            "model": self.provider.model
+            "model": None
         }
 
     async def test_connection(self) -> Dict:
@@ -242,11 +242,11 @@ class LitellmService:
         response = await self.complete("Antworte nur mit: OK")
         return {
             "provider": self.provider.name,
-            "model": self.provider.model,
+            "model": None,
             "response": response
         }
 
-    async def complete(self, prompt: str, model_override: str = None) -> str:
+    async def complete(self, prompt: str, model_override: Optional[str] = None) -> str:
         """Send a completion request to the active LLM provider via LiteLLM."""
         if not self.provider:
             raise ValueError("No LLM provider configured")
@@ -266,9 +266,9 @@ class LitellmService:
         else:
             raise ValueError(f"Unknown provider: {self.provider.name}")
 
-    async def _complete_openai(self, prompt: str, model_override: str = None) -> str:
+    async def _complete_openai(self, prompt: str, model_override: Optional[str] = None) -> str:
         """Complete using OpenAI API via LiteLLM."""
-        model = model_override or self.provider.model or "gpt-4o"
+        model = model_override or "gpt-4o"
         api_key = self.provider.api_key or ""
         api_base = self.provider.api_base_url
 
@@ -285,9 +285,9 @@ class LitellmService:
         )
         return (response.choices[0].message.content or "").strip()
 
-    async def _complete_anthropic(self, prompt: str, model_override: str = None) -> str:
+    async def _complete_anthropic(self, prompt: str, model_override: Optional[str] = None) -> str:
         """Complete using Anthropic API via LiteLLM."""
-        model = model_override or self.provider.model or "claude-3-5-sonnet-20241022"
+        model = model_override or "claude-3-5-sonnet-20241022"
         api_key = self.provider.api_key or ""
 
         response = await litellm.acompletion(
@@ -302,9 +302,9 @@ class LitellmService:
         )
         return (response.choices[0].message.content or "").strip()
 
-    async def _complete_azure(self, prompt: str, model_override: str = None) -> str:
+    async def _complete_azure(self, prompt: str, model_override: Optional[str] = None) -> str:
         """Complete using Azure OpenAI API via LiteLLM."""
-        model = model_override or self.provider.model or "gpt-4"
+        model = model_override or "gpt-4"
         api_key = self.provider.api_key or ""
         api_base = self.provider.api_base_url
 
@@ -322,9 +322,9 @@ class LitellmService:
         )
         return (response.choices[0].message.content or "").strip()
 
-    async def _complete_mistral(self, prompt: str, model_override: str = None) -> str:
+    async def _complete_mistral(self, prompt: str, model_override: Optional[str] = None) -> str:
         """Complete using Mistral AI API (OpenAI-compatible) via LiteLLM."""
-        model = model_override or self.provider.model or "mistral-small-latest"
+        model = model_override or "mistral-small-latest"
         api_key = self.provider.api_key or ""
 
         response = await litellm.acompletion(
@@ -340,9 +340,9 @@ class LitellmService:
         )
         return (response.choices[0].message.content or "").strip()
 
-    async def _complete_openrouter(self, prompt: str, model_override: str = None) -> str:
+    async def _complete_openrouter(self, prompt: str, model_override: Optional[str] = None) -> str:
         """Complete using OpenRouter API (OpenAI-compatible) via LiteLLM."""
-        model = model_override or self.provider.model or "mistralai/mistral-small-2603"
+        model = model_override or "mistralai/mistral-small-2603"
         api_key = self.provider.api_key or ""
 
         response = await litellm.acompletion(
@@ -359,9 +359,9 @@ class LitellmService:
         )
         return (response.choices[0].message.content or "").strip()
 
-    async def _complete_ollama(self, prompt: str, model_override: str = None) -> str:
+    async def _complete_ollama(self, prompt: str, model_override: Optional[str] = None) -> str:
         """Complete using local Ollama via LiteLLM."""
-        model = model_override or self.provider.model or "llama3.1"
+        model = model_override or "llama3.1"
         base_url = self.provider.api_base_url or "http://localhost:11434"
 
         # Per D-01: Ollama-specific params go in extra_body
@@ -391,40 +391,26 @@ class LitellmService:
         return len(text) // 4
 
     def get_token_limit(self) -> int:
-        """Get the token limit for the current provider/model."""
+        """Get the token limit for the current provider."""
         if not self.provider:
             return 7000  # Conservative default
 
-        model = self.provider.model or ""
-
-        # Check model-specific limits
-        if model in self.MODEL_TOKEN_LIMITS:
-            return self.MODEL_TOKEN_LIMITS[model]
-
-        # Check provider defaults
+        # Check provider defaults (model-specific limits require KV store lookup)
         if self.provider.name in self.DEFAULT_TOKEN_LIMITS:
             return self.DEFAULT_TOKEN_LIMITS[self.provider.name]
 
         return 7000  # Conservative fallback
 
     def get_instance_model_info(self) -> Optional[Dict[str, Any]]:
-        """Get info about the current provider/model (instance method)."""
+        """Get info about the current provider (model info requires KV store lookup)."""
         if not self.provider:
             return None
 
-        model = self.provider.model or ""
         provider_name = self.provider.name or ""
 
-        # Check if we have detailed info for this model
-        if model in self.MODEL_INFO:
-            info = self.MODEL_INFO[model].copy()
-            info["model"] = model
-            info["provider_name"] = provider_name
-            return info
-
-        # Return basic info
+        # Return basic info (model-specific info requires KV store lookup)
         return {
-            "model": model or "Nicht konfiguriert",
+            "model": "Nicht konfiguriert",
             "provider_name": provider_name,
             "context": self.get_token_limit()
         }
