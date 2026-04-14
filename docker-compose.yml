@@ -9,8 +9,6 @@ services:
       - "53682:53683"  # rclone OAuth: host 53682 → container proxy 53683 → rclone 127.0.0.1:53682
     volumes:
       - ./backend/data:/app/data
-    environment:
-      - DATABASE_URL=sqlite+aiosqlite:///./data/organizer.db
     restart: unless-stopped
     networks:
       - paperless-organizer-net
