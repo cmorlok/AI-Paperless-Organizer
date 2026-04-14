@@ -38,24 +38,6 @@ def load_ocr_settings() -> dict:
         "smart_skip_enabled": True
     }
     
-    # Key-value overrides from AppSettings (LLM-08)
-    from app.routers.settings import get_setting
-    from app.models.settings_model import LLM_KEY_OCR_MODEL, LLM_KEY_OCR_PROVIDER
-    import asyncio
-    
-    async def _load_kv():
-        db_gen = get_db()
-        try:
-            db = await db_gen.__anext__()
-            model = await get_setting(LLM_KEY_OCR_MODEL, db)
-            provider = await get_setting(LLM_KEY_OCR_PROVIDER, db)
-            return model, provider
-        finally:
-            await db_gen.aclose()
-    
-    # Run the async key-value lookup
-    kv_model, kv_provider = asyncio.run(_load_kv())
-    
     # Load from file
     file_settings = {}
     if SETTINGS_FILE.exists():
@@ -67,14 +49,33 @@ def load_ocr_settings() -> dict:
         except Exception:
             pass
     
-    # Merge: file settings as base, key-value overrides on top (LLM-08)
-    settings = {**defaults, **file_settings}
-    if kv_model:
-        settings["model"] = kv_model
-    if kv_provider:
-        settings["ollama_url"] = kv_provider
+    # Merge: file settings as base
+    # Note: KV store overrides are loaded lazily at runtime (LLM-08)
+    # to avoid asyncio issues during module load
+    return {**defaults, **file_settings}
+
+
+def reload_ocr_settings_with_kv(db) -> dict:
+    """Reload settings with KV store overrides. Call from async context."""
+    import asyncio
+    from app.routers.settings import get_setting
+    from app.models.settings_model import LLM_KEY_OCR_MODEL, LLM_KEY_OCR_PROVIDER
+    
+    settings = load_ocr_settings()
+    
+    async def _load_kv():
+        model = await get_setting(LLM_KEY_OCR_MODEL, db)
+        provider = await get_setting(LLM_KEY_OCR_PROVIDER, db)
+        return model, provider
+    
+    model, provider = asyncio.get_running_loop().run_until_complete(_load_kv())
+    
+    if model:
+        settings["model"] = model
+    if provider:
+        settings["ollama_url"] = provider
         if "ollama_urls" not in settings:
-            settings["ollama_urls"] = [kv_provider]
+            settings["ollama_urls"] = [provider]
     
     return settings
 
