@@ -129,10 +129,14 @@ async def save_paperless_settings(
     return {"success": True, "is_configured": settings.is_configured}
 
 
-# LLM Providers
-@router.get("/llm-providers")
-async def get_llm_providers(db: AsyncSession = Depends(get_db)):
-    """Get all LLM provider configurations."""
+# LLM Providers - DB-based (for internal/admin use)
+@router.get("/llm-providers/db")
+async def get_llm_providers_from_db(db: AsyncSession = Depends(get_db)):
+    """Get all LLM provider configurations from database.
+    
+    This is the DB-based endpoint kept for internal/admin use.
+    The SettingsPanel uses the LiteLLM-based /llm-providers endpoint instead.
+    """
     result = await db.execute(select(LLMProvider).order_by(LLMProvider.name))
     providers = result.scalars().all()
     
@@ -177,7 +181,151 @@ async def get_llm_providers(db: AsyncSession = Depends(get_db)):
     ]
 
 
-@router.put("/llm-providers/{provider_id}")
+# LLM Providers - LiteLLM-based (for SettingsPanel UI)
+@router.get("/llm-providers")
+async def get_llm_providers_from_litellm(db: AsyncSession = Depends(get_db)):
+    """Get all LiteLLM-supported providers dynamically (not from DB records).
+    
+    Uses litellm.model_list to extract unique provider names and returns
+    them with display names. This replaces the hardcoded LLMProvider DB records
+    with live provider listing from LiteLLM.
+    """
+    try:
+        import litellm
+        
+        # Get all models from LiteLLM master list
+        all_models = litellm.model_list
+        
+        # Extract unique provider prefixes - filter for clean provider names
+        providers_set = set()
+        for model in all_models:
+            if "/" in model:
+                provider = model.split("/")[0]
+                # Only include clean single-word providers (no _ or -)
+                if "_" not in provider and "-" not in provider and len(provider) < 15:
+                    providers_set.add(provider)
+        
+        # Provider display name mapping
+        PROVIDER_DISPLAY_NAMES = {
+            "openai": "OpenAI",
+            "anthropic": "Anthropic Claude",
+            "azure": "Azure OpenAI",
+            "ollama": "Ollama (Lokal)",
+            "mistral": "Mistral AI",
+            "openrouter": "OpenRouter",
+            "google": "Google AI (Gemini)",
+            "deepseek": "DeepSeek",
+            "cohere": "Cohere",
+            "groq": "Groq",
+            "fireworks": "Fireworks AI",
+            "anyscale": "Anyscale",
+            "togetherai": "TogetherAI",
+            "replicate": "Replicate",
+            "cloudflare": "Cloudflare Workers AI",
+            "aws": "AWS Bedrock",
+            "vertex_ai": "Google Vertex AI",
+            "sagemaker": "AWS SageMaker",
+            "gemini": "Google Gemini",
+            "xai": "xAI",
+            "perplexity": "Perplexity",
+            "meta": "Meta AI",
+            "mistral": "Mistral AI",
+            "qwen": "Qwen (Alibaba)",
+        }
+        
+        # Build provider list sorted alphabetically
+        providers = []
+        for provider in sorted(providers_set):
+            providers.append({
+                "name": provider,
+                "display_name": PROVIDER_DISPLAY_NAMES.get(provider, provider.title()),
+            })
+        
+        return providers
+    except Exception as e:
+        # Fallback: return hardcoded list if LiteLLM fails
+        return [
+            {"name": "openai", "display_name": "OpenAI"},
+            {"name": "anthropic", "display_name": "Anthropic Claude"},
+            {"name": "azure", "display_name": "Azure OpenAI"},
+            {"name": "ollama", "display_name": "Ollama (Lokal)"},
+            {"name": "mistral", "display_name": "Mistral AI"},
+            {"name": "openrouter", "display_name": "OpenRouter"},
+        ]
+
+
+@router.get("/llm-providers/models")
+async def get_llm_provider_models(provider: str, db: AsyncSession = Depends(get_db)):
+    """Get available models for a specific LiteLLM provider.
+    
+    Filters litellm.model_list by provider prefix (e.g., "openai/")
+    and returns model names suitable for dropdown selection.
+    """
+    try:
+        import litellm
+        
+        all_models = litellm.model_list
+        
+        # Filter models for the specified provider
+        # Provider format in model list: "provider/model-name" (e.g., "openai/gpt-4o")
+        prefix = f"{provider}/"
+        models = []
+        seen = set()
+        
+        for model in all_models:
+            if model.startswith(prefix):
+                # Extract model name without provider prefix
+                model_name = model[len(prefix):]
+                if model_name not in seen:
+                    seen.add(model_name)
+                    models.append({
+                        "id": model_name,
+                        "name": model_name,
+                        "display_name": _format_model_display_name(model_name),
+                    })
+        
+        # Special handling for Ollama — also include models without prefix (they're all local)
+        if provider == "ollama":
+            for model in all_models:
+                if "/" not in model and model not in seen:
+                    seen.add(model)
+                    models.append({
+                        "id": model,
+                        "name": model,
+                        "display_name": _format_model_display_name(model),
+                    })
+        
+        return {"provider": provider, "models": sorted(models, key=lambda x: x["name"])}
+        
+    except Exception as e:
+        return {"provider": provider, "models": [], "error": str(e)}
+
+
+def _format_model_display_name(model_name: str) -> str:
+    """Format model name for display in dropdown."""
+    # Common model name cleanups
+    name = model_name.replace("-", " ").replace("_", " ")
+    
+    # Capitalize words
+    name = " ".join(word.capitalize() for word in name.split())
+    
+    # Common replacements
+    replacements = {
+        "Gpt": "GPT",
+        "Claude": "Claude",
+        "Llama": "Llama",
+        "Mistral": "Mistral",
+        "Qwen": "Qwen",
+        "Gemma": "Gemma",
+        "Deepseek": "DeepSeek",
+    }
+    for old, new in replacements.items():
+        name = name.replace(old, new)
+    
+    return name
+
+
+@router.put("/llm-providers/db/{provider_id}")
 async def update_llm_provider(
     provider_id: int,
     data: LLMProviderSchema,
@@ -210,7 +358,7 @@ async def update_llm_provider(
     return {"success": True}
 
 
-@router.patch("/llm-providers/{provider_id}")
+@router.patch("/llm-providers/db/{provider_id}")
 async def patch_llm_provider(
     provider_id: int,
     data: LLMProviderPatchSchema,
