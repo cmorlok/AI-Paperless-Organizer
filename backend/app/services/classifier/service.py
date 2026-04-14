@@ -16,6 +16,7 @@ from app.models.settings_model import (
     LLM_KEY_CLASSIFIER_PROVIDER,
     LLM_KEY_CLASSIFIER_MODEL,
 )
+from app.routers.settings import get_setting
 from app.services.paperless_client import PaperlessClient
 from app.services.classifier.base_provider import (
     BaseClassifierProvider, ClassificationResult, DocumentContext,
@@ -241,7 +242,7 @@ class DocumentClassifierService:
     ) -> BaseClassifierProvider:
         """Create a provider instance from the central LLMProvider table."""
         llm = await self._get_llm_provider(provider_name)
-        model = model_override or llm.classifier_model or llm.model
+        model = model_override or await get_setting(LLM_KEY_CLASSIFIER_MODEL, self.db)
 
         if provider_name == "openai":
             if not llm.api_key:
@@ -737,7 +738,7 @@ class DocumentClassifierService:
         classifier_provider_name = await self._get_classifier_provider_name()
         try:
             llm_prov = await self._get_llm_provider(classifier_provider_name)
-            history_model = llm_prov.classifier_model or llm_prov.model
+            history_model = await get_setting(LLM_KEY_CLASSIFIER_MODEL, self.db) or "unknown"
         except Exception:
             history_model = "unknown"
 

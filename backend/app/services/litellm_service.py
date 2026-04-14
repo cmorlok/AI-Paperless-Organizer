@@ -12,6 +12,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
 from app.models import LLMProvider
+from app.models.settings_model import LLM_KEY_CLASSIFIER_MODEL
+from app.routers.settings import get_setting
 
 logger = logging.getLogger(__name__)
 
@@ -221,8 +223,9 @@ class LitellmService:
             return info
         return None
 
-    def __init__(self, provider: Optional[LLMProvider] = None):
+    def __init__(self, provider: Optional[LLMProvider] = None, model: Optional[str] = None):
         self.provider = provider
+        self.model = model
 
     async def get_active_provider_info(self) -> Dict:
         """Get information about the active provider."""
@@ -268,7 +271,7 @@ class LitellmService:
 
     async def _complete_openai(self, prompt: str, model_override: Optional[str] = None) -> str:
         """Complete using OpenAI API via LiteLLM."""
-        model = model_override or "gpt-4o"
+        model = model_override or self.model or "gpt-4o"
         api_key = self.provider.api_key or ""
         api_base = self.provider.api_base_url
 
@@ -287,7 +290,7 @@ class LitellmService:
 
     async def _complete_anthropic(self, prompt: str, model_override: Optional[str] = None) -> str:
         """Complete using Anthropic API via LiteLLM."""
-        model = model_override or "claude-3-5-sonnet-20241022"
+        model = model_override or self.model or "claude-3-5-sonnet-20241022"
         api_key = self.provider.api_key or ""
 
         response = await litellm.acompletion(
@@ -304,7 +307,7 @@ class LitellmService:
 
     async def _complete_azure(self, prompt: str, model_override: Optional[str] = None) -> str:
         """Complete using Azure OpenAI API via LiteLLM."""
-        model = model_override or "gpt-4"
+        model = model_override or self.model or "gpt-4"
         api_key = self.provider.api_key or ""
         api_base = self.provider.api_base_url
 
@@ -324,7 +327,7 @@ class LitellmService:
 
     async def _complete_mistral(self, prompt: str, model_override: Optional[str] = None) -> str:
         """Complete using Mistral AI API (OpenAI-compatible) via LiteLLM."""
-        model = model_override or "mistral-small-latest"
+        model = model_override or self.model or "mistral-small-latest"
         api_key = self.provider.api_key or ""
 
         response = await litellm.acompletion(
@@ -342,7 +345,7 @@ class LitellmService:
 
     async def _complete_openrouter(self, prompt: str, model_override: Optional[str] = None) -> str:
         """Complete using OpenRouter API (OpenAI-compatible) via LiteLLM."""
-        model = model_override or "mistralai/mistral-small-2603"
+        model = model_override or self.model or "mistralai/mistral-small-2603"
         api_key = self.provider.api_key or ""
 
         response = await litellm.acompletion(
@@ -361,7 +364,7 @@ class LitellmService:
 
     async def _complete_ollama(self, prompt: str, model_override: Optional[str] = None) -> str:
         """Complete using local Ollama via LiteLLM."""
-        model = model_override or "llama3.1"
+        model = model_override or self.model or "llama3.1"
         base_url = self.provider.api_base_url or "http://localhost:11434"
 
         # Per D-01: Ollama-specific params go in extra_body
@@ -616,4 +619,5 @@ async def get_llm_service(db: AsyncSession = Depends(get_db)) -> LitellmService:
     )
     provider = result.scalars().first()
 
-    return LitellmService(provider)
+    model = await get_setting(LLM_KEY_CLASSIFIER_MODEL, db)
+    return LitellmService(provider, model=model)
