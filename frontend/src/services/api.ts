@@ -89,6 +89,22 @@ export const savePaperlessSettings = (data: { url: string; api_token: string }) 
 
 export const getLLMProviders = () => fetchJson<any[]>('/settings/llm-providers')
 
+// Dynamic LLM provider/model endpoints (LLM-09)
+
+// Get all LiteLLM-supported providers (from LiteLLM, not DB)
+export const getLLMProvidersDynamic = () =>
+  fetchJson<{ name: string; display_name: string }[]>('/settings/llm-providers')
+
+// Get available models for a specific provider
+export interface LLMModel {
+  id: string
+  name: string
+  display_name: string
+}
+
+export const getLLMProviderModels = (provider: string) =>
+  fetchJson<{ provider: string; models: LLMModel[] }>(`/settings/llm-providers/models?provider=${encodeURIComponent(provider)}`)
+
 export const updateLLMProvider = (id: number, data: any) =>
   fetchJson<{ success: boolean }>(`/settings/llm-providers/${id}`, {
     method: 'PUT',

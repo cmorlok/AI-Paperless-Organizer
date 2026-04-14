@@ -23,6 +23,10 @@ export default function SettingsPanel() {
 
   // LLM Providers
   const [providers, setProviders] = useState<LLMProvider[]>([])
+  // Dynamic provider/model state (LLM-09)
+  const [availableProviders, setAvailableProviders] = useState<{name: string; display_name: string}[]>([])
+  const [classifierModels, setClassifierModels] = useState<api.LLMModel[]>([])
+  const [ocrModels, setOcrModels] = useState<api.LLMModel[]>([])
 
   // Unified LLM settings form state (LLM-09, D-06)
   const [classifierModel, setClassifierModel] = useState('')
@@ -64,6 +68,7 @@ export default function SettingsPanel() {
     loadAppSettings()
     loadIgnoredItems()
     loadApiKeys()
+    loadProviders()  // NEW: load dynamic providers
   }, [])
   
   const loadIgnoredItems = async () => {
@@ -96,6 +101,43 @@ export default function SettingsPanel() {
       setApiKeys(keys)
     } catch (e) {
       console.error('Failed to load API keys:', e)
+    }
+  }
+
+  const loadProviders = async () => {
+    try {
+      const providers = await api.getLLMProvidersDynamic()
+      setAvailableProviders(providers)
+    } catch (e) {
+      console.error('Failed to load providers:', e)
+    }
+  }
+
+  const loadClassifierModels = async (provider: string) => {
+    try {
+      const response = await api.getLLMProviderModels(provider)
+      setClassifierModels(response.models)
+      // If current model not in list, clear it
+      if (classifierModel && !response.models.find(m => m.id === classifierModel)) {
+        setClassifierModel('')
+      }
+    } catch (e) {
+      console.error('Failed to load classifier models:', e)
+      setClassifierModels([])
+    }
+  }
+
+  const loadOcrModels = async (provider: string) => {
+    try {
+      const response = await api.getLLMProviderModels(provider)
+      setOcrModels(response.models)
+      // If current model not in list, clear it
+      if (ocrModel && !response.models.find(m => m.id === ocrModel)) {
+        setOcrModel('')
+      }
+    } catch (e) {
+      console.error('Failed to load OCR models:', e)
+      setOcrModels([])
     }
   }
 
@@ -142,6 +184,12 @@ export default function SettingsPanel() {
       // Load classifier_model and ocr_model for unified form (LLM-09)
       setClassifierModel((settings as any).classifier_model || '')
       setOcrModel((settings as any).ocr_model || '')
+      // Load initial classifier models
+      if (settings.classifier_provider) {
+        loadClassifierModels(settings.classifier_provider)
+      }
+      // Load initial OCR models (always ollama for vision)
+      loadOcrModels('ollama')
     } catch (e) {
       console.error('Error loading app settings:', e)
     }
@@ -350,10 +398,12 @@ export default function SettingsPanel() {
                   setSelectedProviderApiKey(provider.api_key === '***' ? '' : provider.api_key)
                   setProviderApiBaseUrl(provider.api_base_url || '')
                 }
+                // Fetch models for new provider
+                await loadClassifierModels(providerName)
               }}
               className="input w-full"
             >
-              {providers.map((p: LLMProvider) => (
+              {availableProviders.map((p) => (
                 <option key={p.name} value={p.name}>{p.display_name}</option>
               ))}
             </select>
@@ -376,23 +426,28 @@ export default function SettingsPanel() {
           {/* Model field — sets classifier_model in AppSettings */}
           <div>
             <label className="block text-sm font-medium text-surface-300 mb-2">Model</label>
-            <input
-              type="text"
+            <select
               value={classifierModel}
               onChange={(e) => setClassifierModel(e.target.value)}
-              placeholder="z.B. gpt-4o-mini, llama3.1, qwen2.5"
               className="input w-full"
-            />
-            <button
-              onClick={async () => {
-                await api.updateAppSettings({ classifier_model: classifierModel })
-                setModelSaved(true)
-                setTimeout(() => setModelSaved(false), 2000)
-              }}
-              className="btn btn-secondary mt-2"
             >
-              Model speichern
-            </button>
+              <option value="">Model auswaehlen...</option>
+              {classifierModels.map((m) => (
+                <option key={m.id} value={m.id}>{m.display_name || m.name}</option>
+              ))}
+            </select>
+            {classifierModel && (
+              <button
+                onClick={async () => {
+                  await api.updateAppSettings({ classifier_model: classifierModel })
+                  setModelSaved(true)
+                  setTimeout(() => setModelSaved(false), 2000)
+                }}
+                className="btn btn-secondary mt-2"
+              >
+                Model speichern
+              </button>
+            )}
             {modelSaved && <span className="ml-2 text-emerald-400 text-sm">Gespeichert</span>}
           </div>
 
@@ -429,7 +484,9 @@ export default function SettingsPanel() {
             <select
               value={ocrProvider}
               onChange={async (e) => {
-                setOcrProvider(e.target.value)
+                const newProvider = e.target.value
+                setOcrProvider(newProvider)
+                await loadOcrModels(newProvider)  // Fetch models for OCR
               }}
               className="input w-full"
             >
@@ -441,23 +498,28 @@ export default function SettingsPanel() {
           {/* OCR Model — sets ocr_model in AppSettings */}
           <div>
             <label className="block text-sm font-medium text-surface-300 mb-2">OCR Model</label>
-            <input
-              type="text"
+            <select
               value={ocrModel}
               onChange={(e) => setOcrModel(e.target.value)}
-              placeholder="z.B. qwen2.5:7b, llava:latest"
               className="input w-full"
-            />
-            <button
-              onClick={async () => {
-                await api.updateAppSettings({ ocr_model: ocrModel })
-                setOcrModelSaved(true)
-                setTimeout(() => setOcrModelSaved(false), 2000)
-              }}
-              className="btn btn-secondary mt-2"
             >
-              OCR Model speichern
-            </button>
+              <option value="">OCR Model auswaehlen...</option>
+              {ocrModels.map((m) => (
+                <option key={m.id} value={m.id}>{m.display_name || m.name}</option>
+              ))}
+            </select>
+            {ocrModel && (
+              <button
+                onClick={async () => {
+                  await api.updateAppSettings({ ocr_model: ocrModel })
+                  setOcrModelSaved(true)
+                  setTimeout(() => setOcrModelSaved(false), 2000)
+                }}
+                className="btn btn-secondary mt-2"
+              >
+                OCR Model speichern
+              </button>
+            )}
             {ocrModelSaved && <span className="ml-2 text-emerald-400 text-sm">Gespeichert</span>}
           </div>
         </div>
