@@ -33,7 +33,8 @@ async def set_setting(key: str, value: str, value_type: str = "str", db: AsyncSe
     if db is None:
         async for session in get_db():
             await set_setting(key, value, value_type, session)
-            return
+            break   # exits cleanly; generator finally-block runs
+        return
     result = await db.execute(
         select(AppSettings).where(AppSettings.key == key)
     )
@@ -42,7 +43,7 @@ async def set_setting(key: str, value: str, value_type: str = "str", db: AsyncSe
         setting.value = value
         setting.value_type = value_type
     else:
-        setting = AppSettings(key=key, value=value, value_type=value_type)
+        setting = AppSettings(id=None, key=key, value=value, value_type=value_type)
         db.add(setting)
     await db.commit()
 
@@ -224,7 +225,7 @@ PROVIDER_DISPLAY_NAMES = {
 
 # LLM Providers - LiteLLM-based (for SettingsPanel UI)
 @router.get("/llm-providers")
-async def get_llm_providers_from_litellm(db: AsyncSession = Depends(get_db)):
+async def get_llm_providers_from_litellm():
     """Get all LiteLLM-supported providers dynamically from litellm.provider_list enum.
     
     Uses litellm.provider_list which provides all 132+ supported provider names
@@ -246,6 +247,10 @@ async def get_llm_providers_from_litellm(db: AsyncSession = Depends(get_db)):
         providers.sort(key=lambda x: x["display_name"])
         return providers
     except Exception as e:
+        import logging
+        logging.getLogger(__name__).warning(
+            "litellm.provider_list unavailable, using hardcoded fallback: %s", e
+        )
         # Fallback to hardcoded list
         return [
             {"name": "openai", "display_name": "OpenAI"},
@@ -275,7 +280,12 @@ async def get_llm_provider_models(provider: str, db: AsyncSession = Depends(get_
                 select(LLMProvider).where(LLMProvider.name == "ollama")
             )
             db_provider = result.scalar_one_or_none()
-            api_base = (db_provider.api_base_url or "http://localhost:11434") if db_provider else "http://localhost:11434"
+            raw_base = (db_provider.api_base_url or "http://localhost:11434") if db_provider else "http://localhost:11434"
+            
+            try:
+                api_base = _validate_base_url(raw_base)
+            except ValueError as e:
+                return {"provider": provider, "models": [], "error": str(e)}
             
             try:
                 import httpx
@@ -294,9 +304,13 @@ async def get_llm_provider_models(provider: str, db: AsyncSession = Depends(get_
                             for m in models_data
                         ]
                     }
-            except Exception:
-                # Fall through to litellm.model_list fallback below
-                pass
+            except Exception as e:
+                import logging
+                logging.getLogger(__name__).info(
+                    "Ollama /api/tags unreachable at %s, falling back to litellm.model_list: %s",
+                    api_base, e
+                )
+                pass  # fall through to litellm.model_list below
         
         # Fall back to litellm.model_list for all providers
         import litellm
@@ -324,6 +338,15 @@ async def get_llm_provider_models(provider: str, db: AsyncSession = Depends(get_
         
     except Exception as e:
         return {"provider": provider, "models": [], "error": str(e)}
+
+
+def _validate_base_url(url: str) -> str:
+    """Validate URL scheme to prevent SSRF attacks (WR-04)."""
+    from urllib.parse import urlparse
+    parsed = urlparse(url)
+    if parsed.scheme not in ("http", "https"):
+        raise ValueError(f"Unsupported URL scheme for provider: {parsed.scheme!r}")
+    return url.rstrip("/")
 
 
 def _format_model_display_name(model_name: str) -> str:

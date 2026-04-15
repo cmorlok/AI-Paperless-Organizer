@@ -99,7 +99,7 @@ class AppSettings(Base):
     """
     __tablename__ = "app_settings"
 
-    id = Column(Integer, primary_key=True, default=1)  # Only id=1 for scalar rows
+    id = Column(Integer, primary_key=True, default=None)  # Scalar rows use id=1 explicitly; KV rows use id=None (autoincrement)
     # Key-value store for LLM job routing (LLM-08)
     key = Column(String(100), nullable=True, unique=True)  # NULL for scalar rows, string for KV entries
     value = Column(String(500), nullable=True)
