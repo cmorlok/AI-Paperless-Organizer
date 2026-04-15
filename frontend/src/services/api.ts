@@ -95,6 +95,18 @@ export const getLLMProviders = () => fetchJson<any[]>('/settings/llm-providers')
 export const getLLMProvidersDynamic = () =>
   fetchJson<{ name: string; display_name: string }[]>('/settings/llm-providers')
 
+// Get all LLM providers from DB (with id, for save operations)
+export const getLLMProvidersFromDB = () =>
+  fetchJson<{
+    id: number
+    name: string
+    display_name: string
+    api_key: string
+    api_base_url: string
+    is_active: boolean
+    is_configured: boolean
+  }[]>('/settings/llm-providers/db')
+
 // Get available models for a specific provider
 export interface LLMModel {
   id: string
