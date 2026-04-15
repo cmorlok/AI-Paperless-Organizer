@@ -23,8 +23,7 @@ export default function SettingsPanel() {
 
   // LLM Providers
   const [providers, setProviders] = useState<LLMProvider[]>([])
-  // Dynamic provider/model state (LLM-09)
-  const [availableProviders, setAvailableProviders] = useState<{name: string; display_name: string}[]>([])
+  // Dynamic model state (LLM-09)
   const [classifierModels, setClassifierModels] = useState<api.LLMModel[]>([])
   const [ocrModels, setOcrModels] = useState<api.LLMModel[]>([])
 
@@ -34,8 +33,6 @@ export default function SettingsPanel() {
   const [ocrProvider, setOcrProvider] = useState('ollama')
   const [ocrModel, setOcrModel] = useState('')
   const [ocrModelSaved, setOcrModelSaved] = useState(false)
-  const [selectedProviderApiKey, setSelectedProviderApiKey] = useState('')
-  const [providerApiBaseUrl, setProviderApiBaseUrl] = useState('')
   const [connectionSaved, setConnectionSaved] = useState(false)
   // Per-provider credential editing (LLM-09 fix: was shared state, now per-provider)
   const [providerEdits, setProviderEdits] = useState<Record<number, { api_key: string; api_base_url: string }>>({})
@@ -70,7 +67,6 @@ export default function SettingsPanel() {
     loadAppSettings()
     loadIgnoredItems()
     loadApiKeys()
-    loadProviders()  // NEW: load dynamic providers
   }, [])
   
   const loadIgnoredItems = async () => {
@@ -103,15 +99,6 @@ export default function SettingsPanel() {
       setApiKeys(keys)
     } catch (e) {
       console.error('Failed to load API keys:', e)
-    }
-  }
-
-  const loadProviders = async () => {
-    try {
-      const providers = await api.getLLMProvidersDynamic()
-      setAvailableProviders(providers)
-    } catch (e) {
-      console.error('Failed to load providers:', e)
     }
   }
 
@@ -240,12 +227,6 @@ export default function SettingsPanel() {
       setProviders(llmProviders)
       setAppSettings(appSettingsData)
 
-      // Load current LLM settings for unified form (LLM-09)
-      const activeProvider = llmProviders.find((p: LLMProvider) => p.name === appSettingsData.classifier_provider)
-      if (activeProvider) {
-        setSelectedProviderApiKey(activeProvider.api_key === '***' ? '' : activeProvider.api_key)
-        setProviderApiBaseUrl(activeProvider.api_base_url || '')
-      }
       // Populate per-provider credential edits (LLM-09 fix: was shared state)
       const edits: Record<number, { api_key: string; api_base_url: string }> = {}
       llmProviders.forEach((p: LLMProvider) => {
@@ -426,7 +407,7 @@ export default function SettingsPanel() {
                   <label className="block text-xs text-surface-400 mb-1">API Base URL</label>
                   <input
                     type="url"
-                    value={providerEdits[provider.id]?.api_base_url ?? provider.api_base_url || ''}
+                    value={providerEdits[provider.id]?.api_base_url ?? (provider.api_base_url || '')}
                     onChange={(e) => setProviderEdits(prev => ({
                       ...prev,
                       [provider.id]: { ...prev[provider.id], api_base_url: e.target.value }
@@ -478,18 +459,12 @@ export default function SettingsPanel() {
                 const providerName = e.target.value
                 setAppSettings(prev => ({ ...prev, classifier_provider: providerName }))
                 await api.updateAppSettings({ classifier_provider: providerName })
-                // Update api_key/base_url state for newly selected provider
-                const provider = providers.find((p: LLMProvider) => p.name === providerName)
-                if (provider) {
-                  setSelectedProviderApiKey(provider.api_key === '***' ? '' : provider.api_key)
-                  setProviderApiBaseUrl(provider.api_base_url || '')
-                }
                 // Fetch models for new provider
                 await loadClassifierModels(providerName)
               }}
               className="input w-full"
             >
-              {availableProviders.map((p) => (
+              {providers.filter(p => p.is_configured).map((p) => (
                 <option key={p.name} value={p.name}>{p.display_name}</option>
               ))}
             </select>
@@ -542,7 +517,7 @@ export default function SettingsPanel() {
               }}
               className="input w-full"
             >
-              {availableProviders.map((p) => (
+              {providers.filter(p => p.is_configured).map((p) => (
                 <option key={p.name} value={p.name}>{p.display_name}</option>
               ))}
             </select>
