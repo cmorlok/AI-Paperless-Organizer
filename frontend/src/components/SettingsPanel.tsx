@@ -229,7 +229,7 @@ export default function SettingsPanel() {
     try {
       const [paperlessSettings, llmProviders, appSettingsData] = await Promise.all([
         api.getPaperlessSettings(),
-        api.getLLMProviders(),
+        api.getLLMProvidersFromDB(),  // Use DB endpoint to get providers with id
         api.getAppSettings()
       ])
 
@@ -370,20 +370,96 @@ export default function SettingsPanel() {
         </div>
       </div>
 
-      {/* Unified LLM Settings Form (LLM-09, D-06) */}
+      {/* Provider-Konfiguration Card */}
+      <div className="card p-6">
+        <h2 className="font-display font-semibold text-xl text-surface-100 mb-6 flex items-center gap-2">
+          <Key className="w-5 h-5 text-primary-400" />
+          Provider-Konfiguration
+        </h2>
+
+        <div className="space-y-4">
+          {providers.map((provider) => (
+            <div key={provider.id} className="p-4 rounded-lg bg-surface-800/50 border border-surface-700">
+              <div className="flex items-center justify-between mb-3">
+                <div className="flex items-center gap-2">
+                  <span className="font-medium text-surface-100">{provider.display_name}</span>
+                  <span className="text-xs px-2 py-0.5 rounded bg-surface-700 text-surface-400">
+                    {provider.name}
+                  </span>
+                  {provider.is_configured && (
+                    <span className="text-xs px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-400">
+                      Konfiguriert
+                    </span>
+                  )}
+                </div>
+              </div>
+
+              <div className="space-y-3">
+                {/* API Key */}
+                <div>
+                  <label className="block text-xs text-surface-400 mb-1">API Key</label>
+                  <input
+                    type="password"
+                    value={provider.id === providers.find(p => p.name === appSettings.classifier_provider)?.id ? selectedProviderApiKey : ''}
+                    onChange={(e) => {
+                      if (provider.id === providers.find(p => p.name === appSettings.classifier_provider)?.id) {
+                        setSelectedProviderApiKey(e.target.value)
+                      }
+                    }}
+                    placeholder={provider.api_key === '***' ? 'Vorhandener Key' : 'API Key eingeben'}
+                    className="input w-full text-sm"
+                  />
+                </div>
+
+                {/* API Base URL */}
+                <div>
+                  <label className="block text-xs text-surface-400 mb-1">API Base URL</label>
+                  <input
+                    type="url"
+                    value={provider.id === providers.find(p => p.name === appSettings.classifier_provider)?.id ? providerApiBaseUrl : provider.api_base_url || ''}
+                    onChange={(e) => {
+                      if (provider.id === providers.find(p => p.name === appSettings.classifier_provider)?.id) {
+                        setProviderApiBaseUrl(e.target.value)
+                      }
+                    }}
+                    placeholder="https://api.openai.com"
+                    className="input w-full text-sm"
+                  />
+                </div>
+
+                {/* Save button */}
+                <button
+                  onClick={async () => {
+                    await api.updateLLMProviderConnection(provider.id, selectedProviderApiKey, providerApiBaseUrl)
+                    setConnectionSaved(true)
+                    setTimeout(() => setConnectionSaved(false), 2000)
+                  }}
+                  className="btn btn-secondary btn-sm flex items-center gap-2"
+                >
+                  <Save className="w-4 h-4" />
+                  Speichern
+                </button>
+                {connectionSaved && <span className="ml-2 text-emerald-400 text-sm">Gespeichert</span>}
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* Model-Auswahl Card */}
       <div className="card p-6">
         <h2 className="font-display font-semibold text-xl text-surface-100 mb-6 flex items-center gap-2">
           <Cpu className="w-5 h-5 text-primary-400" />
-          LLM Einstellungen
+          Model-Auswahl
         </h2>
 
-        {/* Section 1: Classifier LLM */}
+        {/* Section 1: Classifier Model */}
         <div className="mb-8 space-y-4">
           <h3 className="text-lg font-medium text-surface-100 border-b border-surface-700 pb-2">
             Klassifizierung & Bereinigung
           </h3>
 
-          {/* Provider dropdown */}
+          {/* Provider dropdown - only configured providers */}
           <div>
             <label className="block text-sm font-medium text-surface-300 mb-2">Provider</label>
             <select
@@ -408,20 +484,6 @@ export default function SettingsPanel() {
               ))}
             </select>
           </div>
-
-          {/* Show api_key for non-Ollama providers */}
-          {appSettings.classifier_provider !== 'ollama' && (
-            <div>
-              <label className="block text-sm font-medium text-surface-300 mb-2">API Key</label>
-              <input
-                type="password"
-                value={selectedProviderApiKey}
-                onChange={(e) => setSelectedProviderApiKey(e.target.value)}
-                placeholder="API Key eingeben"
-                className="input w-full"
-              />
-            </div>
-          )}
 
           {/* Model field — sets classifier_model in AppSettings */}
           <div>
@@ -450,35 +512,15 @@ export default function SettingsPanel() {
             )}
             {modelSaved && <span className="ml-2 text-emerald-400 text-sm">Gespeichert</span>}
           </div>
-
-          {/* api_base_url — conditional display */}
-          {(appSettings.classifier_provider === 'ollama' || appSettings.classifier_provider === 'azure') && (
-            <div>
-              <label className="block text-sm font-medium text-surface-300 mb-2">
-                {appSettings.classifier_provider === 'ollama' ? 'Ollama URL' : 'Azure Endpoint'}
-              </label>
-              <input
-                type="url"
-                value={providerApiBaseUrl}
-                onChange={(e) => setProviderApiBaseUrl(e.target.value)}
-                placeholder={
-                  appSettings.classifier_provider === 'ollama'
-                    ? 'http://localhost:11434'
-                    : 'https://xxx.openai.azure.com'
-                }
-                className="input w-full"
-              />
-            </div>
-          )}
         </div>
 
-        {/* Section 2: OCR LLM */}
+        {/* Section 2: OCR Model */}
         <div className="space-y-4">
           <h3 className="text-lg font-medium text-surface-100 border-b border-surface-700 pb-2">
             OCR (Texterkennung)
           </h3>
 
-          {/* OCR Provider — always Ollama for vision */}
+          {/* OCR Provider - uses configured providers, not hardcoded */}
           <div>
             <label className="block text-sm font-medium text-surface-300 mb-2">OCR Provider</label>
             <select
@@ -490,9 +532,10 @@ export default function SettingsPanel() {
               }}
               className="input w-full"
             >
-              <option value="ollama">Ollama (Lokal)</option>
+              {availableProviders.map((p) => (
+                <option key={p.name} value={p.name}>{p.display_name}</option>
+              ))}
             </select>
-            <p className="mt-1 text-xs text-surface-500">OCR verwendet Ollama Vision-Modelle</p>
           </div>
 
           {/* OCR Model — sets ocr_model in AppSettings */}
@@ -522,25 +565,6 @@ export default function SettingsPanel() {
             )}
             {ocrModelSaved && <span className="ml-2 text-emerald-400 text-sm">Gespeichert</span>}
           </div>
-        </div>
-
-        {/* Save connection settings button */}
-        <div className="mt-6 pt-4 border-t border-surface-700">
-          <button
-            onClick={async () => {
-              const provider = providers.find((p: LLMProvider) => p.name === appSettings.classifier_provider)
-              if (provider) {
-                await api.updateLLMProviderConnection(provider.id, selectedProviderApiKey, providerApiBaseUrl)
-                setConnectionSaved(true)
-                setTimeout(() => setConnectionSaved(false), 2000)
-              }
-            }}
-            className="btn btn-primary flex items-center gap-2"
-          >
-            <Save className="w-4 h-4" />
-            Verbindung speichern
-          </button>
-          {connectionSaved && <span className="ml-3 text-emerald-400 text-sm">Verbindung gespeichert</span>}
         </div>
       </div>
 
