@@ -37,6 +37,8 @@ export default function SettingsPanel() {
   const [selectedProviderApiKey, setSelectedProviderApiKey] = useState('')
   const [providerApiBaseUrl, setProviderApiBaseUrl] = useState('')
   const [connectionSaved, setConnectionSaved] = useState(false)
+  // Per-provider credential editing (LLM-09 fix: was shared state, now per-provider)
+  const [providerEdits, setProviderEdits] = useState<Record<number, { api_key: string; api_base_url: string }>>({})
   
   // App Settings
   const [appSettings, setAppSettings] = useState({
@@ -244,6 +246,15 @@ export default function SettingsPanel() {
         setSelectedProviderApiKey(activeProvider.api_key === '***' ? '' : activeProvider.api_key)
         setProviderApiBaseUrl(activeProvider.api_base_url || '')
       }
+      // Populate per-provider credential edits (LLM-09 fix: was shared state)
+      const edits: Record<number, { api_key: string; api_base_url: string }> = {}
+      llmProviders.forEach((p: LLMProvider) => {
+        edits[p.id] = {
+          api_key: p.api_key === '***' ? '' : p.api_key,
+          api_base_url: p.api_base_url || '',
+        }
+      })
+      setProviderEdits(edits)
     } catch (error) {
       console.error('Error loading settings:', error)
     }
@@ -400,12 +411,11 @@ export default function SettingsPanel() {
                   <label className="block text-xs text-surface-400 mb-1">API Key</label>
                   <input
                     type="password"
-                    value={provider.id === providers.find(p => p.name === appSettings.classifier_provider)?.id ? selectedProviderApiKey : ''}
-                    onChange={(e) => {
-                      if (provider.id === providers.find(p => p.name === appSettings.classifier_provider)?.id) {
-                        setSelectedProviderApiKey(e.target.value)
-                      }
-                    }}
+                    value={providerEdits[provider.id]?.api_key ?? ''}
+                    onChange={(e) => setProviderEdits(prev => ({
+                      ...prev,
+                      [provider.id]: { ...prev[provider.id], api_key: e.target.value }
+                    }))}
                     placeholder={provider.api_key === '***' ? 'Vorhandener Key' : 'API Key eingeben'}
                     className="input w-full text-sm"
                   />
@@ -416,12 +426,11 @@ export default function SettingsPanel() {
                   <label className="block text-xs text-surface-400 mb-1">API Base URL</label>
                   <input
                     type="url"
-                    value={provider.id === providers.find(p => p.name === appSettings.classifier_provider)?.id ? providerApiBaseUrl : provider.api_base_url || ''}
-                    onChange={(e) => {
-                      if (provider.id === providers.find(p => p.name === appSettings.classifier_provider)?.id) {
-                        setProviderApiBaseUrl(e.target.value)
-                      }
-                    }}
+                    value={providerEdits[provider.id]?.api_base_url ?? provider.api_base_url || ''}
+                    onChange={(e) => setProviderEdits(prev => ({
+                      ...prev,
+                      [provider.id]: { ...prev[provider.id], api_base_url: e.target.value }
+                    }))}
                     placeholder="https://api.openai.com"
                     className="input w-full text-sm"
                   />
@@ -430,7 +439,8 @@ export default function SettingsPanel() {
                 {/* Save button */}
                 <button
                   onClick={async () => {
-                    await api.updateLLMProviderConnection(provider.id, selectedProviderApiKey, providerApiBaseUrl)
+                    const edit = providerEdits[provider.id] ?? { api_key: '', api_base_url: '' }
+                    await api.updateLLMProviderConnection(provider.id, edit.api_key, edit.api_base_url)
                     setConnectionSaved(true)
                     setTimeout(() => setConnectionSaved(false), 2000)
                   }}
