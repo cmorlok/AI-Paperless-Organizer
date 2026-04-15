@@ -118,7 +118,7 @@ export const getLLMProviderModels = (provider: string) =>
   fetchJson<{ provider: string; models: LLMModel[] }>(`/settings/llm-providers/models?provider=${encodeURIComponent(provider)}`)
 
 export const updateLLMProvider = (id: number, data: any) =>
-  fetchJson<{ success: boolean }>(`/settings/llm-providers/${id}`, {
+  fetchJson<{ success: boolean }>(`/settings/llm-providers/db/${id}`, {
     method: 'PUT',
     body: JSON.stringify(data),
   })
