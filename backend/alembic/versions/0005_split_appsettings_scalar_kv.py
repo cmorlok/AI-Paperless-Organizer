@@ -62,11 +62,8 @@ def upgrade() -> None:
         ).bindparams(cp_value=classifier_provider_value)
     )
 
-    # Step 4: Add NOT NULL constraint on key column for future KV entries
-    # (Scalar row has key=NULL, KV entries have key=<string>)
-    # SQLite doesn't support ALTER TABLE ADD CONSTRAINT, so we recreate the table
-    with op.batch_alter_table("app_settings", recreate="auto") as batch_op:
-        batch_op.alter_column("key", existing_type=sa.String(100), nullable=False)
+    # Step 4 REMOVED — NOT NULL constraint would reject the scalar row's key=NULL.
+    # The UNIQUE constraint on key is already present and sufficient.
 
 
 def downgrade() -> None:
