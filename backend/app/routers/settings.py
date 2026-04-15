@@ -181,69 +181,72 @@ async def get_llm_providers_from_db(db: AsyncSession = Depends(get_db)):
     ]
 
 
+# Provider display name mapping (used by both LiteLLM provider list and DB-based list)
+PROVIDER_DISPLAY_NAMES = {
+    "openai": "OpenAI",
+    "anthropic": "Anthropic Claude",
+    "azure": "Azure OpenAI",
+    "ollama": "Ollama (Lokal)",
+    "mistral": "Mistral AI",
+    "openrouter": "OpenRouter",
+    "google": "Google AI (Gemini)",
+    "deepseek": "DeepSeek",
+    "cohere": "Cohere",
+    "groq": "Groq",
+    "fireworks": "Fireworks AI",
+    "anyscale": "Anyscale",
+    "togetherai": "TogetherAI",
+    "replicate": "Replicate",
+    "cloudflare": "Cloudflare Workers AI",
+    "aws": "AWS Bedrock",
+    "vertex_ai": "Google Vertex AI",
+    "sagemaker": "AWS SageMaker",
+    "gemini": "Google Gemini",
+    "xai": "xAI",
+    "perplexity": "Perplexity",
+    "meta": "Meta AI",
+    "qwen": "Qwen (Alibaba)",
+    "samba": "SambaNova",
+    "ai21": "AI21 Labs",
+    "bedrock": "AWS Bedrock",
+    "volcengine": "Volcengine",
+    "LINGYUN": "Lingyun",
+    "sageng": "SAGEN",
+    "MISTRAL": "Mistral AI",
+    "openllm": "OpenLLM",
+    "lmstudio": "LM Studio",
+    "ollama": "Ollama (Lokal)",
+    "localai": "LocalAI",
+    "vllm": "vLLM",
+    "tensorzero": "TensorZero",
+}
+
+
 # LLM Providers - LiteLLM-based (for SettingsPanel UI)
 @router.get("/llm-providers")
 async def get_llm_providers_from_litellm(db: AsyncSession = Depends(get_db)):
-    """Get all LiteLLM-supported providers dynamically (not from DB records).
+    """Get all LiteLLM-supported providers dynamically from litellm.provider_list enum.
     
-    Uses litellm.model_list to extract unique provider names and returns
-    them with display names. This replaces the hardcoded LLMProvider DB records
-    with live provider listing from LiteLLM.
+    Uses litellm.provider_list which provides all 132+ supported provider names
+    as an enum. Falls back to hardcoded list if LiteLLM fails.
     """
     try:
         import litellm
         
-        # Get all models from LiteLLM master list
-        all_models = litellm.model_list
-        
-        # Extract unique provider prefixes - filter for clean provider names
-        providers_set = set()
-        for model in all_models:
-            if "/" in model:
-                provider = model.split("/")[0]
-                # Only include clean single-word providers (no _ or -)
-                if "_" not in provider and "-" not in provider and len(provider) < 15:
-                    providers_set.add(provider)
-        
-        # Provider display name mapping
-        PROVIDER_DISPLAY_NAMES = {
-            "openai": "OpenAI",
-            "anthropic": "Anthropic Claude",
-            "azure": "Azure OpenAI",
-            "ollama": "Ollama (Lokal)",
-            "mistral": "Mistral AI",
-            "openrouter": "OpenRouter",
-            "google": "Google AI (Gemini)",
-            "deepseek": "DeepSeek",
-            "cohere": "Cohere",
-            "groq": "Groq",
-            "fireworks": "Fireworks AI",
-            "anyscale": "Anyscale",
-            "togetherai": "TogetherAI",
-            "replicate": "Replicate",
-            "cloudflare": "Cloudflare Workers AI",
-            "aws": "AWS Bedrock",
-            "vertex_ai": "Google Vertex AI",
-            "sagemaker": "AWS SageMaker",
-            "gemini": "Google Gemini",
-            "xai": "xAI",
-            "perplexity": "Perplexity",
-            "meta": "Meta AI",
-            "mistral": "Mistral AI",
-            "qwen": "Qwen (Alibaba)",
-        }
-        
-        # Build provider list sorted alphabetically
+        # Use litellm.provider_list — enum of all 132+ supported providers
         providers = []
-        for provider in sorted(providers_set):
+        for provider_enum in litellm.provider_list:
+            provider_name = provider_enum.value
             providers.append({
-                "name": provider,
-                "display_name": PROVIDER_DISPLAY_NAMES.get(provider, provider.title()),
+                "name": provider_name,
+                "display_name": PROVIDER_DISPLAY_NAMES.get(provider_name, provider_name.title()),
             })
         
+        # Sort by display_name
+        providers.sort(key=lambda x: x["display_name"])
         return providers
     except Exception as e:
-        # Fallback: return hardcoded list if LiteLLM fails
+        # Fallback to hardcoded list
         return [
             {"name": "openai", "display_name": "OpenAI"},
             {"name": "anthropic", "display_name": "Anthropic Claude"},
@@ -258,12 +261,45 @@ async def get_llm_providers_from_litellm(db: AsyncSession = Depends(get_db)):
 async def get_llm_provider_models(provider: str, db: AsyncSession = Depends(get_db)):
     """Get available models for a specific LiteLLM provider.
     
-    Filters litellm.model_list by provider prefix (e.g., "openai/")
-    and returns model names suitable for dropdown selection.
+    For Ollama: fetches live models from /api/tags endpoint using provider's
+    configured api_base_url from the database.
+    
+    For other providers: falls back to litellm.model_list filtered by 
+    provider prefix (e.g., "openai/").
     """
     try:
-        import litellm
+        # Special handling for Ollama — fetch live models from /api/tags
+        if provider == "ollama":
+            # Look up Ollama provider config from DB
+            result = await db.execute(
+                select(LLMProvider).where(LLMProvider.name == "ollama")
+            )
+            db_provider = result.scalar_one_or_none()
+            api_base = (db_provider.api_base_url or "http://localhost:11434") if db_provider else "http://localhost:11434"
+            
+            try:
+                import httpx
+                async with httpx.AsyncClient(timeout=10.0) as client:
+                    response = await client.get(f"{api_base}/api/tags")
+                    response.raise_for_status()
+                    models_data = response.json().get("models", [])
+                    return {
+                        "provider": provider,
+                        "models": [
+                            {
+                                "id": m["name"],
+                                "name": m["name"],
+                                "display_name": _format_model_display_name(m["name"]),
+                            }
+                            for m in models_data
+                        ]
+                    }
+            except Exception:
+                # Fall through to litellm.model_list fallback below
+                pass
         
+        # Fall back to litellm.model_list for all providers
+        import litellm
         all_models = litellm.model_list
         
         # Filter models for the specified provider
@@ -282,17 +318,6 @@ async def get_llm_provider_models(provider: str, db: AsyncSession = Depends(get_
                         "id": model_name,
                         "name": model_name,
                         "display_name": _format_model_display_name(model_name),
-                    })
-        
-        # Special handling for Ollama — also include models without prefix (they're all local)
-        if provider == "ollama":
-            for model in all_models:
-                if "/" not in model and model not in seen:
-                    seen.add(model)
-                    models.append({
-                        "id": model,
-                        "name": model,
-                        "display_name": _format_model_display_name(model),
                     })
         
         return {"provider": provider, "models": sorted(models, key=lambda x: x["name"])}
