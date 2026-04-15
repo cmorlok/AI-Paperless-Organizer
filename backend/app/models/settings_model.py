@@ -88,10 +88,18 @@ class IgnoredItem(Base):
 
 
 class AppSettings(Base):
-    """Application-wide settings."""
+    """Application-wide settings.
+
+    Uses split schema:
+    - id=1, key=NULL → scalar UI settings (password_enabled, password_hash, etc.)
+    - id=NULL, key=<string> → KV entries for LLM job routing (classifier_provider, etc.)
+
+    The scalar row (id=1, key=NULL) holds UI settings. KV entries (id=NULL, key=<key>)
+    store per-job provider/model routing (LLM-08).
+    """
     __tablename__ = "app_settings"
-    
-    id = Column(Integer, primary_key=True, default=1)
+
+    id = Column(Integer, primary_key=True, default=1)  # Only id=1 for scalar rows
     # Key-value store for LLM job routing (LLM-08)
     key = Column(String(100), nullable=True, unique=True)  # NULL for scalar rows, string for KV entries
     value = Column(String(500), nullable=True)
@@ -101,10 +109,9 @@ class AppSettings(Base):
     password_hash = Column(String(500), default="")  # Hashed password
     # UI Options
     show_debug_menu = Column(Boolean, default=False)
-    # Theme/Display
     sidebar_compact = Column(Boolean, default=False)
 
-    # Job → Provider assignments (store provider name, e.g. "openai", "ollama")
+    # NOTE: classifier_provider column is deprecated; use LLM_KEY_CLASSIFIER_PROVIDER KV entry
     classifier_provider = Column(String(100), default="ollama")
 
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
