@@ -17,8 +17,6 @@ from app.models.settings_model import LLM_KEY_CLASSIFIER_MODEL, LLM_KEY_CLASSIFI
 
 logger = logging.getLogger(__name__)
 
-LOCAL_PROVIDERS = {"ollama", "lm_studio", "vllm"}
-
 
 async def llm_completion(
     model: str,
@@ -79,8 +77,8 @@ async def list_llm_models(provider: str, db: Optional[AsyncSession] = None) -> L
         api_base = db_provider.api_base_url
         api_key = db_provider.api_key
 
-    # For local providers, try live fetch from the provider's API
-    if provider in LOCAL_PROVIDERS and api_base:
+    # Try live fetch from the provider's API if base_url is configured
+    if api_base:
         try:
             model_url = _derive_openai_compatible_url(api_base, provider)
             headers = {}
