@@ -614,10 +614,17 @@ MODEL_INFO = LitellmService.MODEL_INFO
 
 async def get_llm_service(db: AsyncSession = Depends(get_db)) -> LitellmService:
     """Dependency to get LLM service with active provider."""
-    result = await db.execute(
-        select(LLMProvider).where(LLMProvider.is_active == True).limit(1)
-    )
-    provider = result.scalars().first()
-
+    provider_name = await get_setting(LLM_KEY_CLASSIFIER_PROVIDER, db)
+    provider = None
+    if provider_name:
+        result = await db.execute(
+            select(LLMProvider).where(LLMProvider.name == provider_name)
+        )
+        provider = result.scalars().first()
+    
+    if not provider:
+        result = await db.execute(select(LLMProvider).limit(1))
+        provider = result.scalars().first()
+    
     model = await get_setting(LLM_KEY_CLASSIFIER_MODEL, db)
     return LitellmService(provider, model=model)

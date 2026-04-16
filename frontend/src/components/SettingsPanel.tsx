@@ -9,8 +9,6 @@ interface LLMProvider {
   display_name: string
   api_key: string
   api_base_url: string
-  is_active: boolean
-  is_configured: boolean
 }
 
 // Providers that require URL (local/custom providers) instead of API key
@@ -239,9 +237,8 @@ export default function SettingsPanel() {
       setLiteLlmProviders(liteLlmProvidersData)
       setAppSettings(appSettingsData)
 
-      // Select first configured provider by default, or first LiteLLM provider
-      const firstConfigured = dbProvidersData.find(p => p.is_configured)
-      const defaultProvider = firstConfigured?.name || liteLlmProvidersData[0]?.name || ''
+      // Select first DB provider by default, or first LiteLLM provider
+      const defaultProvider = dbProvidersData[0]?.name || liteLlmProvidersData[0]?.name || ''
       setSelectedProviderName(defaultProvider)
       
       // Load config for selected provider
@@ -404,9 +401,8 @@ export default function SettingsPanel() {
             className="input w-full"
           >
             {(() => {
-              const configured = dbProviders.filter(p => p.is_configured)
+              const configuredNames = new Set(dbProviders.map(p => p.name))
               const popularNames = new Set(POPULAR_PROVIDERS)
-              const configuredNames = new Set(configured.map(p => p.name))
               
               // Providers in the popular list that are not yet configured
               const popularNotConfigured = liteLlmProviders.filter(
@@ -419,9 +415,9 @@ export default function SettingsPanel() {
               
               return (
                 <>
-                  {configured.length > 0 && (
+                  {dbProviders.length > 0 && (
                     <optgroup label="— Konfigurierte Provider —">
-                      {configured.map((p) => (
+                      {dbProviders.map((p) => (
                         <option key={p.name} value={p.name}>{p.display_name}</option>
                       ))}
                     </optgroup>
@@ -455,7 +451,7 @@ export default function SettingsPanel() {
                 <span className="text-xs px-2 py-0.5 rounded bg-surface-700 text-surface-400">
                   {selectedProviderName}
                 </span>
-                {dbProviders.find(p => p.name === selectedProviderName)?.is_configured && (
+                {dbProviders.some(p => p.name === selectedProviderName) && (
                   <span className="text-xs px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-400">
                     Konfiguriert
                   </span>
@@ -535,7 +531,7 @@ export default function SettingsPanel() {
                   setConnectionSaved(true)
                   setTimeout(() => setConnectionSaved(false), 2000)
                   
-                  // Refresh DB providers to update is_configured status
+                  // Refresh DB providers list
                   const updatedDbProviders = await api.getLLMProvidersFromDB()
                   setDbProviders(updatedDbProviders)
                 }}
@@ -578,7 +574,7 @@ export default function SettingsPanel() {
               }}
               className="input w-full"
             >
-              {dbProviders.filter(p => p.is_configured).map((p) => (
+              {dbProviders.map((p) => (
                 <option key={p.name} value={p.name}>{p.display_name}</option>
               ))}
             </select>
@@ -631,7 +627,7 @@ export default function SettingsPanel() {
               }}
               className="input w-full"
             >
-              {dbProviders.filter(p => p.is_configured).map((p) => (
+              {dbProviders.map((p) => (
                 <option key={p.name} value={p.name}>{p.display_name}</option>
               ))}
             </select>

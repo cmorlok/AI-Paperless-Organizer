@@ -103,8 +103,6 @@ export const getLLMProvidersFromDB = () =>
     display_name: string
     api_key: string
     api_base_url: string
-    is_active: boolean
-    is_configured: boolean
   }[]>('/settings/llm-providers/db')
 
 // Get available models for a specific provider

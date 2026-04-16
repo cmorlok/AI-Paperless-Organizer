@@ -25,7 +25,7 @@ class LLMProvider(Base):
     """LLM Provider configuration – connection config only (per D-05).
 
     Model/job routing is stored in AppSettings key-value (LLM_KEY_CLASSIFIER_MODEL etc.).
-    LLMProvider records are seeds/connection definitions.
+    A provider is implicitly configured if a row exists in this table.
     """
     __tablename__ = "llm_providers"
     
@@ -34,17 +34,8 @@ class LLMProvider(Base):
     display_name = Column(String(200), nullable=False)
     api_key = Column(String(500), default="")
     api_base_url = Column(String(500), default="")  # For Ollama or Azure
-    is_active = Column(Boolean, default=False)
-    is_configured = Column(Boolean, default=False)  # Derived: True for Ollama, bool(api_key) for others
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
-
-    def update_configured(self):
-        """Update is_configured based on provider type and api_key (per D-05)."""
-        if self.name == "ollama":
-            self.is_configured = True
-        else:
-            self.is_configured = bool(self.api_key)
 
     @property
     def is_ollama(self) -> bool:

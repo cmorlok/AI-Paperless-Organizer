@@ -65,7 +65,6 @@ class LLMProviderSchema(BaseModel):
     display_name: str
     api_key: Optional[str] = ""
     api_base_url: Optional[str] = ""
-    is_active: bool = False
 
 
 class LLMProviderPatchSchema(BaseModel):
@@ -80,7 +79,6 @@ class LLMProviderCreateSchema(BaseModel):
     display_name: Optional[str] = None
     api_key: Optional[str] = ""
     api_base_url: Optional[str] = ""
-    is_active: bool = False
 
 
 class CustomPromptSchema(BaseModel):
@@ -157,8 +155,6 @@ async def get_llm_providers_from_db(db: AsyncSession = Depends(get_db)):
             "display_name": p.display_name,
             "api_key": "***" if p.api_key else "",
             "api_base_url": p.api_base_url or "",
-            "is_active": p.is_active,
-            "is_configured": p.is_configured,
         }
         for p in providers
     ]
@@ -457,21 +453,12 @@ async def update_llm_provider(
     if not provider:
         raise HTTPException(status_code=404, detail="Provider not found")
     
-    # If setting this provider as active, deactivate others
-    if data.is_active:
-        await db.execute(
-            LLMProvider.__table__.update().values(is_active=False)
-        )
-    
     # Keep old key if *** or empty string is sent (don't accidentally clear the key)
     if data.api_key and data.api_key != "***":
         provider.api_key = data.api_key
     # else: keep existing provider.api_key
     if data.api_base_url is not None:
         provider.api_base_url = data.api_base_url
-    provider.is_active = data.is_active
-    # Update is_configured based on provider type (per D-05)
-    provider.update_configured()
     
     await db.commit()
     return {"success": True}
@@ -502,9 +489,6 @@ async def patch_llm_provider(
     if data.api_base_url is not None:
         provider.api_base_url = data.api_base_url
     
-    # Update is_configured based on provider type
-    provider.update_configured()
-    
     await db.commit()
     return {"success": True}
 
@@ -533,11 +517,7 @@ async def create_llm_provider(
         display_name=display_name,
         api_key=data.api_key or "",
         api_base_url=data.api_base_url or "",
-        is_active=data.is_active,
     )
-    
-    # Set is_configured based on provider type
-    provider.update_configured()
     
     db.add(provider)
     await db.commit()
@@ -881,7 +861,7 @@ async def set_setting_endpoint(
 @router.post("/settings/seed-llm-keys")
 async def seed_llm_keys(db: AsyncSession = Depends(get_db)):
     """Seed LLM key-value settings from existing LLMProvider records. Run once during migration."""
-    result = await db.execute(select(LLMProvider).where(LLMProvider.is_active == True))
+    result = await db.execute(select(LLMProvider).limit(1))
     provider = result.scalar_one_or_none()
     if provider:
         if provider.name:
