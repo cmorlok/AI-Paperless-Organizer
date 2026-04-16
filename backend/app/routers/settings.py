@@ -172,56 +172,15 @@ async def get_llm_providers_from_litellm():
 async def get_llm_provider_models(provider: str, db: AsyncSession = Depends(get_db)):
     """Get available models for a specific LiteLLM provider.
     
-    For Ollama: fetches live models from /api/tags endpoint using provider's
-    configured api_base_url from the database.
+    For local providers (ollama, lm_studio, vllm): queries the provider's
+    API directly using configured base_url from the database.
     
     For other providers: falls back to litellm.model_list filtered by 
     provider prefix (e.g., "openai/").
     """
     try:
-        # Special handling for Ollama — fetch live models from /api/tags
-        if provider == "ollama":
-            # Look up Ollama provider config from DB
-            result = await db.execute(
-                select(LLMProvider).where(LLMProvider.name == "ollama")
-            )
-            db_provider = result.scalar_one_or_none()
-            raw_base = (db_provider.api_base_url or "http://localhost:11434") if db_provider else "http://localhost:11434"
-            
-            try:
-                api_base = _validate_base_url(raw_base)
-            except ValueError as e:
-                return {"provider": provider, "models": [], "error": str(e)}
-            
-            try:
-                import httpx
-                async with httpx.AsyncClient(timeout=10.0) as client:
-                    response = await client.get(f"{api_base}/api/tags")
-                    response.raise_for_status()
-                    models_data = response.json().get("models", [])
-                    return {
-                        "provider": provider,
-                        "models": [
-                            {
-                                "id": m["name"],
-                                "name": m["name"],
-                                "display_name": _format_model_display_name(m["name"]),
-                            }
-                            for m in models_data
-                        ]
-                    }
-            except Exception as e:
-                import logging
-                logging.getLogger(__name__).info(
-                    "Ollama /api/tags unreachable at %s, falling back to litellm.model_list: %s",
-                    api_base, e
-                )
-                pass  # fall through to list_llm_models below
-        
-        # Use llm_service.list_llm_models to list models from LiteLLM registry
-        models = list_llm_models(provider)
+        models = await list_llm_models(provider, db)
         return {"provider": provider, "models": models}
-        
     except Exception as e:
         return {"provider": provider, "models": [], "error": str(e)}
 

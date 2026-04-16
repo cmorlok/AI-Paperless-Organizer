@@ -5,6 +5,7 @@ import re
 import logging
 from typing import Optional, Dict, Any, List
 
+import httpx
 import litellm
 from fastapi import Depends
 from sqlalchemy import select
@@ -15,6 +16,8 @@ from app.models import LLMProvider
 from app.models.settings_model import LLM_KEY_CLASSIFIER_MODEL, LLM_KEY_CLASSIFIER_PROVIDER
 
 logger = logging.getLogger(__name__)
+
+LOCAL_PROVIDERS = {"ollama", "lm_studio", "vllm"}
 
 
 async def llm_completion(
@@ -41,20 +44,86 @@ async def llm_completion(
     return await litellm.acompletion(**litellm_kwargs)
 
 
-def list_llm_models(provider: str) -> List[Dict[str, str]]:
-    """List available models for a provider from LiteLLM registry.
+def _derive_openai_compatible_url(base_url: str, provider: str) -> str:
+    """Derive the OpenAI-compatible /models endpoint URL for a provider.
     
-    For Ollama: returns empty list (live models fetched separately via /api/tags)
-    For other providers: returns models from litellm.model_list filtered by provider prefix.
+    Ollama:     http://host:11434 → http://host:11434/api/tags
+    LM Studio:  http://host:1234  → http://host:1234/v1/models
+    vLLM:       http://host:8000  → http://host:8000/v1/models
+    Other:      use as-is ( LiteLLM handles standard OpenAI-compatible endpoints)
     """
+    base = base_url.rstrip("/")
     if provider == "ollama":
-        return []  # Ollama models are fetched live from /api/tags
+        return f"{base}/api/tags"
+    elif provider in ("lm_studio", "vllm"):
+        return f"{base}/v1/models"
+    return f"{base}/v1/models"
+
+
+async def list_llm_models(provider: str, db: Optional[AsyncSession] = None) -> List[Dict[str, str]]:
+    """List available models for a provider.
     
+    1. Look up provider config (base_url, api_key) from DB if db session provided.
+    2. For local providers (ollama, lm_studio, vllm): query the /models endpoint
+       using the derived OpenAI-compatible URL.
+    3. Fall back to litellm.model_list if the API call fails or no db session.
+    """
+    db_provider = None
+    if db:
+        result = await db.execute(select(LLMProvider).where(LLMProvider.name == provider))
+        db_provider = result.scalar_one_or_none()
+
+    api_base = None
+    api_key = None
+    if db_provider:
+        api_base = db_provider.api_base_url
+        api_key = db_provider.api_key
+
+    # For local providers, try live fetch from the provider's API
+    if provider in LOCAL_PROVIDERS and api_base:
+        try:
+            model_url = _derive_openai_compatible_url(api_base, provider)
+            headers = {}
+            if api_key:
+                headers["Authorization"] = f"Bearer {api_key}"
+
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                response = await client.get(model_url, headers=headers if headers else None)
+                response.raise_for_status()
+                data = response.json()
+
+            # Normalize different response formats
+            if provider == "ollama":
+                models_data = data.get("models", [])
+            else:
+                # OpenAI-compatible /v1/models format
+                models_data = data.get("data", data.get("models", []))
+
+            return [
+                {
+                    "id": m.get("name") or m.get("id"),
+                    "name": m.get("name") or m.get("id"),
+                    "display_name": _format_model_display_name(m.get("name") or m.get("id", "")),
+                }
+                for m in models_data
+            ]
+        except Exception as e:
+            logger.info("Failed to fetch live models from %s for %s, falling back: %s", api_base, provider, e)
+
+    # Fall back to LiteLLM registry
+    return _list_models_from_litellm(provider)
+
+
+def _list_models_from_litellm(provider: str) -> List[Dict[str, str]]:
+    """Get models from LiteLLM registry filtered by provider prefix."""
+    if provider == "ollama":
+        return []  # Ollama not in litellm.model_list
+
     all_models = litellm.model_list
     prefix = f"{provider}/"
     models = []
     seen = set()
-    
+
     for model in all_models:
         if model.startswith(prefix):
             model_name = model[len(prefix):]
@@ -65,8 +134,14 @@ def list_llm_models(provider: str) -> List[Dict[str, str]]:
                     "name": model_name,
                     "display_name": model_name.replace("-", " ").replace("_", " ").title(),
                 })
-    
+
     return sorted(models, key=lambda x: x["name"])
+
+
+def _format_model_display_name(model_name: str) -> str:
+    """Format model name for display in dropdown."""
+    name = model_name.replace("-", " ").replace("_", " ")
+    return " ".join(word.capitalize() for word in name.split()) if name else model_name
 
 
 PROVIDER_DISPLAY_NAMES = {
