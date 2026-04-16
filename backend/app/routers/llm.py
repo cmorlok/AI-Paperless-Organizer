@@ -36,19 +36,3 @@ async def test_prompt(
     except Exception as e:
         return {"success": False, "error": str(e)}
 
-
-@router.get("/models")
-async def get_available_models(provider: str = None):
-    """Get list of available models with context sizes and pricing."""
-    models = LLMProviderService.get_available_models(provider)
-    return {"models": models}
-
-
-@router.get("/model-info/{model_id}")
-async def get_model_info(model_id: str):
-    """Get detailed info about a specific model."""
-    info = LLMProviderService.MODEL_INFO.get(model_id)
-    if not info:
-        raise HTTPException(status_code=404, detail=f"Model {model_id} not found")
-    return {"model_id": model_id, **info}
-

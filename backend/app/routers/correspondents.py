@@ -55,10 +55,9 @@ async def estimate_correspondents(
     estimated_input = 500 + int(items_count * (avg_name_length + 10))
     estimated_tokens = estimated_input // 4
     
-    # Get token limit and model info from LLM provider
-    token_limit = llm.get_token_limit()
-    model_info = llm.get_instance_model_info()
-    model_name = model_info.get("model", "Nicht konfiguriert") if model_info else "Nicht konfiguriert"
+    # Default token limit for batching decisions
+    token_limit = 8000
+    model_name = llm.model or "Nicht konfiguriert"
     safe_limit = int(token_limit * 0.8)
     needs_batching = estimated_tokens > safe_limit
     recommended_batches = max(1, (estimated_tokens + safe_limit - 1) // safe_limit) if needs_batching else 1

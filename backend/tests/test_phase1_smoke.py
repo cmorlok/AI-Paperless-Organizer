@@ -33,26 +33,22 @@ class TestPhase1Smoke:
         assert not p.exists(), f"ollama_provider.py still exists at {p}"
 
     def test_litellm_service_importable(self):
-        """LLM-01: litellm_service.py must be importable with all required exports."""
-        from app.services.litellm_service import LitellmService, get_llm_service, MODEL_INFO
+        """LLM-01: litellm_service.py must be importable with core methods."""
+        from app.services.litellm_service import LitellmService, get_llm_service
 
-        # Verify MODEL_INFO is present and populated (review feedback HIGH)
-        assert isinstance(MODEL_INFO, dict)
-        assert len(MODEL_INFO) >= 20, f"MODEL_INFO has only {len(MODEL_INFO)} models, expected 20+"
-
-        # Verify required methods exist (review feedback HIGH)
-        assert hasattr(LitellmService, "get_available_models")
-        assert hasattr(LitellmService, "get_model_info")
+        # Verify core methods exist
+        assert hasattr(LitellmService, "complete")
+        assert hasattr(LitellmService, "test_connection")
         assert hasattr(LitellmService, "estimate_tokens")
-        assert hasattr(LitellmService, "get_token_limit")
+        assert hasattr(LitellmService, "analyze_for_similarity")
 
-        # Verify estimate_tokens works (used by similarity.py:432)
+        # Verify estimate_tokens works
         s = LitellmService()
         tokens = s.estimate_tokens("hello world test string")
         assert isinstance(tokens, int)
         assert tokens > 0
 
-        print("PASS: LitellmService importable with all required methods")
+        print("PASS: LitellmService importable with core methods")
 
     def test_all_6_consumers_updated(self):
         """LLM-01: All 6 consumer files must import from litellm_service."""

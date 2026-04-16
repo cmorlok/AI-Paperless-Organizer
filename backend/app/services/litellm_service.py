@@ -21,61 +21,6 @@ logger = logging.getLogger(__name__)
 class LitellmService:
     """Service for interacting with various LLM providers via LiteLLM."""
 
-    # Static model info for UI display (pricing/context)
-    # NOTE: For actual LLM calls, LiteLLM handles provider routing internally via model name prefix
-    MODEL_INFO: Dict[str, Dict[str, Any]] = {
-        # OpenAI
-        "gpt-4o": {"context": 128000, "input_price": 2.50, "output_price": 10.00, "description": "Flagship model", "provider": "openai"},
-        "gpt-4o-mini": {"context": 128000, "input_price": 0.15, "output_price": 0.60, "description": "Günstig & schnell", "provider": "openai"},
-        "gpt-4-turbo": {"context": 128000, "input_price": 10.00, "output_price": 30.00, "description": "Vorgänger von GPT-4o", "provider": "openai"},
-        "gpt-4": {"context": 8192, "input_price": 30.00, "output_price": 60.00, "description": "Original GPT-4", "provider": "openai"},
-        "o1-preview": {"context": 128000, "input_price": 15.00, "output_price": 60.00, "description": "Reasoning-Modell", "provider": "openai"},
-        "o1-mini": {"context": 128000, "input_price": 3.00, "output_price": 12.00, "description": "Schnelleres Reasoning", "provider": "openai"},
-        # Anthropic
-        "claude-3-5-sonnet-20241022": {"context": 200000, "input_price": 3.00, "output_price": 15.00, "description": "Neuestes Sonnet", "provider": "anthropic"},
-        "claude-3-5-haiku-20241022": {"context": 200000, "input_price": 0.80, "output_price": 4.00, "description": "Schnell & günstig", "provider": "anthropic"},
-        "claude-3-opus-20240229": {"context": 200000, "input_price": 15.00, "output_price": 75.00, "description": "Stärkstes Claude", "provider": "anthropic"},
-        "claude-3-sonnet-20240229": {"context": 200000, "input_price": 3.00, "output_price": 15.00, "description": "Älteres Sonnet", "provider": "anthropic"},
-        # Mistral
-        "mistral-small-latest": {"context": 32000, "input_price": 0.10, "output_price": 0.30, "description": "Schnell & günstig", "provider": "mistral"},
-        "mistral-large-latest": {"context": 128000, "input_price": 2.00, "output_price": 6.00, "description": "Stärkstes Mistral", "provider": "mistral"},
-        # Ollama/Local
-        "llama3.2": {"context": 128000, "input_price": 0, "output_price": 0, "description": "Lokal - kostenlos", "provider": "ollama"},
-        "llama3.1": {"context": 128000, "input_price": 0, "output_price": 0, "description": "Lokal - kostenlos", "provider": "ollama"},
-        "llama3": {"context": 8192, "input_price": 0, "output_price": 0, "description": "Lokal - kostenlos", "provider": "ollama"},
-        "mistral": {"context": 32768, "input_price": 0, "output_price": 0, "description": "Lokal - kostenlos", "provider": "ollama"},
-        "mixtral": {"context": 32768, "input_price": 0, "output_price": 0, "description": "Lokal - MoE Modell", "provider": "ollama"},
-        "qwen2.5": {"context": 32768, "input_price": 0, "output_price": 0, "description": "Lokal - kostenlos", "provider": "ollama"},
-        "gemma2": {"context": 8192, "input_price": 0, "output_price": 0, "description": "Lokal - kostenlos", "provider": "ollama"},
-        # Gemini
-        "gemini-2.0-flash": {"context": 1000000, "input_price": 0.00, "output_price": 0.00, "description": "Google Gemini", "provider": "gemini"},
-    }
-
-    @classmethod
-    def get_available_models(cls, provider: str = None) -> list:
-        """Get list of available models with their info."""
-        models = []
-        for model_id, info in cls.MODEL_INFO.items():
-            if provider is None or info.get("provider") == provider:
-                models.append({
-                    "id": model_id,
-                    "provider": info.get("provider"),
-                    "context": info.get("context"),
-                    "input_price": info.get("input_price"),
-                    "output_price": info.get("output_price"),
-                    "description": info.get("description")
-                })
-        return models
-
-    @classmethod
-    def get_model_info(cls, model_id: str) -> Optional[Dict[str, Any]]:
-        """Get info dict for a specific model_id."""
-        if model_id in cls.MODEL_INFO:
-            info = cls.MODEL_INFO[model_id].copy()
-            info["model"] = model_id
-            return info
-        return None
-
     def __init__(self, provider: Optional[LLMProvider] = None, model: Optional[str] = None):
         self.provider = provider
         self.model = model
@@ -131,26 +76,6 @@ class LitellmService:
         except Exception:
             # Fallback to char-based estimation
             return len(text) // 4
-
-    def get_token_limit(self, model: Optional[str] = None) -> int:
-        """Get the token limit for a model based on MODEL_INFO."""
-        model_name = model or self.model
-        if model_name and model_name in self.MODEL_INFO:
-            info = self.MODEL_INFO[model_name]
-            context = info.get("context", 8000)
-            return int(context * 0.95)  # Leave buffer for output
-        return 8000  # Conservative default
-
-    def get_instance_model_info(self) -> Optional[Dict[str, Any]]:
-        """Get info about the current provider and model."""
-        if not self.provider:
-            return None
-
-        return {
-            "model": self.model or "Nicht konfiguriert",
-            "provider_name": self.provider.name,
-            "context": self.get_token_limit()
-        }
 
     async def analyze_for_similarity(self, prompt_template: str, items: list) -> Dict:
         """Analyze items for similarity using the configured LLM."""
@@ -339,10 +264,6 @@ class LitellmService:
                 "error": f"JSON-Fehler: {str(e)}. Kontext: ...{error_context}...",
                 "stats": stats
             }
-
-
-# Module-level MODEL_INFO export for backward compatibility
-MODEL_INFO = LitellmService.MODEL_INFO
 
 
 async def get_llm_service(db: AsyncSession = Depends(get_db)) -> LitellmService:
