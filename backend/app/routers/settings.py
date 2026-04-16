@@ -11,7 +11,7 @@ from app.models.settings_model import (
     LLM_KEY_OCR_PROVIDER,
     LLM_KEY_OCR_MODEL,
 )
-from app.services.litellm_service import list_llm_models, list_llm_providers, PROVIDER_DISPLAY_NAMES
+from app.services.llm_service import list_llm_models, list_llm_providers, PROVIDER_DISPLAY_NAMES
 import hashlib
 from app.prompts.default_prompts import DEFAULT_PROMPTS
 
@@ -218,7 +218,7 @@ async def get_llm_provider_models(provider: str, db: AsyncSession = Depends(get_
                 )
                 pass  # fall through to list_llm_models below
         
-        # Use litellm_service.list_llm_models to list models from LiteLLM registry
+        # Use llm_service.list_llm_models to list models from LiteLLM registry
         models = list_llm_models(provider)
         return {"provider": provider, "models": models}
         

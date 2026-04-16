@@ -9,7 +9,7 @@ from typing import Dict, Any, List, Optional
 
 import httpx
 
-from app.services.litellm_service import llm_completion
+from app.services.llm_service import llm_completion
 
 from app.services.classifier.base_provider import (
     BaseClassifierProvider, ClassificationResult, DocumentContext,

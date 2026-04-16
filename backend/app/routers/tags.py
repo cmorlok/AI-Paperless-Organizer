@@ -10,7 +10,7 @@ from app.services.paperless_client import PaperlessClient, get_paperless_client
 from app.services.similarity import SimilarityService, get_similarity_service
 from app.services.merge import MergeService, get_merge_service
 from app.services.statistics import StatisticsService, get_statistics_service
-from app.services.litellm_service import LitellmService as LLMProviderService, get_llm_service
+from app.services.llm_service import LitellmService as LLMProviderService, get_llm_service
 
 router = APIRouter()
 ENTITY_TYPE = "tags"

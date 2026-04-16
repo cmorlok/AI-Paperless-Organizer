@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Optional, Dict, List, Any
 from PIL import Image
 from pdf2image import convert_from_bytes
-from app.services.litellm_service import llm_completion
+from app.services.llm_service import llm_completion
 
 # Raise PIL pixel limit for large PDF pages rendered at high DPI
 Image.MAX_IMAGE_PIXELS = 500_000_000  # 500 megapixels (default is ~178MP)
