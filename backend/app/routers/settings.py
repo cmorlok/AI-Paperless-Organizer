@@ -11,6 +11,7 @@ from app.models.settings_model import (
     LLM_KEY_OCR_PROVIDER,
     LLM_KEY_OCR_MODEL,
 )
+from app.services.litellm_service import list_llm_models, list_llm_providers, PROVIDER_DISPLAY_NAMES
 import hashlib
 from app.prompts.default_prompts import DEFAULT_PROMPTS
 
@@ -160,173 +161,11 @@ async def get_llm_providers_from_db(db: AsyncSession = Depends(get_db)):
     ]
 
 
-# Provider display name mapping (used by both LiteLLM provider list and DB-based list)
-PROVIDER_DISPLAY_NAMES: dict[str, str] = {
-    "a2a": "A2A",
-    "a2a_agent": "A2A Agent",
-    "ai21": "AI21 Labs",
-    "bedrock": "AWS Bedrock",
-    "sagemaker": "AWS SageMaker",
-    "ai21_chat": "AI21 Chat",
-    "aiml": "AIML",
-    "aiohttp_openai": "AIOHTTP OpenAI",
-    "amazon_nova": "Amazon Nova",
-    "anthropic": "Anthropic Claude",
-    "anthropic_text": "Anthropic Text",
-    "apertis": "Apertis",
-    "assemblyai": "AssemblyAI",
-    "auto_router": "Auto Router",
-    "aws_polly": "AWS Polly",
-    "azure": "Azure OpenAI",
-    "azure_ai": "Azure AI",
-    "azure_text": "Azure Text",
-    "baseten": "Baseten",
-    "bedrock_mantle": "Bedrock Mantle",
-    "black_forest_labs": "Black Forest Labs",
-    "bytez": "Bytez",
-    "cerebras": "Cerebras",
-    "charity_engine": "Charity Engine",
-    "chatgpt": "ChatGPT",
-    "chutes": "Chutes",
-    "clarifai": "ClarifAI",
-    "cloudflare": "Cloudflare Workers AI",
-    "codestral": "Codestral",
-    "cohere": "Cohere",
-    "cohere_chat": "Cohere Chat",
-    "cometapi": "CometAPI",
-    "compactifai": "CompactifAI",
-    "cursor": "Cursor",
-    "custom": "Custom",
-    "custom_openai": "Custom OpenAI",
-    "dashscope": "DashScope",
-    "databricks": "Databricks",
-    "datarobot": "DataRobot",
-    "deepseek": "DeepSeek",
-    "deepgram": "Deepgram",
-    "deepinfra": "DeepInfra",
-    "docker_model_runner": "Docker Model Runner",
-    "dotprompt": "Dotprompt",
-    "elevenlabs": "ElevenLabs",
-    "empower": "Empower",
-    "fal_ai": "fal.ai",
-    "featherless_ai": "Featherless AI",
-    "fireworks_ai": "Fireworks AI",
-    "friendliai": "FriendliAI",
-    "galadriel": "Galadriel",
-    "gigachat": "GigaChat",
-    "github": "GitHub",
-    "github_copilot": "GitHub Copilot",
-    "gemini": "Google Gemini",
-    "vertex_ai": "Google Vertex AI",
-    "gradient_ai": "Gradient AI",
-    "groq": "Groq",
-    "helicone": "Helicone",
-    "heroku": "Heroku",
-    "hosted_vllm": "Hosted vLLM",
-    "huggingface": "Hugging Face",
-    "humanloop": "Humanloop",
-    "hyperbolic": "Hyperbolic",
-    "infinity": "Infinity",
-    "jina_ai": "Jina AI",
-    "lambda_ai": "Lambda AI",
-    "langfuse": "Langfuse",
-    "langgraph": "LangGraph",
-    "lemonade": "Lemonade",
-    "litellm_agent": "LiteLLM Agent",
-    "litellm_proxy": "LiteLLM Proxy",
-    "llamafile": "Llamafile",
-    "lm_studio": "LM Studio",
-    "manus": "Manus",
-    "maritalk": "MariTalk",
-    "meta_llama": "Meta Llama",
-    "milvus": "Milvus",
-    "minimax": "MiniMax",
-    "mistral": "Mistral AI",
-    "moonshot": "Moonshot",
-    "morph": "Morph",
-    "nano-gpt": "NanoGPT",
-    "nebius": "Nebius AI",
-    "nlp_cloud": "NLP Cloud",
-    "novita": "Novita AI",
-    "nscale": "Nscale",
-    "nvidia_nim": "NVIDIA NIM",
-    "oci": "Oracle Cloud Infrastructure",
-    "ollama": "Ollama (Local)",
-    "ollama_chat": "Ollama Chat",
-    "oobabooga": "Oobabooga",
-    "openai": "OpenAI",
-    "openrouter": "OpenRouter",
-    "openai_like": "OpenAI-Compatible API",
-    "ovhcloud": "OVHcloud",
-    "perplexity": "Perplexity",
-    "petals": "Petals",
-    "pg_vector": "pgvector",
-    "poe": "Poe",
-    "predibase": "Predibase",
-    "publicai": "PublicAI",
-    "ragflow": "RAGFlow",
-    "recraft": "Recraft",
-    "samba": "SambaNova",
-    "sekoia": "Sekoia",
-    "siliconflow": "SiliconFlow",
-    "simpleptr": "Simple PTR",
-    "solar": "Solar",
-    " speechify": "Speechify",
-    "statless": "Stateless",
-    "switchai": "SwitchAI",
-    "togetherai": "TogetherAI",
-    "traceloop": "Traceloop",
-    "ulearn": "ULearn",
-    "uluvol": "Uluvol",
-    "unitai": "UnitAI",
-    "unstract": "Unstract",
-    "upstage": "Upstage",
-    "voyageai": "VoyageAI",
-    "vllm": "vLLM",
-    "winai": "WinAI",
-    "xai": "xAI",
-    "yandex": "Yandex",
-    "zhipuai": "ZhipuAI",
-}
-
-
 # LLM Providers - LiteLLM-based (for SettingsPanel UI)
 @router.get("/llm-providers")
 async def get_llm_providers_from_litellm():
-    """Get all LiteLLM-supported providers dynamically from litellm.provider_list enum.
-    
-    Uses litellm.provider_list which provides all 132+ supported provider names
-    as an enum. Falls back to hardcoded list if LiteLLM fails.
-    """
-    try:
-        import litellm
-        
-        # Use litellm.provider_list — enum of all 132+ supported providers
-        providers = []
-        for provider_enum in litellm.provider_list:
-            provider_name = provider_enum.value
-            providers.append({
-                "name": provider_name,
-                "display_name": PROVIDER_DISPLAY_NAMES.get(provider_name, provider_name.title()),
-            })
-        
-        # Sort by display_name
-        providers.sort(key=lambda x: x["display_name"])
-        return providers
-    except Exception as e:
-        import logging
-        logging.getLogger(__name__).warning(
-            "litellm.provider_list unavailable, using hardcoded fallback: %s", e
-        )
-        # Fallback to hardcoded list
-        return [
-            {"name": "openai", "display_name": "OpenAI"},
-            {"name": "anthropic", "display_name": "Anthropic Claude"},
-            {"name": "azure", "display_name": "Azure OpenAI"},
-            {"name": "ollama", "display_name": "Ollama (Lokal)"},
-            {"name": "mistral", "display_name": "Mistral AI"},
-            {"name": "openrouter", "display_name": "OpenRouter"},
-        ]
+    """Get all LiteLLM-supported providers from litellm.provider_list."""
+    return list_llm_providers()
 
 
 @router.get("/llm-providers/models")
@@ -377,31 +216,11 @@ async def get_llm_provider_models(provider: str, db: AsyncSession = Depends(get_
                     "Ollama /api/tags unreachable at %s, falling back to litellm.model_list: %s",
                     api_base, e
                 )
-                pass  # fall through to litellm.model_list below
+                pass  # fall through to list_llm_models below
         
-        # Fall back to litellm.model_list for all providers
-        import litellm
-        all_models = litellm.model_list
-        
-        # Filter models for the specified provider
-        # Provider format in model list: "provider/model-name" (e.g., "openai/gpt-4o")
-        prefix = f"{provider}/"
-        models = []
-        seen = set()
-        
-        for model in all_models:
-            if model.startswith(prefix):
-                # Extract model name without provider prefix
-                model_name = model[len(prefix):]
-                if model_name not in seen:
-                    seen.add(model_name)
-                    models.append({
-                        "id": model_name,
-                        "name": model_name,
-                        "display_name": _format_model_display_name(model_name),
-                    })
-        
-        return {"provider": provider, "models": sorted(models, key=lambda x: x["name"])}
+        # Use litellm_service.list_llm_models to list models from LiteLLM registry
+        models = list_llm_models(provider)
+        return {"provider": provider, "models": models}
         
     except Exception as e:
         return {"provider": provider, "models": [], "error": str(e)}

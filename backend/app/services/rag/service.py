@@ -11,7 +11,7 @@ from app.services.rag.search_engine import SearchEngine, SearchResult
 from app.services.rag.indexer import Indexer
 from app.services.rag.rerank_service import RerankService
 from app.services import ollama_lock
-import litellm
+from app.services.litellm_service import llm_completion
 
 logger = logging.getLogger(__name__)
 
@@ -475,7 +475,7 @@ class RAGService:
 
         try:
             if is_ollama:
-                # CRITICAL REVIEW FEEDBACK HIGH: ollama_lock MUST be acquired BEFORE litellm.acompletion
+                # CRITICAL REVIEW FEEDBACK HIGH: ollama_lock MUST be acquired BEFORE llm_completion
                 acquired = await ollama_lock.acquire("rag_chat", timeout=120)
                 if not acquired:
                     logger.warning("RAG chat: OllamaLock timeout – Classifier läuft noch, bitte erneut versuchen")
@@ -483,7 +483,7 @@ class RAGService:
                     return
 
             try:
-                stream = await litellm.acompletion(
+                stream = await llm_completion(
                     model=model_name,
                     messages=messages,
                     stream=True,
@@ -561,7 +561,7 @@ class RAGService:
             }
 
         try:
-            result = await litellm.acompletion(
+            result = await llm_completion(
                 model=model_name,
                 messages=messages,
                 temperature=0.0,

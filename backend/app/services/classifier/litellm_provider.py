@@ -8,7 +8,8 @@ import logging
 from typing import Dict, Any, List, Optional
 
 import httpx
-import litellm
+
+from app.services.litellm_service import llm_completion
 
 from app.services.classifier.base_provider import (
     BaseClassifierProvider, ClassificationResult, DocumentContext,
@@ -125,7 +126,7 @@ class LitellmToolCallingProvider(BaseClassifierProvider):
 
     async def test_connection(self) -> Dict[str, Any]:
         try:
-            response = await litellm.acompletion(
+            response = await llm_completion(
                 model=self.model,
                 messages=[{"role": "user", "content": "Ping"}],
                 api_key=self.api_key,
@@ -208,7 +209,7 @@ class LitellmToolCallingProvider(BaseClassifierProvider):
                     litellm_kwargs["api_base"] = self.base_url
                 if self.extra_headers:
                     litellm_kwargs["extra_headers"] = self.extra_headers
-                response = await litellm.acompletion(**litellm_kwargs)
+                response = await llm_completion(**litellm_kwargs)
 
                 usage = response.usage
                 if usage:
@@ -946,7 +947,7 @@ class LitellmOllamaProvider(BaseClassifierProvider):
             extra_body["format"] = "json"
 
         try:
-            response = await litellm.acompletion(
+            response = await llm_completion(
                 model=f"ollama/{self.model}",
                 messages=messages,
                 api_base=self.host,
@@ -959,7 +960,7 @@ class LitellmOllamaProvider(BaseClassifierProvider):
                 self._total_output_tokens += response.usage.completion_tokens or 0
             logger.info(f"Ollama chat via litellm: {len(content)} chars: {content[:200]}")
             return content
-        except litellm.exceptions.BadRequestError as e:
+        except Exception as e:
             # REVIEW FEEDBACK HIGH: Schema enforcement not supported — retry without schema (HTTP 400/422 fallback)
             # LiteLLM raises BadRequestError (not httpx.HTTPStatusError) for Ollama HTTP 400/422.
             # The retry condition checks the exception message for "format" or "schema" keywords
@@ -967,7 +968,7 @@ class LitellmOllamaProvider(BaseClassifierProvider):
             if json_schema is not None and ("format" in str(e).lower() or "schema" in str(e).lower()):
                 logger.warning(f"Ollama schema enforcement rejected, retrying without schema: {e}")
                 extra_body["format"] = "json"
-                response = await litellm.acompletion(
+                response = await llm_completion(
                     model=f"ollama/{self.model}",
                     messages=messages,
                     api_base=self.host,
@@ -1024,7 +1025,7 @@ class LitellmOllamaProvider(BaseClassifierProvider):
         messages = [{"role": "user", "content": raw_prompt}]
 
         try:
-            response = await litellm.acompletion(
+            response = await llm_completion(
                 model=f"ollama/{self.model}",
                 messages=messages,
                 api_base=self.host,
@@ -1038,23 +1039,23 @@ class LitellmOllamaProvider(BaseClassifierProvider):
             content = self._strip_thinking_text(content)
             logger.info(f"Ollama generate via litellm: {len(content)} chars: {content[:200]}")
             return content
-        except litellm.exceptions.BadRequestError as e:
-            if json_schema is not None and ("format" in str(e).lower() or "schema" in str(e).lower()):
-                logger.warning(f"Ollama schema enforcement rejected in generate, retrying without schema: {e}")
-                extra_body["format"] = "json"
-                response = await litellm.acompletion(
-                    model=f"ollama/{self.model}",
-                    messages=messages,
-                    api_base=self.host,
-                    extra_body=extra_body,
-                    timeout=OLLAMA_CALL_TIMEOUT,
-                )
-                content = response.choices[0].message.content or ""
-                if response.usage:
-                    self._total_input_tokens  += response.usage.prompt_tokens or 0
-                    self._total_output_tokens += response.usage.completion_tokens or 0
-                return self._strip_thinking_text(content)
-            raise
+        except Exception as e:
+                if json_schema is not None and ("format" in str(e).lower() or "schema" in str(e).lower()):
+                    logger.warning(f"Ollama schema enforcement rejected in generate, retrying without schema: {e}")
+                    extra_body["format"] = "json"
+                    response = await llm_completion(
+                        model=f"ollama/{self.model}",
+                        messages=messages,
+                        api_base=self.host,
+                        extra_body=extra_body,
+                        timeout=OLLAMA_CALL_TIMEOUT,
+                    )
+                    content = response.choices[0].message.content or ""
+                    if response.usage:
+                        self._total_input_tokens  += response.usage.prompt_tokens or 0
+                        self._total_output_tokens += response.usage.completion_tokens or 0
+                    return self._strip_thinking_text(content)
+                raise
 
     @staticmethod
     def _contains_non_latin(text: str) -> bool:

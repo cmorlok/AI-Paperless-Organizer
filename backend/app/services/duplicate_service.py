@@ -14,13 +14,13 @@ from collections import defaultdict
 from datetime import datetime
 from typing import Dict, List, Optional, Set, Tuple
 
-import litellm
 from sqlalchemy import select as sa_select, text
 
 from app.database import async_session
 from app.models.duplicates import DuplicateInvoiceCache
 from app.models.rag import RagConfig
 from app.services.ollama_lock import acquire as ollama_acquire, release as ollama_release
+from app.services.litellm_service import llm_completion
 
 logger = logging.getLogger(__name__)
 
@@ -523,7 +523,7 @@ class DuplicateService:
             )
 
             # Per D-01: Ollama-specific params go in extra_body
-            response = await litellm.acompletion(
+            response = await llm_completion(
                 model=f"ollama/{model}",
                 messages=[{"role": "user", "content": prompt}],
                 api_base=ollama_url,

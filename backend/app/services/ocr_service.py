@@ -2,7 +2,6 @@
 
 import base64
 import httpx
-import litellm
 import asyncio
 import json
 import logging
@@ -12,6 +11,7 @@ from pathlib import Path
 from typing import Optional, Dict, List, Any
 from PIL import Image
 from pdf2image import convert_from_bytes
+from app.services.litellm_service import llm_completion
 
 # Raise PIL pixel limit for large PDF pages rendered at high DPI
 Image.MAX_IMAGE_PIXELS = 500_000_000  # 500 megapixels (default is ~178MP)
@@ -629,7 +629,7 @@ class OcrService:
                 if use_think_param:
                     extra_body["think"] = False  # D-01: suppress thinking at top level
 
-                response = await litellm.acompletion(
+                response = await llm_completion(
                     model=f"ollama/{self.model}",
                     messages=[
                         {"role": "system", "content": system_msg},

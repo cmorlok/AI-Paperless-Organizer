@@ -13,9 +13,107 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import get_db
 from app.models import LLMProvider
 from app.models.settings_model import LLM_KEY_CLASSIFIER_MODEL, LLM_KEY_CLASSIFIER_PROVIDER
-from app.routers.settings import get_setting
 
 logger = logging.getLogger(__name__)
+
+
+async def llm_completion(
+    model: str,
+    messages: List[Dict[str, Any]],
+    api_key: Optional[str] = None,
+    api_base: Optional[str] = None,
+    temperature: float = 0.1,
+    stream: bool = False,
+    **kwargs,
+):
+    """Wrapper around litellm.acompletion with credentials injection."""
+    litellm_kwargs = {
+        "model": model,
+        "messages": messages,
+        "temperature": temperature,
+        "stream": stream,
+        **kwargs,
+    }
+    if api_key:
+        litellm_kwargs["api_key"] = api_key
+    if api_base:
+        litellm_kwargs["api_base"] = api_base
+    return await litellm.acompletion(**litellm_kwargs)
+
+
+def list_llm_models(provider: str) -> List[Dict[str, str]]:
+    """List available models for a provider from LiteLLM registry.
+    
+    For Ollama: returns empty list (live models fetched separately via /api/tags)
+    For other providers: returns models from litellm.model_list filtered by provider prefix.
+    """
+    if provider == "ollama":
+        return []  # Ollama models are fetched live from /api/tags
+    
+    all_models = litellm.model_list
+    prefix = f"{provider}/"
+    models = []
+    seen = set()
+    
+    for model in all_models:
+        if model.startswith(prefix):
+            model_name = model[len(prefix):]
+            if model_name not in seen:
+                seen.add(model_name)
+                models.append({
+                    "id": model_name,
+                    "name": model_name,
+                    "display_name": model_name.replace("-", " ").replace("_", " ").title(),
+                })
+    
+    return sorted(models, key=lambda x: x["name"])
+
+
+PROVIDER_DISPLAY_NAMES = {
+    "a2a": "A2A",
+    "a2a_agent": "A2A Agent",
+    "ai21": "AI21 Labs",
+    "bedrock": "AWS Bedrock",
+    "sagemaker": "AWS SageMaker",
+    "anthropic": "Anthropic Claude",
+    "azure": "Azure OpenAI",
+    "claude": "Anthropic Claude",
+    "cohere": "Cohere",
+    "deepseek": "DeepSeek",
+    "fireworks_ai": "Fireworks AI",
+    "gemini": "Google Gemini",
+    "google": "Google AI (Gemini)",
+    "google_genai": "Google Gemini",
+    "groq": "Groq",
+    "huggingface": "Hugging Face",
+    "mistral": "Mistral AI",
+    "ollama": "Ollama (Local)",
+    "openai": "OpenAI",
+    "openrouter": "OpenRouter",
+    "vertex_ai": "Google Vertex AI",
+}
+
+
+def list_llm_providers() -> List[Dict[str, str]]:
+    """List all available LLM providers from LiteLLM registry."""
+    try:
+        providers = []
+        for provider_enum in litellm.provider_list:
+            provider_name = provider_enum.value
+            providers.append({
+                "name": provider_name,
+                "display_name": PROVIDER_DISPLAY_NAMES.get(provider_name, provider_name.title()),
+            })
+        providers.sort(key=lambda x: x["display_name"])
+        return providers
+    except Exception:
+        return []
+
+
+async def get_setting(key: str, db: AsyncSession) -> Optional[str]:
+    """Get a setting value from the key-value store."""
+    from app.routers.settings import get_setting as gs
+    return await gs(key, db)
 
 
 class LitellmService:
