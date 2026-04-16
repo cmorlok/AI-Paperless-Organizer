@@ -133,6 +133,13 @@ export const updateLLMProviderConnection = (providerId: number, apiKey: string, 
     }),
   })
 
+// Create a new LLM provider record (for providers selected from LiteLLM list that don't exist in DB)
+export const createLLMProvider = (data: { name: string; display_name?: string; api_key?: string; api_base_url?: string }) =>
+  fetchJson<{ id: number; name: string; display_name: string }>('/settings/llm-providers/db', {
+    method: 'POST',
+    body: JSON.stringify(data),
+  })
+
 export const getPrompts = () => fetchJson<any[]>('/settings/prompts')
 
 export const updatePrompt = (id: number, data: any) =>

@@ -74,6 +74,15 @@ class LLMProviderPatchSchema(BaseModel):
     api_base_url: Optional[str] = None
 
 
+class LLMProviderCreateSchema(BaseModel):
+    """Schema for creating a new LLM provider record."""
+    name: str
+    display_name: Optional[str] = None
+    api_key: Optional[str] = ""
+    api_base_url: Optional[str] = ""
+    is_active: bool = False
+
+
 class CustomPromptSchema(BaseModel):
     entity_type: str
     prompt_template: str
@@ -135,38 +144,11 @@ async def save_paperless_settings(
 async def get_llm_providers_from_db(db: AsyncSession = Depends(get_db)):
     """Get all LLM provider configurations from database.
     
-    This is the DB-based endpoint kept for internal/admin use.
-    The SettingsPanel uses the LiteLLM-based /llm-providers endpoint instead.
+    Returns only providers that have been explicitly configured via POST.
+    The SettingsPanel uses the LiteLLM-based /llm-providers endpoint for the provider dropdown.
     """
     result = await db.execute(select(LLMProvider).order_by(LLMProvider.name))
     providers = result.scalars().all()
-    
-    ALL_DEFAULTS = [
-        {"name": "openai", "display_name": "OpenAI"},
-        {"name": "anthropic", "display_name": "Anthropic Claude"},
-        {"name": "azure", "display_name": "Azure OpenAI"},
-        {"name": "ollama", "display_name": "Ollama (Lokal)", "api_base_url": "http://localhost:11434"},
-        {"name": "mistral", "display_name": "Mistral AI"},
-        {"name": "openrouter", "display_name": "OpenRouter"},
-    ]
-
-    if not providers:
-        for p in ALL_DEFAULTS:
-            db.add(LLMProvider(**p))
-        await db.commit()
-        result = await db.execute(select(LLMProvider).order_by(LLMProvider.name))
-        providers = result.scalars().all()
-    else:
-        existing_names = {p.name for p in providers}
-        added = False
-        for p in ALL_DEFAULTS:
-            if p["name"] not in existing_names:
-                db.add(LLMProvider(**p))
-                added = True
-        if added:
-            await db.commit()
-            result = await db.execute(select(LLMProvider).order_by(LLMProvider.name))
-            providers = result.scalars().all()
     
     return [
         {
@@ -183,43 +165,132 @@ async def get_llm_providers_from_db(db: AsyncSession = Depends(get_db)):
 
 
 # Provider display name mapping (used by both LiteLLM provider list and DB-based list)
-PROVIDER_DISPLAY_NAMES = {
-    "openai": "OpenAI",
-    "anthropic": "Anthropic Claude",
-    "azure": "Azure OpenAI",
-    "ollama": "Ollama (Lokal)",
-    "mistral": "Mistral AI",
-    "openrouter": "OpenRouter",
-    "google": "Google AI (Gemini)",
-    "deepseek": "DeepSeek",
-    "cohere": "Cohere",
-    "groq": "Groq",
-    "fireworks": "Fireworks AI",
-    "anyscale": "Anyscale",
-    "togetherai": "TogetherAI",
-    "replicate": "Replicate",
-    "cloudflare": "Cloudflare Workers AI",
-    "aws": "AWS Bedrock",
-    "vertex_ai": "Google Vertex AI",
-    "sagemaker": "AWS SageMaker",
-    "gemini": "Google Gemini",
-    "xai": "xAI",
-    "perplexity": "Perplexity",
-    "meta": "Meta AI",
-    "qwen": "Qwen (Alibaba)",
-    "samba": "SambaNova",
+PROVIDER_DISPLAY_NAMES: dict[str, str] = {
+    "a2a": "A2A",
+    "a2a_agent": "A2A Agent",
     "ai21": "AI21 Labs",
     "bedrock": "AWS Bedrock",
-    "volcengine": "Volcengine",
-    "LINGYUN": "Lingyun",
-    "sageng": "SAGEN",
-    "MISTRAL": "Mistral AI",
-    "openllm": "OpenLLM",
-    "lmstudio": "LM Studio",
-    "ollama": "Ollama (Lokal)",
-    "localai": "LocalAI",
+    "sagemaker": "AWS SageMaker",
+    "ai21_chat": "AI21 Chat",
+    "aiml": "AIML",
+    "aiohttp_openai": "AIOHTTP OpenAI",
+    "amazon_nova": "Amazon Nova",
+    "anthropic": "Anthropic Claude",
+    "anthropic_text": "Anthropic Text",
+    "apertis": "Apertis",
+    "assemblyai": "AssemblyAI",
+    "auto_router": "Auto Router",
+    "aws_polly": "AWS Polly",
+    "azure": "Azure OpenAI",
+    "azure_ai": "Azure AI",
+    "azure_text": "Azure Text",
+    "baseten": "Baseten",
+    "bedrock_mantle": "Bedrock Mantle",
+    "black_forest_labs": "Black Forest Labs",
+    "bytez": "Bytez",
+    "cerebras": "Cerebras",
+    "charity_engine": "Charity Engine",
+    "chatgpt": "ChatGPT",
+    "chutes": "Chutes",
+    "clarifai": "ClarifAI",
+    "cloudflare": "Cloudflare Workers AI",
+    "codestral": "Codestral",
+    "cohere": "Cohere",
+    "cohere_chat": "Cohere Chat",
+    "cometapi": "CometAPI",
+    "compactifai": "CompactifAI",
+    "cursor": "Cursor",
+    "custom": "Custom",
+    "custom_openai": "Custom OpenAI",
+    "dashscope": "DashScope",
+    "databricks": "Databricks",
+    "datarobot": "DataRobot",
+    "deepseek": "DeepSeek",
+    "deepgram": "Deepgram",
+    "deepinfra": "DeepInfra",
+    "docker_model_runner": "Docker Model Runner",
+    "dotprompt": "Dotprompt",
+    "elevenlabs": "ElevenLabs",
+    "empower": "Empower",
+    "fal_ai": "fal.ai",
+    "featherless_ai": "Featherless AI",
+    "fireworks_ai": "Fireworks AI",
+    "friendliai": "FriendliAI",
+    "galadriel": "Galadriel",
+    "gigachat": "GigaChat",
+    "github": "GitHub",
+    "github_copilot": "GitHub Copilot",
+    "gemini": "Google Gemini",
+    "vertex_ai": "Google Vertex AI",
+    "gradient_ai": "Gradient AI",
+    "groq": "Groq",
+    "helicone": "Helicone",
+    "heroku": "Heroku",
+    "hosted_vllm": "Hosted vLLM",
+    "huggingface": "Hugging Face",
+    "humanloop": "Humanloop",
+    "hyperbolic": "Hyperbolic",
+    "infinity": "Infinity",
+    "jina_ai": "Jina AI",
+    "lambda_ai": "Lambda AI",
+    "langfuse": "Langfuse",
+    "langgraph": "LangGraph",
+    "lemonade": "Lemonade",
+    "litellm_agent": "LiteLLM Agent",
+    "litellm_proxy": "LiteLLM Proxy",
+    "llamafile": "Llamafile",
+    "lm_studio": "LM Studio",
+    "manus": "Manus",
+    "maritalk": "MariTalk",
+    "meta_llama": "Meta Llama",
+    "milvus": "Milvus",
+    "minimax": "MiniMax",
+    "mistral": "Mistral AI",
+    "moonshot": "Moonshot",
+    "morph": "Morph",
+    "nano-gpt": "NanoGPT",
+    "nebius": "Nebius AI",
+    "nlp_cloud": "NLP Cloud",
+    "novita": "Novita AI",
+    "nscale": "Nscale",
+    "nvidia_nim": "NVIDIA NIM",
+    "oci": "Oracle Cloud Infrastructure",
+    "ollama": "Ollama (Local)",
+    "ollama_chat": "Ollama Chat",
+    "oobabooga": "Oobabooga",
+    "openai": "OpenAI",
+    "openrouter": "OpenRouter",
+    "openai_like": "OpenAI-Compatible API",
+    "ovhcloud": "OVHcloud",
+    "perplexity": "Perplexity",
+    "petals": "Petals",
+    "pg_vector": "pgvector",
+    "poe": "Poe",
+    "predibase": "Predibase",
+    "publicai": "PublicAI",
+    "ragflow": "RAGFlow",
+    "recraft": "Recraft",
+    "samba": "SambaNova",
+    "sekoia": "Sekoia",
+    "siliconflow": "SiliconFlow",
+    "simpleptr": "Simple PTR",
+    "solar": "Solar",
+    " speechify": "Speechify",
+    "statless": "Stateless",
+    "switchai": "SwitchAI",
+    "togetherai": "TogetherAI",
+    "traceloop": "Traceloop",
+    "ulearn": "ULearn",
+    "uluvol": "Uluvol",
+    "unitai": "UnitAI",
+    "unstract": "Unstract",
+    "upstage": "Upstage",
+    "voyageai": "VoyageAI",
     "vllm": "vLLM",
-    "tensorzero": "TensorZero",
+    "winai": "WinAI",
+    "xai": "xAI",
+    "yandex": "Yandex",
+    "zhipuai": "ZhipuAI",
 }
 
 
@@ -436,6 +507,43 @@ async def patch_llm_provider(
     
     await db.commit()
     return {"success": True}
+
+
+@router.post("/llm-providers/db")
+async def create_llm_provider(
+    data: LLMProviderCreateSchema,
+    db: AsyncSession = Depends(get_db)
+):
+    """Create a new LLM provider configuration.
+    
+    Used when user selects a provider from LiteLLM list that doesn't exist in DB yet.
+    """
+    # Check if provider with this name already exists
+    result = await db.execute(select(LLMProvider).where(LLMProvider.name == data.name))
+    existing = result.scalar_one_or_none()
+    
+    if existing:
+        raise HTTPException(status_code=409, detail="Provider already exists")
+    
+    # Use provided display_name or derive from PROVIDER_DISPLAY_NAMES
+    display_name = data.display_name or PROVIDER_DISPLAY_NAMES.get(data.name, data.name.title())
+    
+    provider = LLMProvider(
+        name=data.name,
+        display_name=display_name,
+        api_key=data.api_key or "",
+        api_base_url=data.api_base_url or "",
+        is_active=data.is_active,
+    )
+    
+    # Set is_configured based on provider type
+    provider.update_configured()
+    
+    db.add(provider)
+    await db.commit()
+    await db.refresh(provider)
+    
+    return {"id": provider.id, "name": provider.name, "display_name": provider.display_name}
 
 
 # Custom Prompts - Display names for UI

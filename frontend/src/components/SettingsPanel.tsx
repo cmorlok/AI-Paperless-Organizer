@@ -13,6 +13,9 @@ interface LLMProvider {
   is_configured: boolean
 }
 
+// Providers that require URL (local/custom providers) instead of API key
+const LOCAL_PROVIDERS = ['ollama', 'lm_studio', 'llamafile', 'oobabooga', 'localai', 'docker_model_runner', 'aiohttp_openai', 'openai_like', 'custom', 'custom_openai']
+
 export default function SettingsPanel() {
   // Paperless Settings
   const [paperlessUrl, setPaperlessUrl] = useState('')
@@ -22,7 +25,10 @@ export default function SettingsPanel() {
   const [paperlessTestResult, setPaperlessTestResult] = useState<{ success: boolean; message: string } | null>(null)
 
   // LLM Providers
-  const [providers, setProviders] = useState<LLMProvider[]>([])
+  const [dbProviders, setDbProviders] = useState<LLMProvider[]>([])  // DB records for configured providers
+  const [liteLlmProviders, setLiteLlmProviders] = useState<{ name: string; display_name: string }[]>([])  // All LiteLLM providers for dropdown
+  const [selectedProviderName, setSelectedProviderName] = useState<string>('')  // Currently selected provider
+  const [selectedProviderEdits, setSelectedProviderEdits] = useState<{ api_key: string; api_base_url: string }>({ api_key: '', api_base_url: '' })
   // Dynamic model state (LLM-09)
   const [classifierModels, setClassifierModels] = useState<api.LLMModel[]>([])
   const [ocrModels, setOcrModels] = useState<api.LLMModel[]>([])
@@ -34,8 +40,7 @@ export default function SettingsPanel() {
   const [ocrModel, setOcrModel] = useState('')
   const [ocrModelSaved, setOcrModelSaved] = useState(false)
   const [connectionSaved, setConnectionSaved] = useState(false)
-  // Per-provider credential editing (LLM-09 fix: was shared state, now per-provider)
-  const [providerEdits, setProviderEdits] = useState<Record<number, { api_key: string; api_base_url: string }>>({})
+  const [connectionError, setConnectionError] = useState<string | null>(null)
   
   // App Settings
   const [appSettings, setAppSettings] = useState({
@@ -177,8 +182,10 @@ export default function SettingsPanel() {
       if (settings.classifier_provider) {
         loadClassifierModels(settings.classifier_provider)
       }
-      // Load initial OCR models (always ollama for vision)
-      loadOcrModels('ollama')
+      // Load OCR models only if ocr_provider is set
+      if ((settings as any).ocr_provider) {
+        loadOcrModels((settings as any).ocr_provider)
+      }
     } catch (e) {
       console.error('Error loading app settings:', e)
     }
@@ -216,26 +223,32 @@ export default function SettingsPanel() {
 
   const loadSettings = async () => {
     try {
-      const [paperlessSettings, llmProviders, appSettingsData] = await Promise.all([
+      const [paperlessSettings, dbProvidersData, liteLlmProvidersData, appSettingsData] = await Promise.all([
         api.getPaperlessSettings(),
-        api.getLLMProvidersFromDB(),  // Use DB endpoint to get providers with id
+        api.getLLMProvidersFromDB(),  // DB records for configured providers
+        api.getLLMProvidersDynamic(),  // All LiteLLM providers for dropdown
         api.getAppSettings()
       ])
 
       setPaperlessUrl(paperlessSettings.url)
       setPaperlessToken(paperlessSettings.api_token)
-      setProviders(llmProviders)
+      setDbProviders(dbProvidersData)
+      setLiteLlmProviders(liteLlmProvidersData)
       setAppSettings(appSettingsData)
 
-      // Populate per-provider credential edits (LLM-09 fix: was shared state)
-      const edits: Record<number, { api_key: string; api_base_url: string }> = {}
-      llmProviders.forEach((p: LLMProvider) => {
-        edits[p.id] = {
-          api_key: p.api_key === '***' ? '' : p.api_key,
-          api_base_url: p.api_base_url || '',
-        }
-      })
-      setProviderEdits(edits)
+      // Select first configured provider by default, or first LiteLLM provider
+      const firstConfigured = dbProvidersData.find(p => p.is_configured)
+      const defaultProvider = firstConfigured?.name || liteLlmProvidersData[0]?.name || ''
+      setSelectedProviderName(defaultProvider)
+      
+      // Load config for selected provider
+      if (defaultProvider) {
+        const existingConfig = dbProvidersData.find(p => p.name === defaultProvider)
+        setSelectedProviderEdits({
+          api_key: existingConfig?.api_key === '***' ? '' : (existingConfig?.api_key || ''),
+          api_base_url: existingConfig?.api_base_url || '',
+        })
+      }
     } catch (error) {
       console.error('Error loading settings:', error)
     }
@@ -369,72 +382,135 @@ export default function SettingsPanel() {
           Provider-Konfiguration
         </h2>
 
-        <div className="space-y-4">
-          {providers.map((provider) => (
-            <div key={provider.id} className="p-4 rounded-lg bg-surface-800/50 border border-surface-700">
-              <div className="flex items-center justify-between mb-3">
-                <div className="flex items-center gap-2">
-                  <span className="font-medium text-surface-100">{provider.display_name}</span>
-                  <span className="text-xs px-2 py-0.5 rounded bg-surface-700 text-surface-400">
-                    {provider.name}
+        {/* Provider dropdown - all LiteLLM providers */}
+        <div className="mb-4">
+          <label className="block text-sm font-medium text-surface-300 mb-2">Provider</label>
+          <select
+            value={selectedProviderName}
+            onChange={async (e) => {
+              const providerName = e.target.value
+              setSelectedProviderName(providerName)
+              
+              // Find existing DB config for this provider
+              const existingConfig = dbProviders.find(p => p.name === providerName)
+              setSelectedProviderEdits({
+                api_key: existingConfig?.api_key === '***' ? '' : (existingConfig?.api_key || ''),
+                api_base_url: existingConfig?.api_base_url || '',
+              })
+            }}
+            className="input w-full"
+          >
+            {liteLlmProviders.map((p) => (
+              <option key={p.name} value={p.name}>{p.display_name}</option>
+            ))}
+          </select>
+        </div>
+
+        {/* Single card for selected provider's config */}
+        {selectedProviderName && (
+          <div className="p-4 rounded-lg bg-surface-800/50 border border-surface-700">
+            <div className="flex items-center justify-between mb-3">
+              <div className="flex items-center gap-2">
+                <span className="font-medium text-surface-100">
+                  {liteLlmProviders.find(p => p.name === selectedProviderName)?.display_name || selectedProviderName}
+                </span>
+                <span className="text-xs px-2 py-0.5 rounded bg-surface-700 text-surface-400">
+                  {selectedProviderName}
+                </span>
+                {dbProviders.find(p => p.name === selectedProviderName)?.is_configured && (
+                  <span className="text-xs px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-400">
+                    Konfiguriert
                   </span>
-                  {provider.is_configured && (
-                    <span className="text-xs px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-400">
-                      Konfiguriert
-                    </span>
-                  )}
-                </div>
-              </div>
-
-              <div className="space-y-3">
-                {/* API Key */}
-                <div>
-                  <label className="block text-xs text-surface-400 mb-1">API Key</label>
-                  <input
-                    type="password"
-                    value={providerEdits[provider.id]?.api_key ?? ''}
-                    onChange={(e) => setProviderEdits(prev => ({
-                      ...prev,
-                      [provider.id]: { ...prev[provider.id], api_key: e.target.value }
-                    }))}
-                    placeholder={provider.api_key === '***' ? 'Vorhandener Key' : 'API Key eingeben'}
-                    className="input w-full text-sm"
-                  />
-                </div>
-
-                {/* API Base URL */}
-                <div>
-                  <label className="block text-xs text-surface-400 mb-1">API Base URL</label>
-                  <input
-                    type="url"
-                    value={providerEdits[provider.id]?.api_base_url ?? (provider.api_base_url || '')}
-                    onChange={(e) => setProviderEdits(prev => ({
-                      ...prev,
-                      [provider.id]: { ...prev[provider.id], api_base_url: e.target.value }
-                    }))}
-                    placeholder="https://api.openai.com"
-                    className="input w-full text-sm"
-                  />
-                </div>
-
-                {/* Save button */}
-                <button
-                  onClick={async () => {
-                    const edit = providerEdits[provider.id] ?? { api_key: '', api_base_url: '' }
-                    await api.updateLLMProviderConnection(provider.id, edit.api_key, edit.api_base_url)
-                    setConnectionSaved(true)
-                    setTimeout(() => setConnectionSaved(false), 2000)
-                  }}
-                  className="btn btn-secondary btn-sm flex items-center gap-2"
-                >
-                  <Save className="w-4 h-4" />
-                  Speichern
-                </button>
-                {connectionSaved && <span className="ml-2 text-emerald-400 text-sm">Gespeichert</span>}
+                )}
               </div>
             </div>
-          ))}
-        </div>
+
+            <div className="space-y-3">
+              {/* API Key - required for cloud providers, optional for local */}
+              <div>
+                <label className={`block text-xs mb-1 ${LOCAL_PROVIDERS.includes(selectedProviderName) ? 'text-surface-500' : 'text-surface-400'}`}>
+                  API Key {LOCAL_PROVIDERS.includes(selectedProviderName) ? '(optional)' : '(erforderlich)'}
+                </label>
+                <input
+                  type="password"
+                  value={selectedProviderEdits.api_key}
+                  onChange={(e) => setSelectedProviderEdits(prev => ({ ...prev, api_key: e.target.value }))}
+                  placeholder={LOCAL_PROVIDERS.includes(selectedProviderName) ? 'Nicht benötigt für lokale Provider' : 'API Key eingeben'}
+                  className="input w-full text-sm"
+                />
+              </div>
+
+              {/* API Base URL - required for local providers, optional for cloud */}
+              <div>
+                <label className={`block text-xs mb-1 ${LOCAL_PROVIDERS.includes(selectedProviderName) ? 'text-surface-400' : 'text-surface-500'}`}>
+                  API Base URL {LOCAL_PROVIDERS.includes(selectedProviderName) ? '(erforderlich)' : '(optional)'}
+                </label>
+                <input
+                  type="url"
+                  value={selectedProviderEdits.api_base_url}
+                  onChange={(e) => setSelectedProviderEdits(prev => ({ ...prev, api_base_url: e.target.value }))}
+                  placeholder={LOCAL_PROVIDERS.includes(selectedProviderName) ? 'http://localhost:11434' : 'https://api.openai.com'}
+                  className="input w-full text-sm"
+                />
+              </div>
+
+              {/* Save button */}
+              <button
+                onClick={async () => {
+                  setConnectionError(null)
+                  
+                  // Validate based on provider type
+                  const isLocalProvider = LOCAL_PROVIDERS.includes(selectedProviderName)
+                  if (isLocalProvider) {
+                    // Local providers require URL
+                    if (!selectedProviderEdits.api_base_url) {
+                      setConnectionError('Base URL ist erforderlich für lokale Provider')
+                      return
+                    }
+                  } else {
+                    // Cloud providers require API key
+                    if (!selectedProviderEdits.api_key) {
+                      setConnectionError('API Key ist erforderlich für diesen Provider')
+                      return
+                    }
+                  }
+                  
+                  const existingDbRecord = dbProviders.find(p => p.name === selectedProviderName)
+                  
+                  if (existingDbRecord) {
+                    // Update existing DB record via PATCH
+                    await api.updateLLMProviderConnection(
+                      existingDbRecord.id,
+                      selectedProviderEdits.api_key,
+                      selectedProviderEdits.api_base_url
+                    )
+                  } else {
+                    // Create new DB record via POST
+                    await api.createLLMProvider({
+                      name: selectedProviderName,
+                      display_name: liteLlmProviders.find(p => p.name === selectedProviderName)?.display_name,
+                      api_key: selectedProviderEdits.api_key,
+                      api_base_url: selectedProviderEdits.api_base_url,
+                    })
+                  }
+                  
+                  setConnectionSaved(true)
+                  setTimeout(() => setConnectionSaved(false), 2000)
+                  
+                  // Refresh DB providers to update is_configured status
+                  const updatedDbProviders = await api.getLLMProvidersFromDB()
+                  setDbProviders(updatedDbProviders)
+                }}
+                className="btn btn-secondary btn-sm flex items-center gap-2"
+              >
+                <Save className="w-4 h-4" />
+                Speichern
+              </button>
+              {connectionSaved && <span className="ml-2 text-emerald-400 text-sm">Gespeichert</span>}
+              {connectionError && <span className="ml-2 text-red-400 text-sm">{connectionError}</span>}
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Model-Auswahl Card */}
@@ -464,7 +540,7 @@ export default function SettingsPanel() {
               }}
               className="input w-full"
             >
-              {providers.filter(p => p.is_configured).map((p) => (
+              {dbProviders.filter(p => p.is_configured).map((p) => (
                 <option key={p.name} value={p.name}>{p.display_name}</option>
               ))}
             </select>
@@ -478,7 +554,7 @@ export default function SettingsPanel() {
               onChange={(e) => setClassifierModel(e.target.value)}
               className="input w-full"
             >
-              <option value="">Model auswaehlen...</option>
+              <option value="">Model auswählen...</option>
               {classifierModels.map((m) => (
                 <option key={m.id} value={m.id}>{m.display_name || m.name}</option>
               ))}
@@ -517,7 +593,7 @@ export default function SettingsPanel() {
               }}
               className="input w-full"
             >
-              {providers.filter(p => p.is_configured).map((p) => (
+              {dbProviders.filter(p => p.is_configured).map((p) => (
                 <option key={p.name} value={p.name}>{p.display_name}</option>
               ))}
             </select>
@@ -531,7 +607,7 @@ export default function SettingsPanel() {
               onChange={(e) => setOcrModel(e.target.value)}
               className="input w-full"
             >
-              <option value="">OCR Model auswaehlen...</option>
+              <option value="">OCR Model auswählen...</option>
               {ocrModels.map((m) => (
                 <option key={m.id} value={m.id}>{m.display_name || m.name}</option>
               ))}
