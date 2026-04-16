@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { Save, Check, X, Eye, EyeOff, TestTube, Loader2, Cpu, Lock, Bug, Trash2, Ban, Key, Copy, Power, Code2 } from 'lucide-react'
 import clsx from 'clsx'
 import * as api from '../services/api'
@@ -37,11 +37,12 @@ export default function SettingsPanel() {
   // Unified LLM settings form state (LLM-09, D-06)
   const [classifierModel, setClassifierModel] = useState('')
   const [modelSaved, setModelSaved] = useState(false)
-  const [ocrProvider, setOcrProvider] = useState('ollama')
+  const [ocrProvider, setOcrProvider] = useState('')
   const [ocrModel, setOcrModel] = useState('')
   const [ocrModelSaved, setOcrModelSaved] = useState(false)
   const [connectionSaved, setConnectionSaved] = useState(false)
   const [connectionError, setConnectionError] = useState<string | null>(null)
+  const settingsLoaded = useRef(false)
   
   // App Settings
   const [appSettings, setAppSettings] = useState({
@@ -69,6 +70,8 @@ export default function SettingsPanel() {
   const [deletingKeyId, setDeletingKeyId] = useState<number | null>(null)
 
   useEffect(() => {
+    if (settingsLoaded.current) return
+    settingsLoaded.current = true
     loadSettings()
     loadIgnoredItems()
     loadApiKeys()
@@ -255,13 +258,15 @@ export default function SettingsPanel() {
         })
       }
 
-      // Load models for classifier provider
-      if ((appSettingsData as any).classifier_provider) {
-        loadClassifierModels((appSettingsData as any).classifier_provider)
+      // Load models for classifier provider (only if provider exists in DB)
+      const cp = (appSettingsData as any).classifier_provider
+      if (cp && dbProviders.some(p => p.name === cp)) {
+        loadClassifierModels(cp)
       }
-      // Load models for OCR provider
-      if ((appSettingsData as any).ocr_provider) {
-        loadOcrModels((appSettingsData as any).ocr_provider)
+      // Load models for OCR provider (only if provider exists in DB)
+      const op = (appSettingsData as any).ocr_provider
+      if (op && dbProviders.some(p => p.name === op)) {
+        loadOcrModels(op)
       }
     } catch (error) {
       console.error('Error loading settings:', error)

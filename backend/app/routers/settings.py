@@ -743,7 +743,7 @@ async def get_app_settings(db: AsyncSession = Depends(get_db)):
     
     # Check key-value store for classifier_provider first (LLM-08)
     kv_classifier_provider = await get_setting(LLM_KEY_CLASSIFIER_PROVIDER, db)
-    classifier_provider = kv_classifier_provider or getattr(settings, "classifier_provider", "ollama") or "ollama"
+    classifier_provider = kv_classifier_provider or ""
     
     # Get key-value settings for model fields (LLM-09)
     kv_classifier_model = await get_setting(LLM_KEY_CLASSIFIER_MODEL, db)
