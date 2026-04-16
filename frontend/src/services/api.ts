@@ -420,9 +420,6 @@ export const recordStatistic = (entityType: string, operation: string, itemsAffe
 export const testLLMConnection = () =>
   fetchJson<{ success: boolean; provider?: string; model?: string; error?: string }>('/llm/test', { method: 'POST' })
 
-export const getActiveLLMProvider = () =>
-  fetchJson<{ configured: boolean; provider?: string; display_name?: string; model?: string }>('/llm/active-provider')
-
 export interface ModelInfo {
   id: string
   provider: string

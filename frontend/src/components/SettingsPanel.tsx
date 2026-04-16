@@ -70,7 +70,6 @@ export default function SettingsPanel() {
 
   useEffect(() => {
     loadSettings()
-    loadAppSettings()
     loadIgnoredItems()
     loadApiKeys()
   }, [])
@@ -172,23 +171,24 @@ export default function SettingsPanel() {
     }
   }
 
-  const loadAppSettings = async () => {
+  const reloadAppSettings = async () => {
     try {
       const settings = await api.getAppSettings()
       setAppSettings(settings)
-      // Load classifier_model and ocr_model for unified form (LLM-09)
       setClassifierModel((settings as any).classifier_model || '')
       setOcrModel((settings as any).ocr_model || '')
-      // Load initial classifier models
-      if (settings.classifier_provider) {
-        loadClassifierModels(settings.classifier_provider)
+      if ((settings as any).ocr_provider) {
+        setOcrProvider((settings as any).ocr_provider)
       }
-      // Load OCR models only if ocr_provider is set
+      // Reload models if provider changed
+      if ((settings as any).classifier_provider) {
+        loadClassifierModels((settings as any).classifier_provider)
+      }
       if ((settings as any).ocr_provider) {
         loadOcrModels((settings as any).ocr_provider)
       }
     } catch (e) {
-      console.error('Error loading app settings:', e)
+      console.error('Error reloading app settings:', e)
     }
   }
 
@@ -196,7 +196,7 @@ export default function SettingsPanel() {
     setSavingAppSettings(true)
     try {
       await api.updateAppSettings(updates)
-      await loadAppSettings()
+      await reloadAppSettings()
       setAppSettingsSaved(true)
       setTimeout(() => setAppSettingsSaved(false), 2000)
       // Reload page to apply changes (like debug menu toggle)
@@ -218,7 +218,7 @@ export default function SettingsPanel() {
 
   const handleRemovePassword = async () => {
     await api.removePassword()
-    await loadAppSettings()
+    await reloadAppSettings()
     localStorage.removeItem('app_authenticated')
   }
 
@@ -226,8 +226,8 @@ export default function SettingsPanel() {
     try {
       const [paperlessSettings, dbProvidersData, liteLlmProvidersData, appSettingsData] = await Promise.all([
         api.getPaperlessSettings(),
-        api.getLLMProvidersFromDB(),  // DB records for configured providers
-        api.getLLMProvidersDynamic(),  // All LiteLLM providers for dropdown
+        api.getLLMProvidersFromDB(),
+        api.getLLMProvidersDynamic(),
         api.getAppSettings()
       ])
 
@@ -236,6 +236,11 @@ export default function SettingsPanel() {
       setDbProviders(dbProvidersData)
       setLiteLlmProviders(liteLlmProvidersData)
       setAppSettings(appSettingsData)
+
+      // Set classifier/ocr model from app settings
+      setClassifierModel((appSettingsData as any).classifier_model || '')
+      setOcrProvider((appSettingsData as any).ocr_provider || 'ollama')
+      setOcrModel((appSettingsData as any).ocr_model || '')
 
       // Select first DB provider by default, or first LiteLLM provider
       const defaultProvider = dbProvidersData[0]?.name || liteLlmProvidersData[0]?.name || ''
@@ -248,6 +253,15 @@ export default function SettingsPanel() {
           api_key: existingConfig?.api_key === '***' ? '' : (existingConfig?.api_key || ''),
           api_base_url: existingConfig?.api_base_url || '',
         })
+      }
+
+      // Load models for classifier provider
+      if ((appSettingsData as any).classifier_provider) {
+        loadClassifierModels((appSettingsData as any).classifier_provider)
+      }
+      // Load models for OCR provider
+      if ((appSettingsData as any).ocr_provider) {
+        loadOcrModels((appSettingsData as any).ocr_provider)
       }
     } catch (error) {
       console.error('Error loading settings:', error)

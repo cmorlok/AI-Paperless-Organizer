@@ -37,15 +37,6 @@ async def test_prompt(
         return {"success": False, "error": str(e)}
 
 
-@router.get("/active-provider")
-async def get_active_provider(
-    llm_service: LLMProviderService = Depends(get_llm_service)
-):
-    """Get information about the active LLM provider."""
-    provider_info = await llm_service.get_active_provider_info()
-    return provider_info
-
-
 @router.get("/models")
 async def get_available_models(provider: str = None):
     """Get list of available models with context sizes and pricing."""
