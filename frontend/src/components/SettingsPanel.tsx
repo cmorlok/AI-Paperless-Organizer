@@ -16,6 +16,9 @@ interface LLMProvider {
 // Providers that require URL (local/custom providers) instead of API key
 const LOCAL_PROVIDERS = ['ollama', 'lm_studio', 'llamafile', 'oobabooga', 'localai', 'docker_model_runner', 'aiohttp_openai', 'openai_like', 'custom', 'custom_openai']
 
+// Popular providers for grouped dropdown
+const POPULAR_PROVIDERS = ['openai', 'anthropic', 'gemini', 'mistral', 'openrouter', 'ollama', 'lm_studio', 'vllm']
+
 export default function SettingsPanel() {
   // Paperless Settings
   const [paperlessUrl, setPaperlessUrl] = useState('')
@@ -400,9 +403,44 @@ export default function SettingsPanel() {
             }}
             className="input w-full"
           >
-            {liteLlmProviders.map((p) => (
-              <option key={p.name} value={p.name}>{p.display_name}</option>
-            ))}
+            {(() => {
+              const configured = dbProviders.filter(p => p.is_configured)
+              const popularNames = new Set(POPULAR_PROVIDERS)
+              const configuredNames = new Set(configured.map(p => p.name))
+              
+              // Providers in the popular list that are not yet configured
+              const popularNotConfigured = liteLlmProviders.filter(
+                p => popularNames.has(p.name) && !configuredNames.has(p.name)
+              )
+              // All other providers not in configured or popular
+              const allOthers = liteLlmProviders.filter(
+                p => !configuredNames.has(p.name) && !popularNames.has(p.name)
+              )
+              
+              return (
+                <>
+                  {configured.length > 0 && (
+                    <optgroup label="— Konfigurierte Provider —">
+                      {configured.map((p) => (
+                        <option key={p.name} value={p.name}>{p.display_name}</option>
+                      ))}
+                    </optgroup>
+                  )}
+                  {popularNotConfigured.length > 0 && (
+                    <optgroup label="— Oft genutzte Provider —">
+                      {popularNotConfigured.map((p) => (
+                        <option key={p.name} value={p.name}>{p.display_name}</option>
+                      ))}
+                    </optgroup>
+                  )}
+                  <optgroup label="— Alle Provider —">
+                    {allOthers.map((p) => (
+                      <option key={p.name} value={p.name}>{p.display_name}</option>
+                    ))}
+                  </optgroup>
+                </>
+              )
+            })()}
           </select>
         </div>
 
