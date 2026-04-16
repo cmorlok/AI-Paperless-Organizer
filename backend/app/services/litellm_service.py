@@ -1,4 +1,4 @@
-"""Unified LLM service — replaces llm_provider.py using LiteLLM."""
+"""Unified LLM service — uses LiteLLM for all providers."""
 
 import json
 import re
@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
 from app.models import LLMProvider
-from app.models.settings_model import LLM_KEY_CLASSIFIER_MODEL
+from app.models.settings_model import LLM_KEY_CLASSIFIER_MODEL, LLM_KEY_CLASSIFIER_PROVIDER
 from app.routers.settings import get_setting
 
 logger = logging.getLogger(__name__)
@@ -21,181 +21,34 @@ logger = logging.getLogger(__name__)
 class LitellmService:
     """Service for interacting with various LLM providers via LiteLLM."""
 
-    # Comprehensive model info: context window, pricing per 1M tokens (LLM-01)
-    # REVIEW FEEDBACK HIGH: MODEL_INFO dict must be preserved — used by router/llm.py
-    # and similarity service. Keep as class attribute with full model data.
-    MODEL_INFO = {
-        # OpenAI Models (December 2024)
-        "gpt-4o": {
-            "context": 128000,
-            "input_price": 2.50,
-            "output_price": 10.00,
-            "description": "Flagship model, fast & capable",
-            "provider": "openai"
-        },
-        "gpt-4o-mini": {
-            "context": 128000,
-            "input_price": 0.15,
-            "output_price": 0.60,
-            "description": "Günstig & schnell für einfache Tasks",
-            "provider": "openai"
-        },
-        "gpt-4-turbo": {
-            "context": 128000,
-            "input_price": 10.00,
-            "output_price": 30.00,
-            "description": "Vorgänger von GPT-4o",
-            "provider": "openai"
-        },
-        "gpt-4": {
-            "context": 8192,
-            "input_price": 30.00,
-            "output_price": 60.00,
-            "description": "Original GPT-4 (kleiner Context)",
-            "provider": "openai"
-        },
-        "gpt-3.5-turbo": {
-            "context": 16385,
-            "input_price": 0.50,
-            "output_price": 1.50,
-            "description": "Legacy, günstig aber weniger fähig",
-            "provider": "openai"
-        },
-        "o1-preview": {
-            "context": 128000,
-            "input_price": 15.00,
-            "output_price": 60.00,
-            "description": "Reasoning-Modell für komplexe Aufgaben",
-            "provider": "openai"
-        },
-        "o1-mini": {
-            "context": 128000,
-            "input_price": 3.00,
-            "output_price": 12.00,
-            "description": "Schnelleres Reasoning-Modell",
-            "provider": "openai"
-        },
-        # Anthropic Claude Models (December 2024)
-        "claude-3-5-sonnet-20241022": {
-            "context": 200000,
-            "input_price": 3.00,
-            "output_price": 15.00,
-            "description": "Neuestes Sonnet - beste Balance",
-            "provider": "anthropic"
-        },
-        "claude-3-5-haiku-20241022": {
-            "context": 200000,
-            "input_price": 0.80,
-            "output_price": 4.00,
-            "description": "Schnell & günstig",
-            "provider": "anthropic"
-        },
-        "claude-3-opus-20240229": {
-            "context": 200000,
-            "input_price": 15.00,
-            "output_price": 75.00,
-            "description": "Stärkstes Claude - teuer aber sehr fähig",
-            "provider": "anthropic"
-        },
-        "claude-3-sonnet-20240229": {
-            "context": 200000,
-            "input_price": 3.00,
-            "output_price": 15.00,
-            "description": "Älteres Sonnet",
-            "provider": "anthropic"
-        },
-        "claude-3-haiku-20240307": {
-            "context": 200000,
-            "input_price": 0.25,
-            "output_price": 1.25,
-            "description": "Günstigstes Claude",
-            "provider": "anthropic"
-        },
-        # Mistral AI Models
-        "mistral-small-latest": {
-            "context": 32000,
-            "input_price": 0.10,
-            "output_price": 0.30,
-            "description": "Schnell & günstig (Mistral API)",
-            "provider": "mistral"
-        },
-        "mistral-medium-latest": {
-            "context": 32000,
-            "input_price": 2.70,
-            "output_price": 8.10,
-            "description": "Ausgewogen (Mistral API)",
-            "provider": "mistral"
-        },
-        "mistral-large-latest": {
-            "context": 128000,
-            "input_price": 2.00,
-            "output_price": 6.00,
-            "description": "Stärkstes Mistral-Modell",
-            "provider": "mistral"
-        },
-        # Ollama / Local Models
-        "llama3.2": {
-            "context": 128000,
-            "input_price": 0,
-            "output_price": 0,
-            "description": "Lokal - kostenlos (Meta)",
-            "provider": "ollama"
-        },
-        "llama3.1": {
-            "context": 128000,
-            "input_price": 0,
-            "output_price": 0,
-            "description": "Lokal - kostenlos (Meta)",
-            "provider": "ollama"
-        },
-        "llama3": {
-            "context": 8192,
-            "input_price": 0,
-            "output_price": 0,
-            "description": "Lokal - kostenlos (Meta)",
-            "provider": "ollama"
-        },
-        "mistral": {
-            "context": 32768,
-            "input_price": 0,
-            "output_price": 0,
-            "description": "Lokal - kostenlos (Mistral AI)",
-            "provider": "ollama"
-        },
-        "mixtral": {
-            "context": 32768,
-            "input_price": 0,
-            "output_price": 0,
-            "description": "Lokal - MoE Modell (Mistral AI)",
-            "provider": "ollama"
-        },
-        "qwen2.5": {
-            "context": 32768,
-            "input_price": 0,
-            "output_price": 0,
-            "description": "Lokal - kostenlos (Alibaba)",
-            "provider": "ollama"
-        },
-        "gemma2": {
-            "context": 8192,
-            "input_price": 0,
-            "output_price": 0,
-            "description": "Lokal - kostenlos (Google)",
-            "provider": "ollama"
-        },
-    }
-
-    # Token limits per model (context window - leave buffer for output)
-    MODEL_TOKEN_LIMITS = {k: int(v["context"] * 0.95) for k, v in MODEL_INFO.items()}
-
-    # Default limits per provider if model not found
-    DEFAULT_TOKEN_LIMITS = {
-        "openai": 120000,
-        "anthropic": 190000,
-        "azure": 7000,
-        "ollama": 7000,
-        "mistral": 30000,
-        "openrouter": 30000,
+    # Static model info for UI display (pricing/context)
+    # NOTE: For actual LLM calls, LiteLLM handles provider routing internally via model name prefix
+    MODEL_INFO: Dict[str, Dict[str, Any]] = {
+        # OpenAI
+        "gpt-4o": {"context": 128000, "input_price": 2.50, "output_price": 10.00, "description": "Flagship model", "provider": "openai"},
+        "gpt-4o-mini": {"context": 128000, "input_price": 0.15, "output_price": 0.60, "description": "Günstig & schnell", "provider": "openai"},
+        "gpt-4-turbo": {"context": 128000, "input_price": 10.00, "output_price": 30.00, "description": "Vorgänger von GPT-4o", "provider": "openai"},
+        "gpt-4": {"context": 8192, "input_price": 30.00, "output_price": 60.00, "description": "Original GPT-4", "provider": "openai"},
+        "o1-preview": {"context": 128000, "input_price": 15.00, "output_price": 60.00, "description": "Reasoning-Modell", "provider": "openai"},
+        "o1-mini": {"context": 128000, "input_price": 3.00, "output_price": 12.00, "description": "Schnelleres Reasoning", "provider": "openai"},
+        # Anthropic
+        "claude-3-5-sonnet-20241022": {"context": 200000, "input_price": 3.00, "output_price": 15.00, "description": "Neuestes Sonnet", "provider": "anthropic"},
+        "claude-3-5-haiku-20241022": {"context": 200000, "input_price": 0.80, "output_price": 4.00, "description": "Schnell & günstig", "provider": "anthropic"},
+        "claude-3-opus-20240229": {"context": 200000, "input_price": 15.00, "output_price": 75.00, "description": "Stärkstes Claude", "provider": "anthropic"},
+        "claude-3-sonnet-20240229": {"context": 200000, "input_price": 3.00, "output_price": 15.00, "description": "Älteres Sonnet", "provider": "anthropic"},
+        # Mistral
+        "mistral-small-latest": {"context": 32000, "input_price": 0.10, "output_price": 0.30, "description": "Schnell & günstig", "provider": "mistral"},
+        "mistral-large-latest": {"context": 128000, "input_price": 2.00, "output_price": 6.00, "description": "Stärkstes Mistral", "provider": "mistral"},
+        # Ollama/Local
+        "llama3.2": {"context": 128000, "input_price": 0, "output_price": 0, "description": "Lokal - kostenlos", "provider": "ollama"},
+        "llama3.1": {"context": 128000, "input_price": 0, "output_price": 0, "description": "Lokal - kostenlos", "provider": "ollama"},
+        "llama3": {"context": 8192, "input_price": 0, "output_price": 0, "description": "Lokal - kostenlos", "provider": "ollama"},
+        "mistral": {"context": 32768, "input_price": 0, "output_price": 0, "description": "Lokal - kostenlos", "provider": "ollama"},
+        "mixtral": {"context": 32768, "input_price": 0, "output_price": 0, "description": "Lokal - MoE Modell", "provider": "ollama"},
+        "qwen2.5": {"context": 32768, "input_price": 0, "output_price": 0, "description": "Lokal - kostenlos", "provider": "ollama"},
+        "gemma2": {"context": 8192, "input_price": 0, "output_price": 0, "description": "Lokal - kostenlos", "provider": "ollama"},
+        # Gemini
+        "gemini-2.0-flash": {"context": 1000000, "input_price": 0.00, "output_price": 0.00, "description": "Google Gemini", "provider": "gemini"},
     }
 
     @classmethod
@@ -203,20 +56,20 @@ class LitellmService:
         """Get list of available models with their info."""
         models = []
         for model_id, info in cls.MODEL_INFO.items():
-            if provider is None or info["provider"] == provider:
+            if provider is None or info.get("provider") == provider:
                 models.append({
                     "id": model_id,
-                    "provider": info["provider"],
-                    "context": info["context"],
-                    "input_price": info["input_price"],
-                    "output_price": info["output_price"],
-                    "description": info["description"]
+                    "provider": info.get("provider"),
+                    "context": info.get("context"),
+                    "input_price": info.get("input_price"),
+                    "output_price": info.get("output_price"),
+                    "description": info.get("description")
                 })
         return models
 
     @classmethod
     def get_model_info(cls, model_id: str) -> Optional[Dict[str, Any]]:
-        """Get info dict for a specific model_id. Used by routers/llm.py."""
+        """Get info dict for a specific model_id."""
         if model_id in cls.MODEL_INFO:
             info = cls.MODEL_INFO[model_id].copy()
             info["model"] = model_id
@@ -227,194 +80,75 @@ class LitellmService:
         self.provider = provider
         self.model = model
 
-    async def get_active_provider_info(self) -> Dict:
-        """Get information about the active provider."""
-        if not self.provider:
-            return {"configured": False, "provider": None}
-        return {
-            "configured": True,
-            "provider": self.provider.name,
-            "display_name": self.provider.display_name,
-            "model": None
+    async def complete(self, prompt: str, model_override: Optional[str] = None) -> str:
+        """Send a completion request to the LLM provider via LiteLLM.
+        
+        LiteLLM handles provider routing internally based on model name prefix
+        (e.g., 'anthropic/claude-3-5-sonnet', 'ollama/llama3').
+        """
+        model = model_override or self.model
+        if not model:
+            raise ValueError("No model specified")
+
+        # Build litellm completion kwargs
+        kwargs = {
+            "model": model,
+            "messages": [{"role": "user", "content": prompt}],
+            "temperature": 0.1,
         }
 
+        # Add provider credentials if available
+        if self.provider:
+            if self.provider.api_key:
+                kwargs["api_key"] = self.provider.api_key
+            if self.provider.api_base_url:
+                kwargs["api_base"] = self.provider.api_base_url
+
+        response = await litellm.acompletion(**kwargs)
+        return (response.choices[0].message.content or "").strip()
+
     async def test_connection(self) -> Dict:
-        """Test connection to the active LLM provider."""
+        """Test connection to the LLM provider."""
         if not self.provider:
             raise ValueError("No LLM provider configured")
         response = await self.complete("Antworte nur mit: OK")
         return {
             "provider": self.provider.name,
-            "model": None,
+            "model": self.model,
             "response": response
         }
 
-    async def complete(self, prompt: str, model_override: Optional[str] = None) -> str:
-        """Send a completion request to the active LLM provider via LiteLLM."""
-        if not self.provider:
-            raise ValueError("No LLM provider configured")
-
-        if self.provider.name == "openai":
-            return await self._complete_openai(prompt, model_override)
-        elif self.provider.name == "anthropic":
-            return await self._complete_anthropic(prompt, model_override)
-        elif self.provider.name == "azure":
-            return await self._complete_azure(prompt, model_override)
-        elif self.provider.name == "ollama":
-            return await self._complete_ollama(prompt, model_override)
-        elif self.provider.name == "mistral":
-            return await self._complete_mistral(prompt, model_override)
-        elif self.provider.name == "openrouter":
-            return await self._complete_openrouter(prompt, model_override)
-        else:
-            raise ValueError(f"Unknown provider: {self.provider.name}")
-
-    async def _complete_openai(self, prompt: str, model_override: Optional[str] = None) -> str:
-        """Complete using OpenAI API via LiteLLM."""
-        model = model_override or self.model or "gpt-4o"
-        api_key = self.provider.api_key or ""
-        api_base = self.provider.api_base_url
-
-        response = await litellm.acompletion(
-            model=model,
-            messages=[
-                {"role": "system", "content": "Du bist ein hilfreicher Assistent für Dokumentenmanagement. Antworte immer mit vollständigem, validem JSON."},
-                {"role": "user", "content": prompt}
-            ],
-            temperature=0.2,
-            max_tokens=16384,
-            api_key=api_key,
-            api_base=api_base,
-        )
-        return (response.choices[0].message.content or "").strip()
-
-    async def _complete_anthropic(self, prompt: str, model_override: Optional[str] = None) -> str:
-        """Complete using Anthropic API via LiteLLM."""
-        model = model_override or self.model or "claude-3-5-sonnet-20241022"
-        api_key = self.provider.api_key or ""
-
-        response = await litellm.acompletion(
-            model=f"anthropic/{model}",
-            messages=[
-                {"role": "system", "content": "Du bist ein hilfreicher Assistent für Dokumentenmanagement. Antworte immer mit vollständigem, validem JSON."},
-                {"role": "user", "content": prompt}
-            ],
-            temperature=0.2,
-            max_tokens=8192,
-            api_key=api_key,
-        )
-        return (response.choices[0].message.content or "").strip()
-
-    async def _complete_azure(self, prompt: str, model_override: Optional[str] = None) -> str:
-        """Complete using Azure OpenAI API via LiteLLM."""
-        model = model_override or self.model or "gpt-4"
-        api_key = self.provider.api_key or ""
-        api_base = self.provider.api_base_url
-
-        response = await litellm.acompletion(
-            model=model,
-            messages=[
-                {"role": "system", "content": "Du bist ein hilfreicher Assistent für Dokumentenmanagement. Antworte immer mit vollständigem, validem JSON."},
-                {"role": "user", "content": prompt}
-            ],
-            temperature=0.2,
-            max_tokens=16384,
-            api_key=api_key,
-            api_base=api_base,
-            extra_headers={"api-key": api_key},
-        )
-        return (response.choices[0].message.content or "").strip()
-
-    async def _complete_mistral(self, prompt: str, model_override: Optional[str] = None) -> str:
-        """Complete using Mistral AI API (OpenAI-compatible) via LiteLLM."""
-        model = model_override or self.model or "mistral-small-latest"
-        api_key = self.provider.api_key or ""
-
-        response = await litellm.acompletion(
-            model=model,
-            messages=[
-                {"role": "system", "content": "Du bist ein hilfreicher Assistent für Dokumentenmanagement. Antworte immer mit vollständigem, validem JSON."},
-                {"role": "user", "content": prompt}
-            ],
-            temperature=0.2,
-            max_tokens=16384,
-            api_key=api_key,
-            api_base="https://api.mistral.ai/v1",
-        )
-        return (response.choices[0].message.content or "").strip()
-
-    async def _complete_openrouter(self, prompt: str, model_override: Optional[str] = None) -> str:
-        """Complete using OpenRouter API (OpenAI-compatible) via LiteLLM."""
-        model = model_override or self.model or "mistralai/mistral-small-2603"
-        api_key = self.provider.api_key or ""
-
-        response = await litellm.acompletion(
-            model=model,
-            messages=[
-                {"role": "system", "content": "Du bist ein hilfreicher Assistent für Dokumentenmanagement. Antworte immer mit vollständigem, validem JSON."},
-                {"role": "user", "content": prompt}
-            ],
-            temperature=0.2,
-            max_tokens=16384,
-            api_key=api_key,
-            api_base="https://openrouter.ai/api/v1",
-            extra_headers={"HTTP-Referer": "https://github.com/syberx/AI-Paperless-Organizer"},
-        )
-        return (response.choices[0].message.content or "").strip()
-
-    async def _complete_ollama(self, prompt: str, model_override: Optional[str] = None) -> str:
-        """Complete using local Ollama via LiteLLM."""
-        model = model_override or self.model or "llama3.1"
-        base_url = self.provider.api_base_url or "http://localhost:11434"
-
-        # Per D-01: Ollama-specific params go in extra_body
-        response = await litellm.acompletion(
-            model=f"ollama/{model}",
-            messages=[
-                {"role": "user", "content": prompt}
-            ],
-            temperature=0.3,
-            api_base=base_url,
-            extra_body={
-                "options": {
-                    "temperature": 0.3,
-                },
-                "keep_alive": "5m",
-            },
-            timeout=120.0,
-        )
-        return (response.choices[0].message.content or "").strip()
-
-    def estimate_tokens(self, text: str) -> int:
-        """Estimate token count (rough approximation: ~4 chars per token for German/English).
-
-        REVIEW FEEDBACK HIGH: similarity.py:432 calls this method.
-        Must be preserved as instance method on LitellmService.
+    def estimate_tokens(self, text: str, model: Optional[str] = None) -> int:
+        """Estimate token count using LiteLLM's token counter.
+        
+        Args:
+            text: Text to count tokens for
+            model: Model to use for tokenization (uses self.model if not specified)
         """
-        return len(text) // 4
+        model_for_count = model or self.model or "gpt-4"
+        try:
+            return litellm.token_counter(model=model_for_count, text=text)
+        except Exception:
+            # Fallback to char-based estimation
+            return len(text) // 4
 
-    def get_token_limit(self) -> int:
-        """Get the token limit for the current provider."""
-        if not self.provider:
-            return 7000  # Conservative default
-
-        # Check provider defaults (model-specific limits require KV store lookup)
-        if self.provider.name in self.DEFAULT_TOKEN_LIMITS:
-            return self.DEFAULT_TOKEN_LIMITS[self.provider.name]
-
-        return 7000  # Conservative fallback
+    def get_token_limit(self, model: Optional[str] = None) -> int:
+        """Get the token limit for a model based on MODEL_INFO."""
+        model_name = model or self.model
+        if model_name and model_name in self.MODEL_INFO:
+            info = self.MODEL_INFO[model_name]
+            context = info.get("context", 8000)
+            return int(context * 0.95)  # Leave buffer for output
+        return 8000  # Conservative default
 
     def get_instance_model_info(self) -> Optional[Dict[str, Any]]:
-        """Get info about the current provider (model info requires KV store lookup)."""
+        """Get info about the current provider and model."""
         if not self.provider:
             return None
 
-        provider_name = self.provider.name or ""
-
-        # Return basic info (model-specific info requires KV store lookup)
         return {
-            "model": "Nicht konfiguriert",
-            "provider_name": provider_name,
+            "model": self.model or "Nicht konfiguriert",
+            "provider_name": self.provider.name,
             "context": self.get_token_limit()
         }
 
@@ -436,7 +170,7 @@ class LitellmService:
 
         # Check if likely too large
         token_warning = None
-        max_recommended = 8000  # Safe limit for most models
+        max_recommended = 8000
         if estimated_input_tokens > max_recommended:
             token_warning = f"Viele Items ({len(items)})! Geschätzte Tokens: ~{estimated_input_tokens}. Könnte das Limit überschreiten."
 
@@ -608,12 +342,11 @@ class LitellmService:
 
 
 # Module-level MODEL_INFO export for backward compatibility
-# Allows: from app.services.litellm_service import MODEL_INFO
 MODEL_INFO = LitellmService.MODEL_INFO
 
 
 async def get_llm_service(db: AsyncSession = Depends(get_db)) -> LitellmService:
-    """Dependency to get LLM service with active provider."""
+    """Dependency to get LLM service with provider from AppSettings."""
     provider_name = await get_setting(LLM_KEY_CLASSIFIER_PROVIDER, db)
     provider = None
     if provider_name:
