@@ -12,7 +12,6 @@ from dataclasses import asdict
 from app.database import get_db
 from app.services.paperless_client import PaperlessClient, get_paperless_client
 from app.services.classifier.service import DocumentClassifierService
-from app.services.llm_service import llm_completion
 from app.models.classifier import (
     ClassifierConfig, StoragePathProfile, CustomFieldMapping, ClassificationHistory,
 )
@@ -630,67 +629,7 @@ async def test_ollama_connection(
         }
 
 
-@router.post("/mistral/test")
-async def test_mistral_connection(
-    db: AsyncSession = Depends(get_db),
-):
-    """Test Mistral API connection."""
-    from app.models import LLMProvider as _LLP
-    llp_res = await db.execute(select(_LLP).where(_LLP.name == "mistral"))
-    prov = llp_res.scalar_one_or_none()
-    api_key = prov.api_key if prov else ""
-    model = (prov.classifier_model or prov.model) if prov else "mistral-small-latest"
 
-    if not api_key:
-        return {"connected": False, "message": "Kein Mistral API-Key konfiguriert. Einstellungen → LLM."}
-
-    try:
-        await llm_completion(
-            model=f"mistral/{model}",
-            messages=[{"role": "user", "content": "Antworte mit OK"}],
-            api_key=api_key,
-            api_base="https://api.mistral.ai/v1",
-            max_tokens=5,
-        )
-        return {
-            "connected": True,
-            "model": model,
-            "message": f"Mistral verbunden, Modell '{model}' funktioniert.",
-        }
-    except Exception as e:
-        return {"connected": False, "model": model, "message": f"Fehler: {str(e)}"}
-
-
-@router.post("/openrouter/test")
-async def test_openrouter_connection(
-    db: AsyncSession = Depends(get_db),
-):
-    """Test OpenRouter API connection."""
-    from app.models import LLMProvider as _LLP
-    llp_res = await db.execute(select(_LLP).where(_LLP.name == "openrouter"))
-    prov = llp_res.scalar_one_or_none()
-    api_key = prov.api_key if prov else ""
-    model = (prov.classifier_model or prov.model) if prov else "mistralai/mistral-small-2603"
-
-    if not api_key:
-        return {"connected": False, "message": "Kein OpenRouter API-Key konfiguriert. Einstellungen → LLM."}
-
-    try:
-        await llm_completion(
-            model=f"openrouter/{model}",
-            messages=[{"role": "user", "content": "OK"}],
-            api_key=api_key,
-            api_base="https://openrouter.ai/api/v1",
-            max_tokens=5,
-            extra_headers={"HTTP-Referer": "https://github.com/syberx/AI-Paperless-Organizer"},
-        )
-        return {
-            "connected": True,
-            "model": model,
-            "message": f"OpenRouter verbunden, Modell '{model}' funktioniert.",
-        }
-    except Exception as e:
-        return {"connected": False, "model": model, "message": f"Fehler: {str(e)}"}
 
 
 # --- Storage Path Profiles ---
