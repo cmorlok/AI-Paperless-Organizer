@@ -42,6 +42,27 @@ async def llm_completion(
     return await litellm.acompletion(**litellm_kwargs)
 
 
+async def llm_embedding(
+    model: str,
+    input: List[str],
+    api_key: Optional[str] = None,
+    api_base: Optional[str] = None,
+    **kwargs,
+) -> List[List[float]]:
+    """Wrapper around litellm.aembedding with credentials injection."""
+    litellm_kwargs = {
+        "model": model,
+        "input": input,
+        **kwargs,
+    }
+    if api_key:
+        litellm_kwargs["api_key"] = api_key
+    if api_base:
+        litellm_kwargs["api_base"] = api_base
+    response = await litellm.aembedding(**litellm_kwargs)
+    return [item.embedding for item in response.data]
+
+
 def _derive_openai_compatible_url(base_url: str, provider: str) -> str:
     """Derive the OpenAI-compatible /models endpoint URL for a provider.
     

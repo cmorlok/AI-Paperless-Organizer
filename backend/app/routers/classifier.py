@@ -12,6 +12,7 @@ from dataclasses import asdict
 from app.database import get_db
 from app.services.paperless_client import PaperlessClient, get_paperless_client
 from app.services.classifier.service import DocumentClassifierService
+from app.services.llm_service import llm_completion
 from app.models.classifier import (
     ClassifierConfig, StoragePathProfile, CustomFieldMapping, ClassificationHistory,
 )
@@ -644,11 +645,11 @@ async def test_mistral_connection(
         return {"connected": False, "message": "Kein Mistral API-Key konfiguriert. Einstellungen → LLM."}
 
     try:
-        from openai import AsyncOpenAI
-        client = AsyncOpenAI(api_key=api_key, base_url="https://api.mistral.ai/v1")
-        await client.chat.completions.create(
-            model=model,
+        await llm_completion(
+            model=f"mistral/{model}",
             messages=[{"role": "user", "content": "Antworte mit OK"}],
+            api_key=api_key,
+            api_base="https://api.mistral.ai/v1",
             max_tokens=5,
         )
         return {
@@ -675,16 +676,13 @@ async def test_openrouter_connection(
         return {"connected": False, "message": "Kein OpenRouter API-Key konfiguriert. Einstellungen → LLM."}
 
     try:
-        from openai import AsyncOpenAI
-        client = AsyncOpenAI(
-            api_key=api_key,
-            base_url="https://openrouter.ai/api/v1",
-            default_headers={"HTTP-Referer": "https://github.com/syberx/AI-Paperless-Organizer"},
-        )
-        await client.chat.completions.create(
-            model=model,
+        await llm_completion(
+            model=f"openrouter/{model}",
             messages=[{"role": "user", "content": "OK"}],
+            api_key=api_key,
+            api_base="https://openrouter.ai/api/v1",
             max_tokens=5,
+            extra_headers={"HTTP-Referer": "https://github.com/syberx/AI-Paperless-Organizer"},
         )
         return {
             "connected": True,

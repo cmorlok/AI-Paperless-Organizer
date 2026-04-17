@@ -3,6 +3,8 @@ import logging
 import httpx
 from typing import List
 
+from app.services.llm_service import llm_embedding
+
 logger = logging.getLogger(__name__)
 
 
@@ -97,14 +99,12 @@ class EmbeddingService:
         return all_embeddings
 
     async def _openai_embed(self, texts: List[str]) -> List[List[float]]:
-        from openai import AsyncOpenAI
-        client = AsyncOpenAI(api_key=self.openai_api_key)
         try:
-            response = await client.embeddings.create(
+            return await llm_embedding(
                 model=self.model or "text-embedding-3-small",
                 input=texts,
+                api_key=self.openai_api_key,
             )
-            return [item.embedding for item in response.data]
         except Exception as e:
             logger.error(f"OpenAI embedding error: {e}")
             return [[0.0] * 1536] * len(texts)
