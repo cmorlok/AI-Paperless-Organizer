@@ -344,7 +344,7 @@ class LitellmService:
             if self.provider.api_base_url:
                 kwargs["api_base"] = self.provider.api_base_url
 
-        response = await litellm.acompletion(**kwargs)
+        response = await llm_completion(**kwargs)
         return (response.choices[0].message.content or "").strip()
 
     async def test_connection(self) -> Dict:
