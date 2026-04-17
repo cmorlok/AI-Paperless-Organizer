@@ -123,7 +123,7 @@ class Indexer:
             embedding_service = EmbeddingService(
                 provider=config.embedding_provider,
                 model=config.embedding_model,
-                ollama_base_url=config.ollama_base_url,
+                api_base=config.ollama_base_url,
             )
             chunking_service = ChunkingService(
                 chunk_size=config.chunk_size,

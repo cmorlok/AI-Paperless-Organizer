@@ -196,7 +196,7 @@ async def rag_health():
     embed_service = EmbeddingService(
         provider=config["embedding_provider"],
         model=config["embedding_model"],
-        ollama_base_url=config["ollama_base_url"],
+        api_base=config["ollama_base_url"],
     )
     health = await embed_service.check_health()
     index_status = await service.indexer.get_status()

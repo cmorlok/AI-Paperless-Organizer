@@ -47,7 +47,7 @@ class RAGService:
         return EmbeddingService(
             provider=config.embedding_provider,
             model=config.embedding_model,
-            ollama_base_url=config.ollama_base_url,
+            api_base=config.ollama_base_url,
         )
 
     async def search(

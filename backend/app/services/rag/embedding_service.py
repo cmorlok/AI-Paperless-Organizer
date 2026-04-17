@@ -21,103 +21,80 @@ DEFAULT_DIM = 768
 
 
 class EmbeddingService:
-    """Generates text embeddings via Ollama or OpenAI."""
+    """Generates text embeddings via any LiteLLM-supported provider."""
 
     def __init__(
         self,
         provider: str = "ollama",
         model: str = "mxbai-embed-large",
-        ollama_base_url: str = "http://localhost:11434",
-        openai_api_key: str = "",
+        api_base: str = "http://localhost:11434",
+        api_key: str = "",
     ):
         self.provider = provider
         self.model = model
-        self.ollama_base_url = ollama_base_url.rstrip("/")
-        self.openai_api_key = openai_api_key
+        self.api_base = api_base.rstrip("/")
+        self.api_key = api_key
         self.dim = EMBEDDING_DIMS.get(model, DEFAULT_DIM)
-
-    async def generate(self, texts: List[str]) -> List[List[float]]:
-        if not texts:
-            return []
-        if self.provider == "openai":
-            return await self._openai_embed(texts)
-        return await self._ollama_embed(texts)
 
     # Most Ollama embedding models (mxbai-embed-large, nomic-embed-text) cap at 512 tokens.
     # 512 tokens * ~1.5 chars/token for German OCR text ≈ 768 chars. Use 750 to be safe.
     _MAX_EMBED_CHARS = 750
+    _EMBED_RETRY_SLEEPS = [5, 15, 30]  # seconds between retries on transient failures
 
-    # Per-request timeout for a single embed call. 30s is generous for CPU-only embed models.
-    # If Ollama is busy swapping models (OCR running), we retry with backoff instead of waiting.
-    _EMBED_TIMEOUT = 30.0
-    _EMBED_RETRY_SLEEPS = [5, 15, 30]  # seconds between retries when Ollama returns 500
+    def _litellm_model(self) -> str:
+        """Returns the LiteLLM-formatted model string for this provider."""
+        if self.provider == "ollama" and not self.model.startswith("ollama/"):
+            return f"ollama/{self.model}"
+        return self.model
 
-    async def _ollama_embed(self, texts: List[str]) -> List[List[float]]:
-        url = f"{self.ollama_base_url}/api/embed"
+    async def generate(self, texts: List[str]) -> List[List[float]]:
+        if not texts:
+            return []
+
         all_embeddings: List[List[float]] = []
         batch_size = 50
+        model = self._litellm_model()
+        max_attempts = len(self._EMBED_RETRY_SLEEPS) + 1
 
-        async with httpx.AsyncClient(timeout=self._EMBED_TIMEOUT) as client:
-            for i in range(0, len(texts), batch_size):
-                batch = [t[:self._MAX_EMBED_CHARS] if len(t) > self._MAX_EMBED_CHARS else t
-                         for t in texts[i:i + batch_size]]
-                max_attempts = len(self._EMBED_RETRY_SLEEPS) + 1
-                for attempt in range(max_attempts):
-                    try:
-                        resp = await client.post(url, json={
-                            "model": self.model,
-                            "input": batch,
-                        })
-                        resp.raise_for_status()
-                        data = resp.json()
-                        embeddings = data.get("embeddings", [])
-                        if len(embeddings) == len(batch):
-                            all_embeddings.extend(embeddings)
-                        else:
-                            logger.error(f"Batch {i}: expected {len(batch)} embeddings, got {len(embeddings)}")
-                            all_embeddings.extend(embeddings)
-                            all_embeddings.extend([[0.0] * self.dim] * (len(batch) - len(embeddings)))
-                        break
-                    except (httpx.HTTPStatusError, httpx.TimeoutException) as e:
-                        body = getattr(getattr(e, 'response', None), 'text', '')[:200] if hasattr(e, 'response') else ''
-                        if attempt < max_attempts - 1:
-                            sleep = self._EMBED_RETRY_SLEEPS[attempt]
-                            logger.warning(f"Embedding batch {i} attempt {attempt+1} failed (Ollama busy?), retry in {sleep}s: {e} {body}")
-                            await asyncio.sleep(sleep)
-                        else:
-                            logger.error(f"Embedding batch {i} failed after {max_attempts} attempts: {e} {body}")
-                            all_embeddings.extend([[0.0] * self.dim] * len(batch))
-                    except Exception as e:
-                        if attempt < max_attempts - 1:
-                            sleep = self._EMBED_RETRY_SLEEPS[attempt]
-                            logger.warning(f"Embedding batch {i} attempt {attempt+1} failed, retry in {sleep}s: {e}")
-                            await asyncio.sleep(sleep)
-                        else:
-                            logger.error(f"Embedding batch {i} failed after {max_attempts} attempts: {e}")
-                            all_embeddings.extend([[0.0] * self.dim] * len(batch))
+        for i in range(0, len(texts), batch_size):
+            batch = [t[:self._MAX_EMBED_CHARS] if len(t) > self._MAX_EMBED_CHARS else t
+                     for t in texts[i:i + batch_size]]
+
+            for attempt in range(max_attempts):
+                try:
+                    embeddings = await llm_embedding(
+                        model=model,
+                        input=batch,
+                        api_base=self.api_base or None,
+                        api_key=self.api_key or None,
+                    )
+                    if len(embeddings) == len(batch):
+                        all_embeddings.extend(embeddings)
+                    else:
+                        logger.error(f"Batch {i}: expected {len(batch)} embeddings, got {len(embeddings)}")
+                        all_embeddings.extend(embeddings)
+                        all_embeddings.extend([[0.0] * self.dim] * (len(batch) - len(embeddings)))
+                    break
+                except Exception as e:
+                    if attempt < max_attempts - 1:
+                        sleep = self._EMBED_RETRY_SLEEPS[attempt]
+                        logger.warning(f"Embedding batch {i} attempt {attempt+1} failed (provider busy?), retry in {sleep}s: {e}")
+                        await asyncio.sleep(sleep)
+                    else:
+                        logger.error(f"Embedding batch {i} failed after {max_attempts} attempts: {e}")
+                        all_embeddings.extend([[0.0] * self.dim] * len(batch))
 
         return all_embeddings
-
-    async def _openai_embed(self, texts: List[str]) -> List[List[float]]:
-        try:
-            return await llm_embedding(
-                model=self.model or "text-embedding-3-small",
-                input=texts,
-                api_key=self.openai_api_key,
-            )
-        except Exception as e:
-            logger.error(f"OpenAI embedding error: {e}")
-            return [[0.0] * 1536] * len(texts)
 
     async def check_health(self) -> dict:
         if self.provider == "ollama":
             try:
                 async with httpx.AsyncClient(timeout=10.0) as client:
-                    resp = await client.get(f"{self.ollama_base_url}/api/tags")
+                    resp = await client.get(f"{self.api_base}/api/tags")
                     resp.raise_for_status()
                     models = [m["name"] for m in resp.json().get("models", [])]
                     model_available = any(self.model in m for m in models)
                     return {"healthy": True, "model_available": model_available, "models": models}
             except Exception as e:
                 return {"healthy": False, "error": str(e)}
-        return {"healthy": True, "provider": "openai"}
+        return {"healthy": True, "provider": self.provider}
