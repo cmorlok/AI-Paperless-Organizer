@@ -113,27 +113,19 @@ async def list_llm_models(provider: str, db: Optional[AsyncSession] = None) -> L
 
 
 def _list_models_from_litellm(provider: str) -> List[Dict[str, str]]:
-    """Get models from LiteLLM registry filtered by provider prefix."""
+    """Get models from LiteLLM registry using models_by_provider."""
     if provider == "ollama":
-        return []  # Ollama not in litellm.model_list
+        return []  # Ollama not tracked in models_by_provider
 
-    all_models = litellm.model_list
-    prefix = f"{provider}/"
-    models = []
-    seen = set()
-
-    for model in all_models:
-        if model.startswith(prefix):
-            model_name = model[len(prefix):]
-            if model_name not in seen:
-                seen.add(model_name)
-                models.append({
-                    "id": model_name,
-                    "name": model_name,
-                    "display_name": model_name.replace("-", " ").replace("_", " ").title(),
-                })
-
-    return sorted(models, key=lambda x: x["name"])
+    provider_models = litellm.models_by_provider.get(provider, set())
+    return [
+        {
+            "id": model_name,
+            "name": model_name,
+            "display_name": _format_model_display_name(model_name),
+        }
+        for model_name in sorted(provider_models)
+    ]
 
 
 def _format_model_display_name(model_name: str) -> str:
