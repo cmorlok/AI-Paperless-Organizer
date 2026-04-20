@@ -1,12 +1,46 @@
 """Unified LLM service — uses LiteLLM for all providers."""
 
 import json
-import re
 import logging
+import re
+import traceback
 from typing import Optional, Dict, Any, List
 
 import httpx
 import litellm
+
+logger = logging.getLogger(__name__)
+
+
+def extract_litellm_error(exc: Exception) -> str:
+    """Extract full error details from a litellm exception (response body, headers, etc.)."""
+    parts = [str(exc)]
+    resp = getattr(exc, "response", None)
+    if resp is not None:
+        try:
+            body = resp.text if hasattr(resp, "text") else ""
+            if body:
+                parts.append(f"Response body: {body[:2000]}")
+        except Exception:
+            pass
+        try:
+            status = resp.status_code if hasattr(resp, "status_code") else ""
+            parts.append(f"Response status: {status}")
+        except Exception:
+            pass
+    for attr in ("llm_provider", "model", "status_code", "body", "litellm_debug_info"):
+        val = getattr(exc, attr, None)
+        if val is not None:
+            parts.append(f"{attr}: {val}")
+    return " | ".join(parts)
+
+
+def log_llm_error(msg: str, exc: Exception):
+    """Log error with full details + traceback via print() (bypasses uvicorn logging suppression)."""
+    detail = extract_litellm_error(exc)
+    tb = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
+    print(f"ERROR app.services.llm_service: {msg}: {detail}\n{tb}", flush=True)
+    logger.error("%s: %s", msg, detail, exc_info=True)
 from fastapi import Depends
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -99,7 +133,7 @@ async def llm_completion(
       num_ctx=16384, json_output=True, keep_alive as specified (or None).
     Callers only need to override what differs from the default.
     """
-    if provider and "/" not in model:
+    if provider and not model.startswith(f"{provider}/"):
         model = f"{provider}/{model}"
 
     litellm_kwargs: Dict[str, Any] = {
@@ -126,7 +160,11 @@ async def llm_completion(
     if provider:
         for k, v in (await _resolve_provider_credentials(provider)).items():
             litellm_kwargs.setdefault(k, v)
-    return await litellm.acompletion(**litellm_kwargs)
+    try:
+        return await litellm.acompletion(**litellm_kwargs)
+    except Exception as e:
+        log_llm_error(f"llm_completion failed (model={model}, provider={provider})", e)
+        raise
 
 
 async def llm_embedding(
@@ -136,7 +174,7 @@ async def llm_embedding(
     **kwargs,
 ) -> List[List[float]]:
     """Wrapper around litellm.aembedding. Resolves credentials from llm_providers table."""
-    if provider and "/" not in model:
+    if provider and not model.startswith(f"{provider}/"):
         model = f"{provider}/{model}"
     litellm_kwargs: Dict[str, Any] = {
         "model": model,
@@ -146,8 +184,12 @@ async def llm_embedding(
     if provider:
         for k, v in (await _resolve_provider_credentials(provider)).items():
             litellm_kwargs.setdefault(k, v)
-    response = await litellm.aembedding(**litellm_kwargs)
-    return [item.embedding for item in response.data]
+    try:
+        response = await litellm.aembedding(**litellm_kwargs)
+        return [item.embedding for item in response.data]
+    except Exception as e:
+        log_llm_error(f"llm_embedding failed (model={model}, provider={provider})", e)
+        raise
 
 
 def _derive_openai_compatible_url(base_url: str, provider: str) -> str:
