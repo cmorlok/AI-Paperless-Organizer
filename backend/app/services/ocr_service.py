@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Optional, Dict, List, Any
 from PIL import Image
 from pdf2image import convert_from_bytes
-from app.services.llm_service import llm_completion, build_ollama_params
+from app.services.llm_service import llm_completion
 
 # Raise PIL pixel limit for large PDF pages rendered at high DPI
 Image.MAX_IMAGE_PIXELS = 500_000_000  # 500 megapixels (default is ~178MP)
@@ -617,13 +617,15 @@ class OcrService:
                 ]
 
                 # Per D-01: Ollama params in extra_body.options; think at top level for qwen3
-                extra_body = build_ollama_params(
-                    temperature=model_params["temperature"],
-                    repeat_penalty=model_params["repeat_penalty"],
-                    num_ctx=model_params["num_ctx"],
-                    num_predict=model_params["num_predict"],
-                    keep_alive="30m",
-                )
+                extra_body: dict = {
+                    "options": {
+                        "temperature":    model_params["temperature"],
+                        "repeat_penalty": model_params["repeat_penalty"],
+                        "num_ctx":        model_params["num_ctx"],
+                        "num_predict":    model_params["num_predict"],
+                    },
+                    "keep_alive": "30m",
+                }
                 if use_think_param:
                     extra_body["think"] = False  # D-01: suppress thinking at top level
 

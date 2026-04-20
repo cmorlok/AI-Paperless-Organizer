@@ -12,7 +12,7 @@ from app.models.rag import RagConfig, RagIndexingState
 from app.services.rag.embedding_service import EmbeddingService
 from app.services.rag.chunking import ChunkingService
 from app.services.rag.search_engine import SearchEngine
-from app.services.llm_service import llm_completion, build_ollama_params
+from app.services.llm_service import llm_completion
 
 logger = logging.getLogger(__name__)
 
@@ -346,7 +346,8 @@ class Indexer:
                 model=config.chat_model,
                 provider=config.chat_model_provider,
                 messages=[{"role": "user", "content": prompt}],
-                extra_body=build_ollama_params(num_predict=80, think=False),
+                num_predict=80,
+                think=False,
                 timeout=25.0,
             )
             context = (response.choices[0].message.content or "").strip()

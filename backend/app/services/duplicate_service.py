@@ -20,7 +20,7 @@ from app.database import async_session
 from app.models.duplicates import DuplicateInvoiceCache
 from app.models.rag import RagConfig
 from app.services.ollama_lock import acquire as ollama_acquire, release as ollama_release
-from app.services.llm_service import llm_completion, build_ollama_params
+from app.services.llm_service import llm_completion
 
 logger = logging.getLogger(__name__)
 
@@ -525,7 +525,8 @@ class DuplicateService:
                 model=model,
                 provider="ollama",
                 messages=[{"role": "user", "content": prompt}],
-                extra_body=build_ollama_params(temperature=0, num_ctx=4096),
+                temperature=0,
+                num_ctx=4096,
                 timeout=60.0,
             )
             reply = response.choices[0].message.content or ""

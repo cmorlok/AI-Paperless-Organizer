@@ -7,7 +7,7 @@ import time
 import logging
 from typing import Dict, Any, List, Optional
 
-from app.services.llm_service import llm_completion, build_ollama_params
+from app.services.llm_service import llm_completion
 
 from app.services.classifier.base_provider import (
     BaseClassifierProvider, ClassificationResult, DocumentContext,
@@ -918,20 +918,16 @@ class LitellmOllamaProvider(BaseClassifierProvider):
         if user_message:
             messages.append({"role": "user", "content": user_message})
 
-        extra_body = build_ollama_params(
-            num_predict=max_tokens,
-            keep_alive=keep_alive,
-            seed=random.randint(1, 2**31 - 1),
-            json_schema=json_schema,
-            json_output=True,
-        )
-
         try:
             response = await llm_completion(
                 model=self.model,
                 provider="ollama",
                 messages=messages,
-                extra_body=extra_body,
+                num_predict=max_tokens,
+                keep_alive=keep_alive,
+                seed=random.randint(1, 2**31 - 1),
+                json_schema=json_schema,
+                json_output=True,
                 timeout=OLLAMA_CALL_TIMEOUT,
             )
             content = response.choices[0].message.content or ""
@@ -947,12 +943,14 @@ class LitellmOllamaProvider(BaseClassifierProvider):
             # since LiteLLM normalizes the error.
             if json_schema is not None and ("format" in str(e).lower() or "schema" in str(e).lower()):
                 logger.warning(f"Ollama schema enforcement rejected, retrying without schema: {e}")
-                extra_body["format"] = "json"
                 response = await llm_completion(
                     model=self.model,
                     provider="ollama",
                     messages=messages,
-                    extra_body=extra_body,
+                    num_predict=max_tokens,
+                    keep_alive=keep_alive,
+                    seed=random.randint(1, 2**31 - 1),
+                    json_output=True,
                     timeout=OLLAMA_CALL_TIMEOUT,
                 )
                 content = response.choices[0].message.content or ""
@@ -986,16 +984,6 @@ class LitellmOllamaProvider(BaseClassifierProvider):
         prompt_parts.extend(["", "JSON-ANTWORT:"])
         raw_prompt = "\n".join(prompt_parts)
 
-        # Per D-01: think=False suppresses thinking at top level per CONTEXT.md
-        extra_body = build_ollama_params(
-            num_predict=max(max_tokens, 1500),
-            keep_alive=keep_alive,
-            seed=random.randint(1, 2**31 - 1),
-            think=False,
-            json_schema=json_schema,
-            json_output=True,
-        )
-
         messages = [{"role": "user", "content": raw_prompt}]
 
         try:
@@ -1003,7 +991,12 @@ class LitellmOllamaProvider(BaseClassifierProvider):
                 model=self.model,
                 provider="ollama",
                 messages=messages,
-                extra_body=extra_body,
+                num_predict=max(max_tokens, 1500),
+                keep_alive=keep_alive,
+                seed=random.randint(1, 2**31 - 1),
+                think=False,
+                json_schema=json_schema,
+                json_output=True,
                 timeout=OLLAMA_CALL_TIMEOUT,
             )
             content = response.choices[0].message.content or ""
@@ -1016,12 +1009,14 @@ class LitellmOllamaProvider(BaseClassifierProvider):
         except Exception as e:
                 if json_schema is not None and ("format" in str(e).lower() or "schema" in str(e).lower()):
                     logger.warning(f"Ollama schema enforcement rejected in generate, retrying without schema: {e}")
-                    extra_body["format"] = "json"
                     response = await llm_completion(
                         model=self.model,
                         provider="ollama",
                         messages=messages,
-                        extra_body=extra_body,
+                        num_predict=max(max_tokens, 1500),
+                        keep_alive=keep_alive,
+                        think=False,
+                        json_output=True,
                         timeout=OLLAMA_CALL_TIMEOUT,
                     )
                     content = response.choices[0].message.content or ""

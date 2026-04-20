@@ -10,7 +10,7 @@ from app.services.rag.search_engine import SearchEngine, SearchResult
 from app.services.rag.indexer import Indexer
 from app.services.rag.rerank_service import RerankService
 from app.services import ollama_lock
-from app.services.llm_service import llm_completion, build_ollama_params
+from app.services.llm_service import llm_completion
 
 logger = logging.getLogger(__name__)
 
@@ -457,12 +457,6 @@ class RAGService:
         provider_name = getattr(config, "chat_model_provider", "openai") or "openai"
 
         is_ollama = provider_name == "ollama"
-        extra_body: Dict[str, Any] = build_ollama_params(
-            temperature=0.2,
-            num_ctx=max(8192, (getattr(config, "max_context_tokens", 4000) or 4000) * 2),
-            keep_alive="10m",
-            think=False,
-        ) if is_ollama else {}
 
         try:
             if is_ollama:
@@ -479,7 +473,10 @@ class RAGService:
                     provider=provider_name,
                     messages=messages,
                     stream=True,
-                    extra_body=extra_body,
+                    temperature=0.2,
+                    num_ctx=max(8192, (getattr(config, "max_context_tokens", 4000) or 4000) * 2),
+                    keep_alive="10m",
+                    think=False,
                     timeout=300.0,
                 )
 
@@ -543,10 +540,6 @@ class RAGService:
         model_name = config.chat_model or "gpt-4o-mini"
         provider_name = getattr(config, "chat_model_provider", "openai") or "openai"
 
-        extra_body: Dict[str, Any] = build_ollama_params(
-            temperature=0, num_ctx=4096, keep_alive="5m", think=False,
-        ) if provider_name == "ollama" else {}
-
         try:
             result = await llm_completion(
                 model=model_name,
@@ -554,7 +547,9 @@ class RAGService:
                 messages=messages,
                 temperature=0.0,
                 max_tokens=200,
-                extra_body=extra_body or None,
+                num_ctx=4096,
+                keep_alive="5m",
+                think=False,
             )
             rewritten = (result.choices[0].message.content or "").strip()
             # Strip any markdown fences or explanatory text

@@ -44,14 +44,14 @@ def build_ollama_params(
     temperature: float = 0.1,
     num_ctx: int = 16384,
     num_predict: Optional[int] = None,
-    keep_alive: str = "5m",
+    keep_alive: Optional[str] = None,
     think: Optional[bool] = None,
     json_schema: Optional[Dict[str, Any]] = None,
     json_output: bool = False,
     seed: Optional[int] = None,
     repeat_penalty: Optional[float] = None,
 ) -> Dict[str, Any]:
-    """Build the extra_body dict for Ollama calls via LiteLLM.
+    """Build the extra_body dict for Ollama calls via LiteLLM (private — use via llm_completion).
 
     Per D-01: model params go in extra_body['options'].
     'keep_alive' and 'think' are top-level keys.
@@ -65,7 +65,9 @@ def build_ollama_params(
     if repeat_penalty is not None:
         options["repeat_penalty"] = repeat_penalty
 
-    body: Dict[str, Any] = {"options": options, "keep_alive": keep_alive}
+    body: Dict[str, Any] = {"options": options}
+    if keep_alive is not None:
+        body["keep_alive"] = keep_alive
     if think is not None:
         body["think"] = think
     if json_schema is not None:
@@ -81,11 +83,25 @@ async def llm_completion(
     provider: Optional[str] = None,
     temperature: float = 0.1,
     stream: bool = False,
+    keep_alive: Optional[str] = None,
+    json_schema: Optional[Dict[str, Any]] = None,
+    json_output: bool = False,
+    num_ctx: Optional[int] = None,
+    num_predict: Optional[int] = None,
+    seed: Optional[int] = None,
+    repeat_penalty: Optional[float] = None,
+    think: Optional[bool] = None,
     **kwargs,
 ):
-    """Wrapper around litellm.acompletion. Resolves credentials from llm_providers table."""
+    """Wrapper around litellm.acompletion.
+
+    For provider=\"ollama\" calls, applies sensible defaults internally:
+      num_ctx=16384, json_output=True, keep_alive as specified (or None).
+    Callers only need to override what differs from the default.
+    """
     if provider and "/" not in model:
         model = f"{provider}/{model}"
+
     litellm_kwargs: Dict[str, Any] = {
         "model": model,
         "messages": messages,
@@ -93,6 +109,20 @@ async def llm_completion(
         "stream": stream,
         **kwargs,
     }
+
+    if provider == "ollama" and "extra_body" not in kwargs:
+        litellm_kwargs["extra_body"] = build_ollama_params(
+            temperature=temperature,
+            num_ctx=num_ctx or 16384,
+            num_predict=num_predict,
+            keep_alive=keep_alive,
+            think=think,
+            json_schema=json_schema,
+            json_output=json_output,
+            seed=seed,
+            repeat_penalty=repeat_penalty,
+        )
+
     if provider:
         for k, v in (await _resolve_provider_credentials(provider)).items():
             litellm_kwargs.setdefault(k, v)
