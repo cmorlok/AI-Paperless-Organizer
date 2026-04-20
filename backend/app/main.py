@@ -1,17 +1,24 @@
+import json
 import logging
 import sys
+import time
+import traceback
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from contextlib import asynccontextmanager
 
 from app.database import run_migrations
 
 logging.basicConfig(
-    level=logging.INFO,
+    level=logging.DEBUG,
     format="%(levelname)s %(name)s: %(message)s",
     stream=sys.stdout,
+    force=True,
 )
+logger = logging.getLogger(__name__)
+
 from app.routers import paperless, correspondents, tags, document_types, settings, llm, debug, statistics, ignored_items, ocr, cleanup, classifier, rag, api_keys, cloud_import, duplicates
 from app.routers.ocr import ocr_settings, get_ocr_service
 from app.services.ocr_service import watchdog_state
@@ -24,6 +31,16 @@ async def lifespan(app: FastAPI):
     from app.database import async_session
     from app.models.settings_model import PaperlessSettings
     from sqlalchemy import select as sa_select
+
+    # Re-apply logging config — uvicorn's reloader overrides basicConfig
+    for handler in logging.root.handlers[:]:
+        logging.root.removeHandler(handler)
+    logging.root.setLevel(logging.DEBUG)
+    _handler = logging.StreamHandler(sys.stdout)
+    _handler.setLevel(logging.DEBUG)
+    _handler.setFormatter(logging.Formatter("%(levelname)s %(name)s: %(message)s"))
+    logging.root.addHandler(_handler)
+    logger.info("Logging initialized: level=DEBUG, all request/response logging active")
 
     # Run database migrations (Alembic upgrade to head)
     await asyncio.get_running_loop().run_in_executor(None, run_migrations)
@@ -165,6 +182,76 @@ app = FastAPI(
     lifespan=lifespan
 )
 
+
+def _log(level: str, msg: str, *args):
+    """Log via both logging and print — ensures output even when uvicorn overrides logging config."""
+    formatted = msg % args if args else msg
+    print(f"{level} app.main: {formatted}", flush=True)
+    getattr(logger, level.lower())(msg, *args)
+
+
+@app.middleware("http")
+async def log_requests(request: Request, call_next):
+    """Logs every HTTP request at INFO level and request/response bodies at DEBUG level."""
+    method = request.method
+    path = request.url.path
+    query = request.url.query
+    start = time.monotonic()
+
+    # Read and log request body at DEBUG level
+    req_body = ""
+    if method in ("POST", "PUT", "PATCH"):
+        try:
+            body_bytes = await request.body()
+            if body_bytes:
+                req_body = body_bytes.decode(errors="replace")
+                if len(req_body) > 2000:
+                    req_body = req_body[:2000] + "...(truncated)"
+                _log("DEBUG", "REQUEST BODY %s %s%s: %s", method, path,
+                      f"?{query}" if query else "", req_body)
+                async def receive():
+                    return {"type": "http.request", "body": body_bytes, "more_body": False}
+                request._receive = receive
+        except Exception:
+            pass
+
+    if not req_body:
+        _log("INFO", "REQUEST %s %s%s", method, path, f"?{query}" if query else "")
+
+    try:
+        response = await call_next(request)
+    except Exception as exc:
+        elapsed = time.monotonic() - start
+        tb = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
+        _log("ERROR", "EXCEPTION %s %s after %.2fs: %s\n%s", method, path, elapsed, exc, tb)
+        raise
+
+    elapsed = time.monotonic() - start
+    _log("INFO", "RESPONSE %s %s -> %s (%.2fs)", method, path, response.status_code, elapsed)
+
+    if response.status_code >= 400:
+        try:
+            body_parts = []
+            async for chunk in response.body_iterator:
+                body_parts.append(chunk)
+            resp_body = b"".join(body_parts).decode(errors="replace")[:2000]
+            _log("ERROR", "ERROR RESPONSE %s %s -> %s | %s", method, path, response.status_code, resp_body)
+            from starlette.responses import StreamingResponse
+            async def iter_body():
+                for part in body_parts:
+                    yield part
+            response = StreamingResponse(
+                content=iter_body(),
+                status_code=response.status_code,
+                headers=dict(response.headers),
+                media_type=response.media_type,
+            )
+        except Exception:
+            pass
+
+    return response
+
+
 # CORS configuration
 app.add_middleware(
     CORSMiddleware,
@@ -173,6 +260,36 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.exception_handler(HTTPException)
+async def http_exception_handler(request: Request, exc: HTTPException):
+    logger.error(
+        "HTTP error %s on %s %s: %s",
+        exc.status_code,
+        request.method,
+        request.url.path,
+        exc.detail,
+    )
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={"detail": exc.detail},
+    )
+
+
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    tb = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
+    logger.error(
+        "Unhandled exception on %s %s:\n%s",
+        request.method,
+        request.url.path,
+        tb,
+    )
+    return JSONResponse(
+        status_code=500,
+        content={"detail": str(exc)},
+    )
 
 # Include routers
 app.include_router(paperless.router, prefix="/api/paperless", tags=["Paperless"])
