@@ -68,7 +68,10 @@ async def _resolve_provider_credentials(provider: str) -> Dict[str, Any]:
         if llm.api_key:
             creds["api_key"] = llm.api_key
         if llm.api_base_url:
-            creds["api_base"] = llm.api_base_url
+            api_base = llm.api_base_url.rstrip("/")
+            if provider in ("lm_studio", "vllm") and not api_base.endswith("/v1"):
+                api_base = f"{api_base}/v1"
+            creds["api_base"] = api_base
     if provider in _PROVIDER_EXTRA_HEADERS:
         creds["extra_headers"] = _PROVIDER_EXTRA_HEADERS[provider]
     return creds
