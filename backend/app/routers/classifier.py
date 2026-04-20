@@ -816,8 +816,23 @@ async def analyze_document(
     service: DocumentClassifierService = Depends(_get_service),
 ):
     """Analyze a single document and return classification proposals."""
-    result = await service.classify_document(document_id)
-    return asdict(result)
+    try:
+        result = await service.classify_document(document_id)
+        if result.error:
+            logger.error(
+                "Analyze failed for document_id=%s: %s",
+                document_id, result.error,
+            )
+            raise HTTPException(status_code=500, detail=result.error)
+        return asdict(result)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(
+            "Analyze failed for document_id=%s: %s",
+            document_id, e, exc_info=True,
+        )
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 class BenchmarkSlot(BaseModel):

@@ -243,18 +243,12 @@ class DocumentClassifierService:
         """Create a provider instance from the central LLMProvider table."""
         model = model_override or await get_setting(LLM_KEY_CLASSIFIER_MODEL, self.db)
 
-        if provider_name == "openai":
-            return LitellmToolCallingProvider(model=model, provider="openai", tool_executor=tool_executor)
-        elif provider_name == "mistral":
-            return LitellmToolCallingProvider(model=model, provider="mistral", tool_executor=tool_executor, provider_label="Mistral")
-        elif provider_name == "openrouter":
-            return LitellmToolCallingProvider(model=model, provider="openrouter", tool_executor=tool_executor, provider_label="OpenRouter")
-        elif provider_name == "ollama":
+        if provider_name == "ollama":
             return LitellmOllamaProvider(model=model, tool_executor=tool_executor)
-        elif provider_name == "anthropic":
-            return LitellmToolCallingProvider(model=model, provider="anthropic", tool_executor=tool_executor, provider_label="Anthropic")
-        else:
-            raise ValueError(f"Unknown provider: {provider_name}")
+
+        from app.services.llm_service import PROVIDER_DISPLAY_NAMES
+        label = PROVIDER_DISPLAY_NAMES.get(provider_name, provider_name.replace("_", " ").title())
+        return LitellmToolCallingProvider(model=model, provider=provider_name, tool_executor=tool_executor, provider_label=label)
 
     async def _get_active_classifier_provider_name(self) -> str:
         """Alias for backward compat."""
