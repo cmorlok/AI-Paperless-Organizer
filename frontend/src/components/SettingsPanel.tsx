@@ -17,6 +17,28 @@ const LOCAL_PROVIDERS = ['ollama', 'lm_studio', 'llamafile', 'oobabooga', 'local
 // Popular providers for grouped dropdown
 const POPULAR_PROVIDERS = ['openai', 'anthropic', 'gemini', 'mistral', 'openrouter', 'ollama', 'lm_studio', 'vllm']
 
+// Default ports for local LLM providers
+const PROVIDER_DEFAULT_PORTS: Record<string, number> = {
+  ollama: 11434,
+  lm_studio: 1234,
+  vllm: 8000,
+  hosted_vllm: 8000,
+  llamafile: 8080,
+  oobabooga: 5000,
+  localai: 8080,
+  docker_model_runner: 8000,
+  aiohttp_openai: 8000,
+}
+
+// Generate default URL for a local provider using host.docker.internal
+function getDefaultBaseUrl(providerName: string): string {
+  const port = PROVIDER_DEFAULT_PORTS[providerName]
+  if (port) {
+    return `http://host.docker.internal:${port}`
+  }
+  return ''
+}
+
 export default function SettingsPanel() {
   // Paperless Settings
   const [paperlessUrl, setPaperlessUrl] = useState('')
@@ -254,7 +276,7 @@ export default function SettingsPanel() {
         const existingConfig = dbProvidersData.find(p => p.name === defaultProvider)
         setSelectedProviderEdits({
           api_key: existingConfig?.api_key === '***' ? '' : (existingConfig?.api_key || ''),
-          api_base_url: existingConfig?.api_base_url || '',
+          api_base_url: existingConfig?.api_base_url || getDefaultBaseUrl(defaultProvider),
         })
       }
 
@@ -414,7 +436,7 @@ export default function SettingsPanel() {
               const existingConfig = dbProviders.find(p => p.name === providerName)
               setSelectedProviderEdits({
                 api_key: existingConfig?.api_key === '***' ? '' : (existingConfig?.api_key || ''),
-                api_base_url: existingConfig?.api_base_url || '',
+                api_base_url: existingConfig?.api_base_url || getDefaultBaseUrl(providerName),
               })
             }}
             className="input w-full"
@@ -502,7 +524,7 @@ export default function SettingsPanel() {
                   type="url"
                   value={selectedProviderEdits.api_base_url}
                   onChange={(e) => setSelectedProviderEdits(prev => ({ ...prev, api_base_url: e.target.value }))}
-                  placeholder={LOCAL_PROVIDERS.includes(selectedProviderName) ? 'http://localhost:11434' : 'https://api.openai.com'}
+                  placeholder={LOCAL_PROVIDERS.includes(selectedProviderName) ? (getDefaultBaseUrl(selectedProviderName) || 'http://localhost:PORT') : 'https://api.openai.com'}
                   className="input w-full text-sm"
                 />
               </div>
