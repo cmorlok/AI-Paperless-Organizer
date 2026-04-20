@@ -7,7 +7,7 @@ import time
 import logging
 from typing import Dict, Any, List, Optional
 
-from app.services.llm_service import llm_completion
+from app.services.llm_service import llm_completion, build_ollama_params
 
 from app.services.classifier.base_provider import (
     BaseClassifierProvider, ClassificationResult, DocumentContext,
@@ -918,21 +918,13 @@ class LitellmOllamaProvider(BaseClassifierProvider):
         if user_message:
             messages.append({"role": "user", "content": user_message})
 
-        # Per D-01: Ollama-specific params go in extra_body.
-        # format/json_schema also passed via extra_body for Ollama structured output.
-        extra_body: Dict[str, Any] = {
-            "options": {
-                "temperature": 0.1,
-                "num_ctx": 16384,
-                "num_predict": max_tokens,
-                "seed": random.randint(1, 2**31 - 1),
-            },
-            "keep_alive": keep_alive,
-        }
-        if json_schema is not None:
-            extra_body["format"] = json_schema
-        else:
-            extra_body["format"] = "json"
+        extra_body = build_ollama_params(
+            num_predict=max_tokens,
+            keep_alive=keep_alive,
+            seed=random.randint(1, 2**31 - 1),
+            json_schema=json_schema,
+            json_output=True,
+        )
 
         try:
             response = await llm_completion(
@@ -995,20 +987,14 @@ class LitellmOllamaProvider(BaseClassifierProvider):
         raw_prompt = "\n".join(prompt_parts)
 
         # Per D-01: think=False suppresses thinking at top level per CONTEXT.md
-        extra_body: Dict[str, Any] = {
-            "options": {
-                "temperature": 0.1,
-                "num_ctx": 16384,
-                "num_predict": max(max_tokens, 1500),
-                "seed": random.randint(1, 2**31 - 1),
-            },
-            "keep_alive": keep_alive,
-            "think": False,  # D-01: suppress thinking at top level per CONTEXT.md
-        }
-        if json_schema is not None:
-            extra_body["format"] = json_schema
-        else:
-            extra_body["format"] = "json"
+        extra_body = build_ollama_params(
+            num_predict=max(max_tokens, 1500),
+            keep_alive=keep_alive,
+            seed=random.randint(1, 2**31 - 1),
+            think=False,
+            json_schema=json_schema,
+            json_output=True,
+        )
 
         messages = [{"role": "user", "content": raw_prompt}]
 

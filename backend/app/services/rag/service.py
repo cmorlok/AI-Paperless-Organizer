@@ -10,7 +10,7 @@ from app.services.rag.search_engine import SearchEngine, SearchResult
 from app.services.rag.indexer import Indexer
 from app.services.rag.rerank_service import RerankService
 from app.services import ollama_lock
-from app.services.llm_service import llm_completion
+from app.services.llm_service import llm_completion, build_ollama_params
 
 logger = logging.getLogger(__name__)
 
@@ -456,19 +456,13 @@ class RAGService:
         model_name = config.chat_model or "gpt-4o-mini"
         provider_name = getattr(config, "chat_model_provider", "openai") or "openai"
 
-        # Per D-01: Ollama-specific params via extra_body
-        extra_body: Dict[str, Any] = {
-            "options": {
-                "temperature": 0.2,
-                "num_ctx": max(8192, (getattr(config, "max_context_tokens", 4000) or 4000) * 2),
-            },
-        }
-
-        # Determine if this is an Ollama call
         is_ollama = provider_name == "ollama"
-        if is_ollama:
-            extra_body["keep_alive"] = "10m"
-            extra_body["think"] = False
+        extra_body: Dict[str, Any] = build_ollama_params(
+            temperature=0.2,
+            num_ctx=max(8192, (getattr(config, "max_context_tokens", 4000) or 4000) * 2),
+            keep_alive="10m",
+            think=False,
+        ) if is_ollama else {}
 
         try:
             if is_ollama:
@@ -549,13 +543,9 @@ class RAGService:
         model_name = config.chat_model or "gpt-4o-mini"
         provider_name = getattr(config, "chat_model_provider", "openai") or "openai"
 
-        extra_body: Dict[str, Any] = {}
-        if provider_name == "ollama":
-            extra_body = {
-                "options": {"temperature": 0, "num_ctx": 4096},
-                "keep_alive": "5m",
-                "think": False,
-            }
+        extra_body: Dict[str, Any] = build_ollama_params(
+            temperature=0, num_ctx=4096, keep_alive="5m", think=False,
+        ) if provider_name == "ollama" else {}
 
         try:
             result = await llm_completion(
@@ -564,7 +554,7 @@ class RAGService:
                 messages=messages,
                 temperature=0.0,
                 max_tokens=200,
-                extra_body=extra_body if extra_body else None,
+                extra_body=extra_body or None,
             )
             rewritten = (result.choices[0].message.content or "").strip()
             # Strip any markdown fences or explanatory text

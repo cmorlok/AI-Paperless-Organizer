@@ -40,6 +40,41 @@ async def _resolve_provider_credentials(provider: str) -> Dict[str, Any]:
     return creds
 
 
+def build_ollama_params(
+    temperature: float = 0.1,
+    num_ctx: int = 16384,
+    num_predict: Optional[int] = None,
+    keep_alive: str = "5m",
+    think: Optional[bool] = None,
+    json_schema: Optional[Dict[str, Any]] = None,
+    json_output: bool = False,
+    seed: Optional[int] = None,
+    repeat_penalty: Optional[float] = None,
+) -> Dict[str, Any]:
+    """Build the extra_body dict for Ollama calls via LiteLLM.
+
+    Per D-01: model params go in extra_body['options'].
+    'keep_alive' and 'think' are top-level keys.
+    'format' carries a JSON schema or the string "json" for structured output.
+    """
+    options: Dict[str, Any] = {"temperature": temperature, "num_ctx": num_ctx}
+    if num_predict is not None:
+        options["num_predict"] = num_predict
+    if seed is not None:
+        options["seed"] = seed
+    if repeat_penalty is not None:
+        options["repeat_penalty"] = repeat_penalty
+
+    body: Dict[str, Any] = {"options": options, "keep_alive": keep_alive}
+    if think is not None:
+        body["think"] = think
+    if json_schema is not None:
+        body["format"] = json_schema
+    elif json_output:
+        body["format"] = "json"
+    return body
+
+
 async def llm_completion(
     model: str,
     messages: List[Dict[str, Any]],
