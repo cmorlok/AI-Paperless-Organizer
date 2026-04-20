@@ -192,15 +192,24 @@ async def update_config(request: ConfigUpdate):
 async def rag_health():
     service = get_rag_service()
     config = await service.get_config_dict()
-    from app.services.rag.embedding_service import EmbeddingService
-    embed_service = EmbeddingService(
-        provider=config["embedding_provider"],
-        model=config["embedding_model"],
-        api_base=config["ollama_base_url"],
-    )
-    health = await embed_service.check_health()
     index_status = await service.indexer.get_status()
     return {
-        "embedding": health,
+        "embedding": await _probe_embedding(config),
         "index": index_status,
     }
+
+
+async def _probe_embedding(config: dict) -> dict:
+    from app.services.llm_service import llm_embedding
+    provider = config["embedding_provider"]
+    model = config["embedding_model"]
+    try:
+        await llm_embedding(
+            model=model,
+            provider=provider,
+            input=["test"],
+            api_base=config.get("ollama_base_url") or None,
+        )
+        return {"healthy": True, "provider": provider, "model": model}
+    except Exception as e:
+        return {"healthy": False, "provider": provider, "model": model, "error": str(e)}

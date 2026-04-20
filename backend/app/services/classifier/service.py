@@ -248,20 +248,20 @@ class DocumentClassifierService:
             if not llm.api_key:
                 raise ValueError("OpenAI API key not configured. Set it in Settings → LLM.")
             return LitellmToolCallingProvider(
-                api_key=llm.api_key, model=model, tool_executor=tool_executor,
+                api_key=llm.api_key, model=model, provider="openai", tool_executor=tool_executor,
             )
         elif provider_name == "mistral":
             if not llm.api_key:
                 raise ValueError("Mistral API key not configured. Set it in Settings → LLM.")
             return LitellmToolCallingProvider(
-                api_key=llm.api_key, model=model, tool_executor=tool_executor,
+                api_key=llm.api_key, model=model, provider="mistral", tool_executor=tool_executor,
                 base_url="https://api.mistral.ai/v1", provider_label="Mistral",
             )
         elif provider_name == "openrouter":
             if not llm.api_key:
                 raise ValueError("OpenRouter API key not configured. Set it in Settings → LLM.")
             return LitellmToolCallingProvider(
-                api_key=llm.api_key, model=model, tool_executor=tool_executor,
+                api_key=llm.api_key, model=model, provider="openrouter", tool_executor=tool_executor,
                 base_url="https://openrouter.ai/api/v1", provider_label="OpenRouter",
                 extra_headers={"HTTP-Referer": "https://github.com/syberx/AI-Paperless-Organizer"},
             )
@@ -274,7 +274,7 @@ class DocumentClassifierService:
             if not llm.api_key:
                 raise ValueError("Anthropic API key not configured. Set it in Settings → LLM.")
             return LitellmToolCallingProvider(
-                api_key=llm.api_key, model=model, tool_executor=tool_executor,
+                api_key=llm.api_key, model=model, provider="anthropic", tool_executor=tool_executor,
                 base_url="https://api.anthropic.com/v1", provider_label="Anthropic",
             )
         else:

@@ -630,7 +630,8 @@ class OcrService:
                     extra_body["think"] = False  # D-01: suppress thinking at top level
 
                 response = await llm_completion(
-                    model=f"ollama/{self.model}",
+                    model=self.model,
+                    provider="ollama",
                     messages=[
                         {"role": "system", "content": system_msg},
                         {"role": "user",   "content": user_content},

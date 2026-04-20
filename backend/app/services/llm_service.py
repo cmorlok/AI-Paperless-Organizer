@@ -21,6 +21,7 @@ logger = logging.getLogger(__name__)
 async def llm_completion(
     model: str,
     messages: List[Dict[str, Any]],
+    provider: Optional[str] = None,
     api_key: Optional[str] = None,
     api_base: Optional[str] = None,
     temperature: float = 0.1,
@@ -28,6 +29,8 @@ async def llm_completion(
     **kwargs,
 ):
     """Wrapper around litellm.acompletion with credentials injection."""
+    if provider and "/" not in model:
+        model = f"{provider}/{model}"
     litellm_kwargs = {
         "model": model,
         "messages": messages,
@@ -45,11 +48,14 @@ async def llm_completion(
 async def llm_embedding(
     model: str,
     input: List[str],
+    provider: Optional[str] = None,
     api_key: Optional[str] = None,
     api_base: Optional[str] = None,
     **kwargs,
 ) -> List[List[float]]:
     """Wrapper around litellm.aembedding with credentials injection."""
+    if provider and "/" not in model:
+        model = f"{provider}/{model}"
     litellm_kwargs = {
         "model": model,
         "input": input,
@@ -330,21 +336,14 @@ class LitellmService:
         if not model:
             raise ValueError("No model specified")
 
-        # Build litellm completion kwargs
-        kwargs = {
-            "model": model,
-            "messages": [{"role": "user", "content": prompt}],
-            "temperature": 0.1,
-        }
-
-        # Add provider credentials if available
-        if self.provider:
-            if self.provider.api_key:
-                kwargs["api_key"] = self.provider.api_key
-            if self.provider.api_base_url:
-                kwargs["api_base"] = self.provider.api_base_url
-
-        response = await llm_completion(**kwargs)
+        response = await llm_completion(
+            model=model,
+            messages=[{"role": "user", "content": prompt}],
+            provider=self.provider.name if self.provider else None,
+            api_key=self.provider.api_key if self.provider else None,
+            api_base=self.provider.api_base_url if self.provider else None,
+            temperature=0.1,
+        )
         return (response.choices[0].message.content or "").strip()
 
     async def test_connection(self) -> Dict:

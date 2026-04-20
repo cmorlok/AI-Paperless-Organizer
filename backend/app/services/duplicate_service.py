@@ -524,7 +524,8 @@ class DuplicateService:
 
             # Per D-01: Ollama-specific params go in extra_body
             response = await llm_completion(
-                model=f"ollama/{model}",
+                model=model,
+                provider="ollama",
                 messages=[{"role": "user", "content": prompt}],
                 api_base=ollama_url,
                 extra_body={

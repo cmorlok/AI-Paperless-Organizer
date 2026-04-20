@@ -469,7 +469,6 @@ class RAGService:
         # Determine if this is an Ollama call
         is_ollama = provider_name == "ollama"
         if is_ollama:
-            model_name = f"ollama/{model_name}"
             extra_body["keep_alive"] = "10m"
             extra_body["think"] = False
 
@@ -485,6 +484,7 @@ class RAGService:
             try:
                 stream = await llm_completion(
                     model=model_name,
+                    provider=provider_name,
                     messages=messages,
                     stream=True,
                     extra_body=extra_body,
@@ -553,7 +553,6 @@ class RAGService:
 
         extra_body: Dict[str, Any] = {}
         if provider_name == "ollama":
-            model_name = f"ollama/{model_name}"
             extra_body = {
                 "options": {"temperature": 0, "num_ctx": 4096},
                 "keep_alive": "5m",
@@ -563,6 +562,7 @@ class RAGService:
         try:
             result = await llm_completion(
                 model=model_name,
+                provider=provider_name,
                 messages=messages,
                 temperature=0.0,
                 max_tokens=200,

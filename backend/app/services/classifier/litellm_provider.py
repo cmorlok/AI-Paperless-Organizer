@@ -105,18 +105,20 @@ class LitellmToolCallingProvider(BaseClassifierProvider):
     def __init__(
         self,
         api_key: str,
-        model: str = "gpt-4o-mini",
+        model: str,
+        provider: str,
         tool_executor: Optional[ToolExecutor] = None,
         base_url: Optional[str] = None,
-        provider_label: str = "OpenAI",
+        provider_label: str = "",
         extra_headers: Optional[Dict[str, str]] = None,
     ):
         self.model = model
+        self.provider = provider
         self.api_key = api_key
         self.base_url = base_url
         self.extra_headers = extra_headers
         self.tool_executor = tool_executor
-        self._provider_label = provider_label
+        self._provider_label = provider_label or provider
 
     def get_name(self) -> str:
         return f"{self._provider_label} ({self.model})"
@@ -128,6 +130,7 @@ class LitellmToolCallingProvider(BaseClassifierProvider):
         try:
             response = await llm_completion(
                 model=self.model,
+                provider=self.provider,
                 messages=[{"role": "user", "content": "Ping"}],
                 api_key=self.api_key,
                 api_base=self.base_url,
@@ -204,6 +207,7 @@ class LitellmToolCallingProvider(BaseClassifierProvider):
                     call_kwargs["tools"] = active_tools
 
                 litellm_kwargs = dict(call_kwargs)
+                litellm_kwargs["provider"] = self.provider
                 litellm_kwargs["api_key"] = self.api_key
                 if self.base_url:
                     litellm_kwargs["api_base"] = self.base_url
@@ -948,7 +952,8 @@ class LitellmOllamaProvider(BaseClassifierProvider):
 
         try:
             response = await llm_completion(
-                model=f"ollama/{self.model}",
+                model=self.model,
+                provider="ollama",
                 messages=messages,
                 api_base=self.host,
                 extra_body=extra_body,
@@ -969,7 +974,8 @@ class LitellmOllamaProvider(BaseClassifierProvider):
                 logger.warning(f"Ollama schema enforcement rejected, retrying without schema: {e}")
                 extra_body["format"] = "json"
                 response = await llm_completion(
-                    model=f"ollama/{self.model}",
+                    model=self.model,
+                    provider="ollama",
                     messages=messages,
                     api_base=self.host,
                     extra_body=extra_body,
@@ -1026,7 +1032,8 @@ class LitellmOllamaProvider(BaseClassifierProvider):
 
         try:
             response = await llm_completion(
-                model=f"ollama/{self.model}",
+                model=self.model,
+                provider="ollama",
                 messages=messages,
                 api_base=self.host,
                 extra_body=extra_body,
@@ -1044,7 +1051,8 @@ class LitellmOllamaProvider(BaseClassifierProvider):
                     logger.warning(f"Ollama schema enforcement rejected in generate, retrying without schema: {e}")
                     extra_body["format"] = "json"
                     response = await llm_completion(
-                        model=f"ollama/{self.model}",
+                        model=self.model,
+                        provider="ollama",
                         messages=messages,
                         api_base=self.host,
                         extra_body=extra_body,
