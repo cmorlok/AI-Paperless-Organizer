@@ -419,7 +419,6 @@ class DuplicateService:
 
         # Load LLM config
         chat_model = await self._get_chat_model()
-        ollama_url = await self._get_ollama_url()
 
         # Load cached extractions
         cached: Dict[int, Dict] = {}
@@ -458,7 +457,7 @@ class DuplicateService:
             content_trimmed = content[:3000]
 
             extraction = await self._extract_invoice_data(
-                content_trimmed, chat_model, ollama_url
+                content_trimmed, chat_model
             )
             if extraction:
                 extractions[doc_id] = extraction
@@ -504,7 +503,7 @@ class DuplicateService:
         return results
 
     async def _extract_invoice_data(
-        self, content: str, model: str, ollama_url: str
+        self, content: str, model: str,
     ) -> Optional[Dict]:
         """Extract invoice number and amount from document content via LiteLLM."""
         got = await ollama_acquire("duplicates", timeout=120)
@@ -527,7 +526,6 @@ class DuplicateService:
                 model=model,
                 provider="ollama",
                 messages=[{"role": "user", "content": prompt}],
-                api_base=ollama_url,
                 extra_body={
                     "options": {
                         "temperature": 0,
@@ -628,17 +626,6 @@ class DuplicateService:
         if config and config.chat_model:
             return config.chat_model
         return "qwen3.5:4b"
-
-    async def _get_ollama_url(self) -> str:
-        """Get the configured Ollama URL from RagConfig."""
-        async with async_session() as db:
-            result = await db.execute(
-                sa_select(RagConfig).where(RagConfig.id == 1)
-            )
-            config = result.scalar_one_or_none()
-        if config and config.ollama_base_url:
-            return config.ollama_base_url.rstrip("/")
-        return "http://host.docker.internal:11434"
 
     async def get_document_types(self, pl_client) -> List[Dict]:
         """Proxy to PaperlessClient.get_document_types()."""

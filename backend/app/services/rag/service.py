@@ -2,7 +2,6 @@ import json
 import logging
 from typing import AsyncGenerator, Optional, Dict, Any, List, Tuple
 
-import httpx
 from sqlalchemy import select as sa_select, func as sa_func, delete as sa_delete
 from app.database import async_session
 from app.models.rag import RagConfig, RagChatSession, RagChatMessage
@@ -47,7 +46,6 @@ class RAGService:
         return EmbeddingService(
             provider=config.embedding_provider,
             model=config.embedding_model,
-            api_base=config.ollama_base_url,
         )
 
     async def search(
@@ -656,7 +654,6 @@ class RAGService:
         return {
             "embedding_provider": config.embedding_provider,
             "embedding_model": config.embedding_model,
-            "ollama_base_url": config.ollama_base_url,
             "chunk_size": config.chunk_size,
             "chunk_overlap": config.chunk_overlap,
             "bm25_weight": config.bm25_weight,
@@ -682,7 +679,7 @@ class RAGService:
                 db.add(config)
 
             allowed = {
-                "embedding_provider", "embedding_model", "ollama_base_url",
+                "embedding_provider", "embedding_model",
                 "chunk_size", "chunk_overlap", "bm25_weight", "semantic_weight",
                 "max_sources", "max_context_tokens", "chat_model_provider",
                 "chat_model", "chat_system_prompt", "auto_index_enabled",

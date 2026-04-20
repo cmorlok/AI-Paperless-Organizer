@@ -15,7 +15,6 @@ class RagConfig(Base):
     id = Column(Integer, primary_key=True, default=1)
     embedding_provider = Column(String(100), default="ollama")
     embedding_model = Column(String(200), default="mxbai-embed-large")
-    ollama_base_url = Column(String(500), default="http://localhost:11434")
     chunk_size = Column(Integer, default=500)
     chunk_overlap = Column(Integer, default=50)
     bm25_weight = Column(Float, default=0.3)

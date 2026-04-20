@@ -241,42 +241,18 @@ class DocumentClassifierService:
         model_override: Optional[str] = None,
     ) -> BaseClassifierProvider:
         """Create a provider instance from the central LLMProvider table."""
-        llm = await self._get_llm_provider(provider_name)
         model = model_override or await get_setting(LLM_KEY_CLASSIFIER_MODEL, self.db)
 
         if provider_name == "openai":
-            if not llm.api_key:
-                raise ValueError("OpenAI API key not configured. Set it in Settings → LLM.")
-            return LitellmToolCallingProvider(
-                api_key=llm.api_key, model=model, provider="openai", tool_executor=tool_executor,
-            )
+            return LitellmToolCallingProvider(model=model, provider="openai", tool_executor=tool_executor)
         elif provider_name == "mistral":
-            if not llm.api_key:
-                raise ValueError("Mistral API key not configured. Set it in Settings → LLM.")
-            return LitellmToolCallingProvider(
-                api_key=llm.api_key, model=model, provider="mistral", tool_executor=tool_executor,
-                base_url="https://api.mistral.ai/v1", provider_label="Mistral",
-            )
+            return LitellmToolCallingProvider(model=model, provider="mistral", tool_executor=tool_executor, provider_label="Mistral")
         elif provider_name == "openrouter":
-            if not llm.api_key:
-                raise ValueError("OpenRouter API key not configured. Set it in Settings → LLM.")
-            return LitellmToolCallingProvider(
-                api_key=llm.api_key, model=model, provider="openrouter", tool_executor=tool_executor,
-                base_url="https://openrouter.ai/api/v1", provider_label="OpenRouter",
-                extra_headers={"HTTP-Referer": "https://github.com/syberx/AI-Paperless-Organizer"},
-            )
+            return LitellmToolCallingProvider(model=model, provider="openrouter", tool_executor=tool_executor, provider_label="OpenRouter")
         elif provider_name == "ollama":
-            host = llm.api_base_url or "http://localhost:11434"
-            return LitellmOllamaProvider(
-                host=host, model=model, tool_executor=tool_executor,
-            )
+            return LitellmOllamaProvider(model=model, tool_executor=tool_executor)
         elif provider_name == "anthropic":
-            if not llm.api_key:
-                raise ValueError("Anthropic API key not configured. Set it in Settings → LLM.")
-            return LitellmToolCallingProvider(
-                api_key=llm.api_key, model=model, provider="anthropic", tool_executor=tool_executor,
-                base_url="https://api.anthropic.com/v1", provider_label="Anthropic",
-            )
+            return LitellmToolCallingProvider(model=model, provider="anthropic", tool_executor=tool_executor, provider_label="Anthropic")
         else:
             raise ValueError(f"Unknown provider: {provider_name}")
 

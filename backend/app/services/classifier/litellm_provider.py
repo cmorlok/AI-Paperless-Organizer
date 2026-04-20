@@ -7,8 +7,6 @@ import time
 import logging
 from typing import Dict, Any, List, Optional
 
-import httpx
-
 from app.services.llm_service import llm_completion
 
 from app.services.classifier.base_provider import (
@@ -104,19 +102,13 @@ class LitellmToolCallingProvider(BaseClassifierProvider):
 
     def __init__(
         self,
-        api_key: str,
         model: str,
         provider: str,
         tool_executor: Optional[ToolExecutor] = None,
-        base_url: Optional[str] = None,
         provider_label: str = "",
-        extra_headers: Optional[Dict[str, str]] = None,
     ):
         self.model = model
         self.provider = provider
-        self.api_key = api_key
-        self.base_url = base_url
-        self.extra_headers = extra_headers
         self.tool_executor = tool_executor
         self._provider_label = provider_label or provider
 
@@ -128,12 +120,10 @@ class LitellmToolCallingProvider(BaseClassifierProvider):
 
     async def test_connection(self) -> Dict[str, Any]:
         try:
-            response = await llm_completion(
+            await llm_completion(
                 model=self.model,
                 provider=self.provider,
                 messages=[{"role": "user", "content": "Ping"}],
-                api_key=self.api_key,
-                api_base=self.base_url,
                 max_tokens=5,
             )
             return {"connected": True, "model": self.model}
@@ -208,11 +198,6 @@ class LitellmToolCallingProvider(BaseClassifierProvider):
 
                 litellm_kwargs = dict(call_kwargs)
                 litellm_kwargs["provider"] = self.provider
-                litellm_kwargs["api_key"] = self.api_key
-                if self.base_url:
-                    litellm_kwargs["api_base"] = self.base_url
-                if self.extra_headers:
-                    litellm_kwargs["extra_headers"] = self.extra_headers
                 response = await llm_completion(**litellm_kwargs)
 
                 usage = response.usage
@@ -406,11 +391,9 @@ class LitellmOllamaProvider(BaseClassifierProvider):
 
     def __init__(
         self,
-        host: str = "http://localhost:11434",
         model: str = "qwen2.5:7b",
         tool_executor: Optional[ToolExecutor] = None,
     ):
-        self.host = host.rstrip("/")
         self.model = model
         self.tool_executor = tool_executor
         self._is_thinking = any(
@@ -429,12 +412,13 @@ class LitellmOllamaProvider(BaseClassifierProvider):
 
     async def test_connection(self) -> Dict[str, Any]:
         try:
-            async with httpx.AsyncClient(timeout=10.0) as client:
-                resp = await client.get(f"{self.host}/api/tags")
-                resp.raise_for_status()
-                models = [m.get("name", "") for m in resp.json().get("models", [])]
-                found = any(self.model in m or m.startswith(self.model) for m in models)
-                return {"connected": True, "model_available": found, "model": self.model}
+            await llm_completion(
+                model=self.model,
+                provider="ollama",
+                messages=[{"role": "user", "content": "Ping"}],
+                max_tokens=5,
+            )
+            return {"connected": True, "model": self.model}
         except Exception as e:
             return {"connected": False, "error": str(e)}
 
@@ -955,7 +939,6 @@ class LitellmOllamaProvider(BaseClassifierProvider):
                 model=self.model,
                 provider="ollama",
                 messages=messages,
-                api_base=self.host,
                 extra_body=extra_body,
                 timeout=OLLAMA_CALL_TIMEOUT,
             )
@@ -977,7 +960,6 @@ class LitellmOllamaProvider(BaseClassifierProvider):
                     model=self.model,
                     provider="ollama",
                     messages=messages,
-                    api_base=self.host,
                     extra_body=extra_body,
                     timeout=OLLAMA_CALL_TIMEOUT,
                 )
@@ -1035,7 +1017,6 @@ class LitellmOllamaProvider(BaseClassifierProvider):
                 model=self.model,
                 provider="ollama",
                 messages=messages,
-                api_base=self.host,
                 extra_body=extra_body,
                 timeout=OLLAMA_CALL_TIMEOUT,
             )
@@ -1054,7 +1035,6 @@ class LitellmOllamaProvider(BaseClassifierProvider):
                         model=self.model,
                         provider="ollama",
                         messages=messages,
-                        api_base=self.host,
                         extra_body=extra_body,
                         timeout=OLLAMA_CALL_TIMEOUT,
                     )
@@ -1132,12 +1112,14 @@ class LitellmOllamaProvider(BaseClassifierProvider):
     async def _unload_model(self):
         """Unload model from GPU memory after classification."""
         try:
-            async with httpx.AsyncClient(timeout=10.0) as client:
-                await client.post(
-                    f"{self.host}/api/generate",
-                    json={"model": self.model, "keep_alive": 0},
-                )
-                logger.info(f"Ollama model '{self.model}' unloaded from GPU")
+            await llm_completion(
+                model=self.model,
+                provider="ollama",
+                messages=[{"role": "user", "content": ""}],
+                extra_body={"keep_alive": 0},
+                max_tokens=1,
+            )
+            logger.info(f"Ollama model '{self.model}' unloaded from GPU")
         except Exception as e:
             logger.warning(f"Could not unload Ollama model: {e}")
 

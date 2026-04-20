@@ -62,7 +62,6 @@ class IndexRequest(BaseModel):
 class ConfigUpdate(BaseModel):
     embedding_provider: Optional[str] = None
     embedding_model: Optional[str] = None
-    ollama_base_url: Optional[str] = None
     chunk_size: Optional[int] = None
     chunk_overlap: Optional[int] = None
     bm25_weight: Optional[float] = None
@@ -208,7 +207,6 @@ async def _probe_embedding(config: dict) -> dict:
             model=model,
             provider=provider,
             input=["test"],
-            api_base=config.get("ollama_base_url") or None,
         )
         return {"healthy": True, "provider": provider, "model": model}
     except Exception as e:

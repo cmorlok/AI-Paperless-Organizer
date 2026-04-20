@@ -11,37 +11,56 @@ from fastapi import Depends
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.database import get_db
+from app.database import get_db, async_session
 from app.models import LLMProvider
 from app.models.settings_model import LLM_KEY_CLASSIFIER_MODEL, LLM_KEY_CLASSIFIER_PROVIDER
 
 logger = logging.getLogger(__name__)
+
+# Static extra headers injected per provider on every call.
+_PROVIDER_EXTRA_HEADERS: Dict[str, Dict[str, str]] = {
+    "openrouter": {"HTTP-Referer": "https://github.com/syberx/AI-Paperless-Organizer"},
+}
+
+
+async def _resolve_provider_credentials(provider: str) -> Dict[str, Any]:
+    """Look up api_key, api_base, and extra_headers for a provider from llm_providers table."""
+    async with async_session() as db:
+        result = await db.execute(select(LLMProvider).where(LLMProvider.name == provider))
+        llm = result.scalar_one_or_none()
+
+    creds: Dict[str, Any] = {}
+    if llm:
+        if llm.api_key:
+            creds["api_key"] = llm.api_key
+        if llm.api_base_url:
+            creds["api_base"] = llm.api_base_url
+    if provider in _PROVIDER_EXTRA_HEADERS:
+        creds["extra_headers"] = _PROVIDER_EXTRA_HEADERS[provider]
+    return creds
 
 
 async def llm_completion(
     model: str,
     messages: List[Dict[str, Any]],
     provider: Optional[str] = None,
-    api_key: Optional[str] = None,
-    api_base: Optional[str] = None,
     temperature: float = 0.1,
     stream: bool = False,
     **kwargs,
 ):
-    """Wrapper around litellm.acompletion with credentials injection."""
+    """Wrapper around litellm.acompletion. Resolves credentials from llm_providers table."""
     if provider and "/" not in model:
         model = f"{provider}/{model}"
-    litellm_kwargs = {
+    litellm_kwargs: Dict[str, Any] = {
         "model": model,
         "messages": messages,
         "temperature": temperature,
         "stream": stream,
         **kwargs,
     }
-    if api_key:
-        litellm_kwargs["api_key"] = api_key
-    if api_base:
-        litellm_kwargs["api_base"] = api_base
+    if provider:
+        for k, v in (await _resolve_provider_credentials(provider)).items():
+            litellm_kwargs.setdefault(k, v)
     return await litellm.acompletion(**litellm_kwargs)
 
 
@@ -49,22 +68,19 @@ async def llm_embedding(
     model: str,
     input: List[str],
     provider: Optional[str] = None,
-    api_key: Optional[str] = None,
-    api_base: Optional[str] = None,
     **kwargs,
 ) -> List[List[float]]:
-    """Wrapper around litellm.aembedding with credentials injection."""
+    """Wrapper around litellm.aembedding. Resolves credentials from llm_providers table."""
     if provider and "/" not in model:
         model = f"{provider}/{model}"
-    litellm_kwargs = {
+    litellm_kwargs: Dict[str, Any] = {
         "model": model,
         "input": input,
         **kwargs,
     }
-    if api_key:
-        litellm_kwargs["api_key"] = api_key
-    if api_base:
-        litellm_kwargs["api_base"] = api_base
+    if provider:
+        for k, v in (await _resolve_provider_credentials(provider)).items():
+            litellm_kwargs.setdefault(k, v)
     response = await litellm.aembedding(**litellm_kwargs)
     return [item.embedding for item in response.data]
 
@@ -340,8 +356,6 @@ class LitellmService:
             model=model,
             messages=[{"role": "user", "content": prompt}],
             provider=self.provider.name if self.provider else None,
-            api_key=self.provider.api_key if self.provider else None,
-            api_base=self.provider.api_base_url if self.provider else None,
             temperature=0.1,
         )
         return (response.choices[0].message.content or "").strip()
