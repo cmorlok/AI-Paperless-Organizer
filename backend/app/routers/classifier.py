@@ -9,8 +9,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from dataclasses import asdict
 
+from dishka.integrations.fastapi import inject
+from dishka import FromDishka, AsyncContainer
+from app.container import container as di_container
+
 from app.database import get_db
-from app.services.paperless_client import PaperlessClient, get_paperless_client
+from app.services.paperless_client import PaperlessClient
 from app.services.classifier.service import DocumentClassifierService
 from app.models.classifier import (
     ClassifierConfig, StoragePathProfile, CustomFieldMapping, ClassificationHistory,
@@ -93,21 +97,12 @@ class ApplyRequest(BaseModel):
     classification: Dict[str, Any]
 
 
-# --- Helper ---
-
-def _get_service(
-    db: AsyncSession = Depends(get_db),
-    paperless: PaperlessClient = Depends(get_paperless_client),
-) -> DocumentClassifierService:
-    from app.database import async_session
-    return DocumentClassifierService(paperless=paperless, session_factory=async_session)
-
-
 # --- Config ---
 
 @router.get("/config")
+@inject
 async def get_config(
-    service: DocumentClassifierService = Depends(_get_service),
+    service: FromDishka[DocumentClassifierService] = None,
     db: AsyncSession = Depends(get_db),
 ):
     """Get classifier configuration."""
@@ -166,9 +161,10 @@ async def get_config(
 
 
 @router.put("/config")
+@inject
 async def update_config(
     data: ClassifierConfigUpdate,
-    service: DocumentClassifierService = Depends(_get_service),
+    service: FromDishka[DocumentClassifierService] = None,
 ):
     """Update classifier configuration."""
     update = {k: v for k, v in data.model_dump().items() if v is not None}
@@ -188,9 +184,10 @@ async def get_prompt_defaults():
 # --- Statistics ---
 
 @router.get("/stats")
+@inject
 async def get_classifier_stats(
     db: AsyncSession = Depends(get_db),
-    client: PaperlessClient = Depends(get_paperless_client),
+    client: FromDishka[PaperlessClient] = None,
 ):
     """Get classification statistics: how many done, open, costs, etc."""
     from sqlalchemy import func as sa_func, case as sa_case
@@ -298,10 +295,11 @@ async def get_classifier_stats(
 # --- Next Unclassified Document ---
 
 @router.get("/next-unclassified")
+@inject
 async def get_next_unclassified(
     after_id: int = 0,
     db: AsyncSession = Depends(get_db),
-    client: PaperlessClient = Depends(get_paperless_client),
+    client: FromDishka[PaperlessClient] = None,
 ):
     """Find the next document ID that has not yet been applied/classified.
 
@@ -355,8 +353,9 @@ async def get_next_unclassified(
 # --- Cache Refresh ---
 
 @router.post("/refresh-cache")
+@inject
 async def refresh_paperless_cache(
-    client: PaperlessClient = Depends(get_paperless_client),
+    client: FromDishka[PaperlessClient] = None,
 ):
     """Force refresh all Paperless caches (tags, correspondents, types, paths)."""
     from app.services.cache import get_cache
@@ -378,8 +377,9 @@ async def refresh_paperless_cache(
 # --- Paperless Items (for filtering UI) ---
 
 @router.get("/tags")
+@inject
 async def get_tags_from_paperless(
-    client: PaperlessClient = Depends(get_paperless_client),
+    client: FromDishka[PaperlessClient] = None,
 ):
     """Fetch all tags from Paperless-ngx."""
     tags = await client.get_tags(use_cache=False)
@@ -387,8 +387,9 @@ async def get_tags_from_paperless(
 
 
 @router.get("/correspondents")
+@inject
 async def get_correspondents_from_paperless(
-    client: PaperlessClient = Depends(get_paperless_client),
+    client: FromDishka[PaperlessClient] = None,
 ):
     """Fetch all correspondents from Paperless-ngx."""
     correspondents = await client.get_correspondents(use_cache=False)
@@ -396,8 +397,9 @@ async def get_correspondents_from_paperless(
 
 
 @router.get("/document-types")
+@inject
 async def get_document_types_from_paperless(
-    client: PaperlessClient = Depends(get_paperless_client),
+    client: FromDishka[PaperlessClient] = None,
 ):
     """Fetch all document types from Paperless-ngx."""
     types = await client.get_document_types(use_cache=False)
@@ -636,8 +638,9 @@ async def test_ollama_connection(
 # --- Storage Path Profiles ---
 
 @router.get("/storage-paths")
+@inject
 async def get_storage_paths_from_paperless(
-    client: PaperlessClient = Depends(get_paperless_client),
+    client: FromDishka[PaperlessClient] = None,
 ):
     """Fetch storage paths from Paperless-ngx."""
     paths = await client.get_storage_paths(use_cache=False)
@@ -645,9 +648,10 @@ async def get_storage_paths_from_paperless(
 
 
 @router.get("/storage-path-profiles")
+@inject
 async def get_storage_path_profiles(
-    service: DocumentClassifierService = Depends(_get_service),
-    client: PaperlessClient = Depends(get_paperless_client),
+    service: FromDishka[DocumentClassifierService] = None,
+    client: FromDishka[PaperlessClient] = None,
 ):
     """Get all storage paths merged with saved profiles. Paths without a profile default to enabled=True."""
     all_paths = await client.get_storage_paths(use_cache=True)
@@ -673,9 +677,10 @@ async def get_storage_path_profiles(
 
 
 @router.put("/storage-path-profiles")
+@inject
 async def save_storage_path_profiles(
     profiles: List[StoragePathProfileUpdate],
-    service: DocumentClassifierService = Depends(_get_service),
+    service: FromDishka[DocumentClassifierService] = None,
 ):
     """Save/update storage path profiles."""
     saved = []
@@ -708,8 +713,9 @@ FIELD_TYPE_VALIDATION = {
 }
 
 @router.get("/custom-fields")
+@inject
 async def get_custom_fields_from_paperless(
-    client: PaperlessClient = Depends(get_paperless_client),
+    client: FromDishka[PaperlessClient] = None,
 ):
     """Fetch custom field definitions from Paperless-ngx."""
     fields = await client.get_custom_fields(use_cache=False)
@@ -717,9 +723,10 @@ async def get_custom_fields_from_paperless(
 
 
 @router.get("/custom-field-mappings")
+@inject
 async def get_custom_field_mappings(
-    service: DocumentClassifierService = Depends(_get_service),
-    client: PaperlessClient = Depends(get_paperless_client),
+    service: FromDishka[DocumentClassifierService] = None,
+    client: FromDishka[PaperlessClient] = None,
 ):
     """Get all Paperless custom fields merged with saved mappings."""
     all_fields = await client.get_custom_fields(use_cache=True)
@@ -749,9 +756,10 @@ async def get_custom_field_mappings(
 
 
 @router.put("/custom-field-mappings")
+@inject
 async def save_custom_field_mappings(
     mappings: List[CustomFieldMappingUpdate],
-    service: DocumentClassifierService = Depends(_get_service),
+    service: FromDishka[DocumentClassifierService] = None,
 ):
     """Save/update custom field mappings."""
     saved = []
@@ -764,9 +772,10 @@ async def save_custom_field_mappings(
 # --- Document Preview ---
 
 @router.get("/document/{document_id}/thumb")
+@inject
 async def get_document_thumbnail(
     document_id: int,
-    client: PaperlessClient = Depends(get_paperless_client),
+    client: FromDishka[PaperlessClient] = None,
 ):
     """Get document thumbnail (WebP image) from Paperless."""
     from fastapi.responses import Response
@@ -778,9 +787,10 @@ async def get_document_thumbnail(
 
 
 @router.get("/document/{document_id}/preview")
+@inject
 async def get_document_preview(
     document_id: int,
-    client: PaperlessClient = Depends(get_paperless_client),
+    client: FromDishka[PaperlessClient] = None,
 ):
     """Get document preview (PDF) from Paperless for inline display."""
     from fastapi.responses import Response
@@ -812,9 +822,10 @@ async def get_document_preview(
 # --- Classification ---
 
 @router.post("/analyze")
+@inject
 async def analyze_document(
     document_id: int,
-    service: DocumentClassifierService = Depends(_get_service),
+    service: FromDishka[DocumentClassifierService] = None,
 ):
     """Analyze a single document and return classification proposals."""
     try:
@@ -847,9 +858,10 @@ class BenchmarkRequest(BaseModel):
 
 
 @router.post("/benchmark")
+@inject
 async def benchmark_document(
     req: BenchmarkRequest,
-    service: DocumentClassifierService = Depends(_get_service),
+    service: FromDishka[DocumentClassifierService] = None,
 ):
     """Run classification with N provider/model combos in parallel."""
     return await service.benchmark_document(
@@ -859,9 +871,10 @@ async def benchmark_document(
 
 
 @router.post("/apply")
+@inject
 async def apply_classification(
     req: ApplyRequest,
-    service: DocumentClassifierService = Depends(_get_service),
+    service: FromDishka[DocumentClassifierService] = None,
 ):
     """Apply a classification to a document in Paperless."""
     result = await service.apply_classification(req.document_id, req.classification)
@@ -976,48 +989,35 @@ _auto_classify_state: Dict[str, Any] = {
 }
 
 
-async def _auto_classify_loop():
+async def _auto_classify_loop(container: AsyncContainer):
     """Background loop that classifies unprocessed documents."""
     import time
-    from app.database import async_session
     from app.services.ollama_lock import acquire as ollama_acquire, release as ollama_release, is_locked as ollama_is_locked, current_holder as ollama_holder
 
-    while _auto_classify_state["enabled"]:
-        _auto_classify_state["last_run"] = time.strftime("%Y-%m-%dT%H:%M:%S")
-        _auto_classify_state["running"] = False
+    async with container() as ctx:
+        client = await ctx.get(PaperlessClient)
+        service = await ctx.get(DocumentClassifierService)
 
-        try:
-            async with async_session() as db_sess:
-                from app.models.settings_model import PaperlessSettings
-                pl_q = await db_sess.execute(
-                    select(PaperlessSettings).where(PaperlessSettings.id == 1)
-                )
-                pl_settings = pl_q.scalars().first()
-                if not pl_settings or not pl_settings.is_configured:
-                    logger.warning("Auto-classify: Paperless nicht konfiguriert, warte...")
-                    _auto_classify_state["running"] = False
-                    await asyncio.sleep(60)
-                    continue
+        while _auto_classify_state["enabled"]:
+            _auto_classify_state["last_run"] = time.strftime("%Y-%m-%dT%H:%M:%S")
+            _auto_classify_state["running"] = False
 
-                client = PaperlessClient(
-                    base_url=pl_settings.url,
-                    api_token=pl_settings.api_token,
-                )
-                from app.database import async_session
-                service = DocumentClassifierService(paperless=client, session_factory=async_session)
+            try:
                 config = await service.get_config()
-
                 uses_ollama = config.active_provider == "ollama"
                 mode = getattr(config, "auto_classify_mode", "review") or "review"
                 interval = getattr(config, "auto_classify_interval", 5) or 5
 
-                # Find all applied document IDs
-                applied_q = await db_sess.execute(
-                    select(ClassificationHistory.document_id).where(
-                        ClassificationHistory.status.in_(["applied", "review", "pending"])
-                    ).distinct()
-                )
-                classified_ids = {r[0] for r in applied_q.all()}
+                # Find all applied document IDs using service's session_factory
+                classified_ids: set = set()
+                if service.session_factory is not None:
+                    async with service.session_factory() as db_sess:
+                        applied_q = await db_sess.execute(
+                            select(ClassificationHistory.document_id).where(
+                                ClassificationHistory.status.in_(["applied", "review", "pending"])
+                            ).distinct()
+                        )
+                        classified_ids = {r[0] for r in applied_q.all()}
 
                 # Fetch documents in batches to find unclassified ones
                 found_any = False
@@ -1101,23 +1101,14 @@ async def _auto_classify_loop():
                 if not found_any:
                     logger.info(f"Auto-classify: keine neuen Dokumente, warte {interval} min")
 
-        except Exception as e:
-            logger.error(f"Auto-classify loop error: {e}")
+            except Exception as e:
+                logger.error(f"Auto-classify loop error: {e}")
 
-        _auto_classify_state["running"] = False
-        _auto_classify_state["current_doc"] = None
+            _auto_classify_state["running"] = False
+            _auto_classify_state["current_doc"] = None
 
-        if _auto_classify_state["enabled"]:
-            interval = 5
-            try:
-                async with async_session() as db_sess:
-                    q = await db_sess.execute(select(ClassifierConfig).where(ClassifierConfig.id == 1))
-                    cfg = q.scalars().first()
-                    if cfg:
-                        interval = getattr(cfg, "auto_classify_interval", 5) or 5
-            except Exception:
-                pass
-            await asyncio.sleep(interval * 60)
+            if _auto_classify_state["enabled"]:
+                await asyncio.sleep(interval * 60)
 
 
 @router.post("/auto-classify/start")
@@ -1130,7 +1121,7 @@ async def start_auto_classify(db: AsyncSession = Depends(get_db)):
     _auto_classify_state["processed"] = 0
     _auto_classify_state["errors"] = 0
     _auto_classify_state["reviewed"] = 0
-    _auto_classify_state["task"] = asyncio.create_task(_auto_classify_loop())
+    _auto_classify_state["task"] = asyncio.create_task(_auto_classify_loop(di_container))
     logger.info("Auto-classify started")
 
     # Persist to DB so it auto-starts after restart
@@ -1214,10 +1205,11 @@ async def get_review_queue(db: AsyncSession = Depends(get_db)):
 
 
 @router.post("/review-queue/{entry_id}/approve")
+@inject
 async def approve_review_entry(
     entry_id: int,
     req: ApplyRequest,
-    service: DocumentClassifierService = Depends(_get_service),
+    service: FromDishka[DocumentClassifierService] = None,
     db: AsyncSession = Depends(get_db),
 ):
     """Approve a review entry: apply classification and mark as applied."""
@@ -1343,11 +1335,12 @@ class TagIdeaApproveRequest(BaseModel):
 
 
 @router.post("/tag-ideas/{entry_id}/approve")
+@inject
 async def approve_tag_idea(
     entry_id: int,
     req: TagIdeaApproveRequest,
     db: AsyncSession = Depends(get_db),
-    client: PaperlessClient = Depends(get_paperless_client),
+    client: FromDishka[PaperlessClient] = None,
 ):
     """Approve a single tag idea: create tag in Paperless and add to document."""
     import json as _json
@@ -1423,10 +1416,11 @@ async def dismiss_tag_idea(
 
 
 @router.post("/tag-ideas/{entry_id}/approve-all")
+@inject
 async def approve_all_tag_ideas(
     entry_id: int,
     db: AsyncSession = Depends(get_db),
-    client: PaperlessClient = Depends(get_paperless_client),
+    client: FromDishka[PaperlessClient] = None,
 ):
     """Approve ALL tag ideas for a single document."""
     import json as _json
@@ -1471,10 +1465,11 @@ async def approve_all_tag_ideas(
 
 
 @router.post("/tag-ideas/bulk-approve")
+@inject
 async def bulk_approve_tag_idea(
     req: TagIdeaApproveRequest,
     db: AsyncSession = Depends(get_db),
-    client: PaperlessClient = Depends(get_paperless_client),
+    client: FromDishka[PaperlessClient] = None,
 ):
     """Approve a specific tag across ALL documents that suggest it."""
     import json as _json
@@ -1562,11 +1557,12 @@ async def bulk_dismiss_tag_idea(
 
 
 @router.post("/tag-ideas/{entry_id}/assign-existing")
+@inject
 async def assign_existing_tag(
     entry_id: int,
     req: TagIdeaApproveRequest,
     db: AsyncSession = Depends(get_db),
-    client: PaperlessClient = Depends(get_paperless_client),
+    client: FromDishka[PaperlessClient] = None,
 ):
     """Assign an existing Paperless tag to a document from the tag-ideas view."""
     q = await db.execute(
