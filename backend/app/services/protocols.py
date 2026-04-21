@@ -126,12 +126,19 @@ class StatisticsService(Protocol):
     async def get_daily_trend(self, days: int = 7) -> List[Dict]: ...
 
 
+
 @runtime_checkable
 class OcrService(Protocol):
     """Protocol for OCR service."""
 
     @property
     def model(self) -> str: ...
+
+    @property
+    def max_image_size(self) -> int: ...
+
+    @staticmethod
+    def get_model_params(model_name: str) -> dict: ...
 
     async def watchdog_loop(self, paperless_client: PaperlessClient) -> None: ...
 
@@ -165,6 +172,16 @@ class OcrService(Protocol):
     def get_stats(self) -> List[Dict[str, Any]]: ...
 
     def get_current_url(self) -> str: ...
+
+    def _prepare_image_for_ollama(self, img: Any, max_size: int = None) -> bytes: ...
+
+    async def _ocr_single_image(
+        self,
+        image_bytes: bytes,
+        page_num: int = 0,
+        total_pages: int = 0,
+        timeout: float = 300.0,
+    ) -> str: ...
 
 
 @runtime_checkable
