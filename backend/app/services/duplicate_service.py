@@ -62,8 +62,9 @@ def _is_cancelled() -> bool:
 
 class DuplicateService:
 
-    def __init__(self, session_factory: Optional[Any] = None):
+    def __init__(self, session_factory, paperless_client):
         self.session_factory = session_factory or async_session
+        self.paperless_client = paperless_client
 
     async def scan_all(self, modes: List[str], similarity_threshold: float = 0.92):
         """Run selected scan modes as a background task.
@@ -87,19 +88,17 @@ class DuplicateService:
         _scan_state["cancel_requested"] = False
 
         try:
-            # Build a PaperlessClient from DB settings (with retry)
-            pl_client = None
+            # Use injected PaperlessClient (with retry)
+            pl_client = self.paperless_client
             for attempt in range(3):
                 try:
-                    pl_client = await self._get_paperless_client()
-                    # Test connection
                     await pl_client.test_connection()
                     break
                 except Exception as e:
                     logger.warning(f"Paperless connection attempt {attempt+1}/3 failed: {e}")
                     if attempt < 2:
                         await asyncio.sleep(5)
-            if pl_client is None:
+            else:
                 raise ConnectionError("Paperless-ngx nicht erreichbar nach 3 Versuchen")
 
             if "exact" in modes and not _is_cancelled():
@@ -592,24 +591,6 @@ class DuplicateService:
     # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
-
-    async def _get_paperless_client(self):
-        """Create a PaperlessClient from DB settings."""
-        from app.models import PaperlessSettings
-        from app.services.paperless_client import PaperlessClient
-
-        async with self.session_factory() as db:
-            result = await db.execute(
-                sa_select(PaperlessSettings).where(PaperlessSettings.id == 1)
-            )
-            settings = result.scalar_one_or_none()
-
-        if settings and settings.is_configured:
-            return PaperlessClient(
-                base_url=settings.url,
-                api_token=settings.api_token,
-            )
-        raise ValueError("Paperless-ngx is not configured")
 
     async def _build_correspondent_map(self, pl_client) -> Dict[int, str]:
         """Build a {id: name} map of correspondents."""
