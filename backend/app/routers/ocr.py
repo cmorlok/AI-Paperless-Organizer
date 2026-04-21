@@ -18,10 +18,9 @@ from app.database import get_db
 from dishka.integrations.fastapi import inject
 from dishka import FromDishka
 
-from app.services.paperless_client import PaperlessClient
-from app.services.ocr_service import OcrService, batch_state, watchdog_state, single_ocr_running, ocr_page_progress, load_review_queue, save_review_queue, load_ocr_ignore_list, save_ocr_ignore_list, load_ocr_error_list, save_ocr_error_list, load_ocr_error_counts, save_ocr_error_counts, DEFAULT_OLLAMA_URL, DEFAULT_OCR_MODEL
+from app.services.protocols import PaperlessClient, OcrService, LLMService as LLMProviderService
+from app.services.ocr_service import batch_state, watchdog_state, single_ocr_running, ocr_page_progress, load_review_queue, save_review_queue, load_ocr_ignore_list, save_ocr_ignore_list, load_ocr_error_list, save_ocr_error_list, load_ocr_error_counts, save_ocr_error_counts, DEFAULT_OLLAMA_URL, DEFAULT_OCR_MODEL
 import app.services.ocr_service as ocr_service_module
-from app.services.llm_service import LitellmService as LLMProviderService
 
 logger = logging.getLogger(__name__)
 

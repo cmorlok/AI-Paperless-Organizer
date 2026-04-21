@@ -6,11 +6,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, delete
 from app.database import get_db
 from app.models import SavedAnalysis, PaperlessCache
-from app.services.paperless_client import PaperlessClient
-from app.services.similarity import SimilarityService
-from app.services.merge import MergeService
-from app.services.statistics import StatisticsService
-from app.services.llm_service import LitellmService as LLMProviderService
+from app.services.protocols import (
+    PaperlessClient,
+    SimilarityService,
+    MergeService,
+    StatisticsService,
+    LLMService as LLMProviderService,
+)
 from dishka.integrations.fastapi import inject
 from dishka import FromDishka
 
