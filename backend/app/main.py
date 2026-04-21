@@ -172,6 +172,7 @@ app = FastAPI(
 )
 
 setup_dishka(di_container, app)
+app.container = di_container
 
 
 def _log(level: str, msg: str, *args):

@@ -5,8 +5,7 @@ from __future__ import annotations
 from datetime import datetime, date
 from typing import Dict, List, Optional, Any
 from sqlalchemy import select, func
-from fastapi import Depends
-from app.database import get_db, async_session
+from app.database import async_session
 from app.models import CleanupStatistics, DailyStats
 
 
@@ -176,7 +175,5 @@ class StatisticsService:
             ]
 
 
-async def get_statistics_service(db = Depends(get_db)) -> StatisticsService:
-    """Dependency to get statistics service."""
-    return StatisticsService(session_factory=async_session)
+
 

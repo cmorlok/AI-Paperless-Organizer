@@ -6,12 +6,11 @@ import json
 import re
 import fnmatch
 from typing import Dict, List, Optional, Any
-from fastapi import Depends
 from sqlalchemy import select
-from app.database import get_db, async_session
+from app.database import async_session
 from app.models import CustomPrompt, IgnoredTag
-from app.services.paperless_client import PaperlessClient, get_paperless_client
-from app.services.llm_service import LitellmService as LLMProviderService, get_llm_service
+from app.services.paperless_client import PaperlessClient
+from app.services.llm_service import LitellmService as LLMProviderService
 from app.prompts.default_prompts import DEFAULT_PROMPTS
 
 
@@ -697,14 +696,4 @@ Wenn nichts zusammengehört: {{"group_merges": [], "add_to_groups": []}}"""
             return {"doctype_tags": [], "error": str(e), "stats": stats}
 
 
-async def get_similarity_service(
-    paperless: PaperlessClient = Depends(get_paperless_client),
-    llm: LLMProviderService = Depends(get_llm_service),
-    db = Depends(get_db),
-) -> SimilarityService:
-    """Dependency to get similarity service."""
-    return SimilarityService(
-        paperless_client=paperless,
-        llm_service=llm,
-        session_factory=async_session,
-    )
+

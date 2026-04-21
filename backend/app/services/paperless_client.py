@@ -8,10 +8,7 @@ import logging
 from typing import Optional, List, Dict, Any
 
 logger = logging.getLogger(__name__)
-from fastapi import Depends
-from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
-from app.database import get_db, async_session
 from app.models import PaperlessSettings
 from app.services.cache import get_cache
 
@@ -617,17 +614,4 @@ class PaperlessClient:
             return response.text  # returns task ID string
 
 
-async def get_paperless_client(db: AsyncSession = Depends(get_db)) -> PaperlessClient:
-    """Dependency to get configured Paperless client."""
-    result = await db.execute(select(PaperlessSettings).where(PaperlessSettings.id == 1))
-    settings = result.scalar_one_or_none()
-
-    if settings and settings.is_configured:
-        return PaperlessClient(
-            base_url=settings.url,
-            api_token=settings.api_token,
-            session_factory=async_session,
-        )
-
-    return PaperlessClient(session_factory=async_session)
 

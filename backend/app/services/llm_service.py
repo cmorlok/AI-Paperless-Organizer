@@ -144,11 +144,10 @@ def log_llm_error(msg: str, exc: Exception):
     tb = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
     print(f"ERROR app.services.llm_service: {msg}: {detail}\n{tb}", flush=True)
     logger.error("%s: %s", msg, detail, exc_info=True)
-from fastapi import Depends
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.database import get_db, async_session
+from app.database import async_session
 from app.models import LLMProvider
 from app.models.settings_model import LLM_KEY_CLASSIFIER_MODEL, LLM_KEY_CLASSIFIER_PROVIDER
 
@@ -812,19 +811,4 @@ class LitellmService:
             }
 
 
-async def get_llm_service(db: AsyncSession = Depends(get_db)) -> LitellmService:
-    """Dependency to get LLM service with provider from AppSettings."""
-    provider_name = await get_setting(LLM_KEY_CLASSIFIER_PROVIDER, db)
-    provider = None
-    if provider_name:
-        result = await db.execute(
-            select(LLMProvider).where(LLMProvider.name == provider_name)
-        )
-        provider = result.scalars().first()
 
-    if not provider:
-        result = await db.execute(select(LLMProvider).limit(1))
-        provider = result.scalars().first()
-
-    model = await get_setting(LLM_KEY_CLASSIFIER_MODEL, db)
-    return LitellmService(provider, model=model, session_factory=async_session)

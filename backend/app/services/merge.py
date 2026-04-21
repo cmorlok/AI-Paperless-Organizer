@@ -3,11 +3,10 @@
 from __future__ import annotations
 
 from typing import List, Dict, Optional, Any
-from fastapi import Depends
 from sqlalchemy import select
-from app.database import get_db, async_session
-from app.models import MergeHistory, MergeHistoryItem, CleanupStatistics
-from app.services.paperless_client import PaperlessClient, get_paperless_client
+from app.database import async_session
+from app.models import MergeHistory
+from app.services.paperless_client import PaperlessClient
 from app.services.cache import get_cache
 
 
@@ -348,13 +347,5 @@ class MergeService:
             ]
 
 
-async def get_merge_service(
-    paperless: PaperlessClient = Depends(get_paperless_client),
-    db = Depends(get_db),
-) -> MergeService:
-    """Dependency to get merge service."""
-    return MergeService(
-        paperless_client=paperless,
-        session_factory=async_session,
-    )
+
 

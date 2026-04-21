@@ -34,7 +34,7 @@ class TestPhase1Smoke:
 
     def test_llm_service_importable(self):
         """LLM-01: llm_service.py must be importable with core methods."""
-        from app.services.llm_service import LitellmService, get_llm_service
+        from app.services.llm_service import LitellmService
 
         # Verify core methods exist
         assert hasattr(LitellmService, "complete")
