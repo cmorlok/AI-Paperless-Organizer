@@ -9,8 +9,7 @@ from typing import Dict, List, Optional, Any
 from sqlalchemy import select
 from app.database import async_session
 from app.models import CustomPrompt, IgnoredTag
-from app.services.paperless_client import PaperlessClient
-from app.services.llm_service import LitellmService as LLMProviderService
+from app.services.protocols import PaperlessClient, LLMService
 from app.prompts.default_prompts import DEFAULT_PROMPTS
 
 
@@ -20,7 +19,7 @@ class SimilarityService:
     def __init__(
         self,
         paperless_client: Optional[PaperlessClient] = None,
-        llm_service: Optional[LLMProviderService] = None,
+        llm_service: Optional[LLMService] = None,
         session_factory: Optional[Any] = None,
     ):
         self.paperless = paperless_client

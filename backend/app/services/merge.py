@@ -6,7 +6,7 @@ from typing import List, Dict, Optional, Any
 from sqlalchemy import select
 from app.database import async_session
 from app.models import MergeHistory
-from app.services.paperless_client import PaperlessClient
+from app.services.protocols import PaperlessClient
 from app.services.cache import get_cache
 
 
