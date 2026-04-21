@@ -9,7 +9,10 @@ from sqlalchemy import select, delete, and_
 
 from app.database import get_db
 from app.models.duplicates import DuplicateIgnore
-from app.services.duplicate_service import DuplicateService, get_scan_state, _scan_state
+from app.services.duplicate_service import get_scan_state, _scan_state
+from dishka.integrations.fastapi import inject
+from dishka import FromDishka
+from app.services.protocols import DuplicateService
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -29,12 +32,11 @@ class IgnoreRequest(BaseModel):
 # ── Scan endpoints ───────────────────────────────────────────────────────────
 
 @router.post("/scan")
-async def start_scan(body: ScanRequest, db: AsyncSession = Depends(get_db)):
+@inject
+async def start_scan(body: ScanRequest, service: FromDishka[DuplicateService] = None):
     """Startet einen Duplikat-Scan im Hintergrund."""
     if _scan_state.get("running"):
         raise HTTPException(status_code=409, detail="Scan läuft bereits")
-
-    service = DuplicateService()
 
     asyncio.create_task(
         service.scan_all(
