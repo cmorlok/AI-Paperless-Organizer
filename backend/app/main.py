@@ -8,6 +8,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from contextlib import asynccontextmanager
+from dishka.integrations.fastapi import setup_dishka
 
 from app.core.logging import init_logging, ensure_logging, get_logger
 from app.database import run_migrations
@@ -131,7 +132,7 @@ async def lifespan(app: FastAPI):
             has_sources = src_q.scalars().first() is not None
         if has_sources:
             _cloud_sync_state["enabled"] = True
-            asyncio.get_running_loop().create_task(cloud_sync_loop())
+            asyncio.get_running_loop().create_task(cloud_sync_loop(di_container))
             logging.getLogger(__name__).info("Cloud sync daemon auto-started")
     except Exception as e:
         logging.getLogger(__name__).error(f"Cloud sync auto-start failed: {e}")
@@ -169,6 +170,8 @@ app = FastAPI(
     version="1.0.0",
     lifespan=lifespan
 )
+
+setup_dishka(di_container, app)
 
 
 def _log(level: str, msg: str, *args):
