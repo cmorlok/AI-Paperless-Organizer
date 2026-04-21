@@ -91,8 +91,12 @@ class AppProvider(Provider):
     def rag_service(
         self,
         session_factory: async_sessionmaker,
+        paperless_client: PaperlessClient,
     ) -> RAGService:
-        return RAGServiceImpl(session_factory=session_factory)
+        return RAGServiceImpl(
+            session_factory=session_factory,
+            paperless_client=paperless_client,
+        )
 
     @provide(scope=Scope.APP)
     def classifier_service(
@@ -109,8 +113,12 @@ class AppProvider(Provider):
     def duplicate_service(
         self,
         session_factory: async_sessionmaker,
+        paperless_client: PaperlessClient,
     ) -> DuplicateService:
-        return DuplicateServiceImpl(session_factory=session_factory)
+        return DuplicateServiceImpl(
+            session_factory=session_factory,
+            paperless_client=paperless_client,
+        )
 
     @provide(scope=Scope.APP)
     def cloud_import_service(
