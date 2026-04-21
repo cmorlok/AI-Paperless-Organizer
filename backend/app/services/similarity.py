@@ -1,13 +1,14 @@
 """Similarity detection service using LLM."""
 
+from __future__ import annotations
+
 import json
 import re
 import fnmatch
-from typing import Dict, List
+from typing import Dict, List, Optional, Any
 from fastapi import Depends
-from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
-from app.database import get_db
+from app.database import get_db, async_session
 from app.models import CustomPrompt, IgnoredTag
 from app.services.paperless_client import PaperlessClient, get_paperless_client
 from app.services.llm_service import LitellmService as LLMProviderService, get_llm_service
@@ -16,37 +17,43 @@ from app.prompts.default_prompts import DEFAULT_PROMPTS
 
 class SimilarityService:
     """Service for finding similar entities using LLM analysis."""
-    
+
     def __init__(
-        self, 
-        paperless_client: PaperlessClient,
-        llm_service: LLMProviderService,
-        db: AsyncSession
+        self,
+        paperless_client: Optional[PaperlessClient] = None,
+        llm_service: Optional[LLMProviderService] = None,
+        session_factory: Optional[Any] = None,
     ):
         self.paperless = paperless_client
         self.llm = llm_service
-        self.db = db
-    
+        self.session_factory = session_factory
+
     async def _get_prompt(self, entity_type: str) -> str:
         """Get the prompt template for an entity type."""
-        result = await self.db.execute(
-            select(CustomPrompt).where(
-                CustomPrompt.entity_type == entity_type,
-                CustomPrompt.is_active == True
+        if self.session_factory is None:
+            return DEFAULT_PROMPTS.get(entity_type, "")
+        async with self.session_factory() as db:
+            result = await db.execute(
+                select(CustomPrompt).where(
+                    CustomPrompt.entity_type == entity_type,
+                    CustomPrompt.is_active == True
+                )
             )
-        )
-        prompt = result.scalar_one_or_none()
-        
-        if prompt:
-            return prompt.prompt_template
-        
-        return DEFAULT_PROMPTS.get(entity_type, "")
-    
+            prompt = result.scalar_one_or_none()
+
+            if prompt:
+                return prompt.prompt_template
+
+            return DEFAULT_PROMPTS.get(entity_type, "")
+
     async def _get_ignored_patterns(self) -> List[Dict]:
         """Get all ignored tag patterns."""
-        result = await self.db.execute(select(IgnoredTag))
-        ignored = result.scalars().all()
-        return [{"pattern": i.pattern, "is_regex": i.is_regex, "reason": i.reason} for i in ignored]
+        if self.session_factory is None:
+            return []
+        async with self.session_factory() as db:
+            result = await db.execute(select(IgnoredTag))
+            ignored = result.scalars().all()
+            return [{"pattern": i.pattern, "is_regex": i.is_regex, "reason": i.reason} for i in ignored]
     
     def _is_tag_ignored(self, tag_name: str, ignored_patterns: List[Dict]) -> bool:
         """Check if a tag matches any ignored pattern."""
@@ -693,7 +700,11 @@ Wenn nichts zusammengehört: {{"group_merges": [], "add_to_groups": []}}"""
 async def get_similarity_service(
     paperless: PaperlessClient = Depends(get_paperless_client),
     llm: LLMProviderService = Depends(get_llm_service),
-    db: AsyncSession = Depends(get_db)
+    db = Depends(get_db),
 ) -> SimilarityService:
     """Dependency to get similarity service."""
-    return SimilarityService(paperless, llm, db)
+    return SimilarityService(
+        paperless_client=paperless,
+        llm_service=llm,
+        session_factory=async_session,
+    )

@@ -1,5 +1,7 @@
 """Paperless-ngx API Client."""
 
+from __future__ import annotations
+
 import httpx
 import asyncio
 import logging
@@ -9,7 +11,7 @@ logger = logging.getLogger(__name__)
 from fastapi import Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
-from app.database import get_db
+from app.database import get_db, async_session
 from app.models import PaperlessSettings
 from app.services.cache import get_cache
 
@@ -19,23 +21,43 @@ CACHE_TTL = 1800
 
 class PaperlessClient:
     """Client for interacting with Paperless-ngx API."""
-    
-    def __init__(self, base_url: str = "", api_token: str = ""):
+
+    def __init__(self, base_url: str = "", api_token: str = "", session_factory=None):
+        self._explicit_base_url = base_url
         self.base_url = base_url.rstrip("/") if base_url else ""
         self.api_token = api_token
+        self.session_factory = session_factory
         self.headers = {
             "Authorization": f"Token {api_token}",
             "Content-Type": "application/json"
         } if api_token else {}
-    
+        self._config_loaded = False
+
+    async def _ensure_config(self) -> None:
+        """Lazy-load Paperless settings from DB on first use."""
+        if self._config_loaded or self._explicit_base_url or self.session_factory is None:
+            return
+        async with self.session_factory() as db:
+            result = await db.execute(select(PaperlessSettings).where(PaperlessSettings.id == 1))
+            settings = result.scalar_one_or_none()
+            if settings and settings.is_configured:
+                self.base_url = settings.url.rstrip("/") if settings.url else ""
+                self.api_token = settings.api_token
+                self.headers = {
+                    "Authorization": f"Token {self.api_token}",
+                    "Content-Type": "application/json"
+                } if self.api_token else {}
+        self._config_loaded = True
+
     async def _request(
-        self, 
-        method: str, 
-        endpoint: str, 
+        self,
+        method: str,
+        endpoint: str,
         params: Dict = None,
         json: Dict = None
     ) -> Optional[Dict]:
         """Make an API request to Paperless."""
+        await self._ensure_config()
         if not self.base_url:
             raise ValueError("Paperless URL not configured")
         
@@ -69,6 +91,7 @@ class PaperlessClient:
     
     async def test_connection(self) -> bool:
         """Test if connection to Paperless is working."""
+        await self._ensure_config()
         if not self.base_url or not self.api_token:
             return False
         try:
@@ -598,12 +621,13 @@ async def get_paperless_client(db: AsyncSession = Depends(get_db)) -> PaperlessC
     """Dependency to get configured Paperless client."""
     result = await db.execute(select(PaperlessSettings).where(PaperlessSettings.id == 1))
     settings = result.scalar_one_or_none()
-    
+
     if settings and settings.is_configured:
         return PaperlessClient(
             base_url=settings.url,
-            api_token=settings.api_token
+            api_token=settings.api_token,
+            session_factory=async_session,
         )
-    
-    return PaperlessClient()
+
+    return PaperlessClient(session_factory=async_session)
 
