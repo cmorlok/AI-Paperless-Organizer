@@ -14,7 +14,7 @@ from typing import Optional, List
 import httpx
 
 from sqlalchemy.ext.asyncio import AsyncSession
-from app.database import get_db
+from app.database import get_db, async_session
 from app.services.paperless_client import PaperlessClient, get_paperless_client
 from app.services.ocr_service import OcrService, batch_state, watchdog_state, single_ocr_running, ocr_page_progress, load_review_queue, save_review_queue, load_ocr_ignore_list, save_ocr_ignore_list, load_ocr_error_list, save_ocr_error_list, load_ocr_error_counts, save_ocr_error_counts, DEFAULT_OLLAMA_URL, DEFAULT_OCR_MODEL
 import app.services.ocr_service as ocr_service_module
@@ -134,7 +134,8 @@ def get_ocr_service() -> OcrService:
         ollama_urls=ocr_settings.get("ollama_urls", []),
         model=ocr_settings["model"],
         max_image_size=ocr_settings.get("max_image_size", 1344),
-        smart_skip_enabled=ocr_settings.get("smart_skip_enabled", True)
+        smart_skip_enabled=ocr_settings.get("smart_skip_enabled", True),
+        session_factory=async_session,
     )
 
 

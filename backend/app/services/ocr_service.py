@@ -1,5 +1,7 @@
 """OCR Service using Ollama Vision models."""
 
+from __future__ import annotations
+
 import base64
 import httpx
 import asyncio
@@ -176,17 +178,45 @@ watchdog_state = {
 
 class OcrService:
     """Service for OCR using Ollama Vision models."""
-    
-    def __init__(self, ollama_url: str = DEFAULT_OLLAMA_URL, model: str = DEFAULT_OCR_MODEL, ollama_urls: List[str] = None, max_image_size: int = 1344, smart_skip_enabled: bool = False):
+
+    def __init__(self, ollama_url: Optional[str] = None, model: Optional[str] = None, ollama_urls: Optional[List[str]] = None, max_image_size: int = 1344, smart_skip_enabled: bool = False, session_factory: Optional[Any] = None):
+        self._explicit_ollama_url = ollama_url
+        self._explicit_ollama_urls = ollama_urls
+        self._explicit_model = model
+        self.session_factory = session_factory
+        self._config_loaded = False
+
         if ollama_urls and len(ollama_urls) > 0:
             self.ollama_urls = [u.rstrip("/") for u in ollama_urls if u.strip()]
-        else:
+        elif ollama_url:
             self.ollama_urls = [ollama_url.rstrip("/")]
-            
+        else:
+            self.ollama_urls = [DEFAULT_OLLAMA_URL]
+
         self.current_url_index = 0
-        self.model = model
+        self.model = model or DEFAULT_OCR_MODEL
         self.max_image_size = max_image_size
         self.smart_skip_enabled = smart_skip_enabled
+
+    async def _ensure_config(self) -> None:
+        """Lazy-load OCR settings from DB on first use."""
+        if self._config_loaded or self._explicit_ollama_url is not None or self.session_factory is None:
+            return
+        from sqlalchemy import select
+        from app.models.settings_model import OCRSettings
+        async with self.session_factory() as db:
+            result = await db.execute(select(OCRSettings).where(OCRSettings.id == 1))
+            settings = result.scalar_one_or_none()
+            if settings:
+                if settings.ollama_url:
+                    self.ollama_urls = [settings.ollama_url.rstrip("/")]
+                if settings.model:
+                    self.model = settings.model
+                if settings.max_image_size:
+                    self.max_image_size = settings.max_image_size
+                if hasattr(settings, 'smart_skip_enabled') and settings.smart_skip_enabled is not None:
+                    self.smart_skip_enabled = settings.smart_skip_enabled
+        self._config_loaded = True
     
     def get_current_url(self) -> str:
         if not self.ollama_urls:
@@ -203,6 +233,7 @@ class OcrService:
         """Test connection to Ollama and check if the model is available.
         Attempts all configured URLs until one works.
         """
+        await self._ensure_config()
         last_error = None
         for url in self.ollama_urls:
             try:
@@ -767,6 +798,7 @@ class OcrService:
 
     async def ocr_document(self, paperless_client, document_id: int, force: bool = False, db_session=None) -> Dict[str, Any]:
         """OCR a document with page-level persistence. Supports resume after failures."""
+        await self._ensure_config()
         start_time = time.time()
         print(f"[OCR] Starting OCR for document {document_id}")
 

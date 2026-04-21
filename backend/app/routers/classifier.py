@@ -99,7 +99,8 @@ def _get_service(
     db: AsyncSession = Depends(get_db),
     paperless: PaperlessClient = Depends(get_paperless_client),
 ) -> DocumentClassifierService:
-    return DocumentClassifierService(db, paperless)
+    from app.database import async_session
+    return DocumentClassifierService(paperless=paperless, session_factory=async_session)
 
 
 # --- Config ---
@@ -1002,7 +1003,8 @@ async def _auto_classify_loop():
                     base_url=pl_settings.url,
                     api_token=pl_settings.api_token,
                 )
-                service = DocumentClassifierService(db_sess, client)
+                from app.database import async_session
+                service = DocumentClassifierService(paperless=client, session_factory=async_session)
                 config = await service.get_config()
 
                 uses_ollama = config.active_provider == "ollama"

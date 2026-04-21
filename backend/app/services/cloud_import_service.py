@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import asyncio
 import json
 import logging
@@ -5,9 +7,11 @@ import os
 import tempfile
 import xml.etree.ElementTree as ET
 from datetime import datetime
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Any
 
 import httpx
+
+from app.database import async_session
 
 logger = logging.getLogger(__name__)
 
@@ -34,6 +38,9 @@ def get_cloud_sync_state() -> Dict:
 
 
 class CloudImportService:
+
+    def __init__(self, session_factory: Optional[Any] = None):
+        self.session_factory = session_factory or async_session
 
     # ── WebDAV ──────────────────────────────────────────────────────────────
 
@@ -450,7 +457,6 @@ def get_cloud_import_service() -> CloudImportService:
 
 async def cloud_sync_loop():
     """Polling loop: checks all enabled sources on their configured interval."""
-    from app.database import async_session
     from app.models.cloud_import import CloudSource
     from app.models.settings_model import PaperlessSettings
     from app.services.paperless_client import PaperlessClient

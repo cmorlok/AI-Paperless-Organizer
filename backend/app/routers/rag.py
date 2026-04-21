@@ -17,7 +17,8 @@ def get_rag_service():
     global _rag_service
     if _rag_service is None:
         from app.services.rag.service import RAGService
-        _rag_service = RAGService()
+        from app.database import async_session
+        _rag_service = RAGService(session_factory=async_session)
     return _rag_service
 
 

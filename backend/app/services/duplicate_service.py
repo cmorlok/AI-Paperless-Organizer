@@ -6,13 +6,15 @@ Three scan levels:
 3. Invoice duplicates (LLM-based invoice number + amount extraction)
 """
 
+from __future__ import annotations
+
 import asyncio
 import json
 import logging
 import os
 from collections import defaultdict
 from datetime import datetime
-from typing import Dict, List, Optional, Set, Tuple
+from typing import Dict, List, Optional, Set, Tuple, Any
 
 from sqlalchemy import select as sa_select, text
 
@@ -59,6 +61,9 @@ def _is_cancelled() -> bool:
 # ---------------------------------------------------------------------------
 
 class DuplicateService:
+
+    def __init__(self, session_factory: Optional[Any] = None):
+        self.session_factory = session_factory or async_session
 
     async def scan_all(self, modes: List[str], similarity_threshold: float = 0.92):
         """Run selected scan modes as a background task.
@@ -422,7 +427,7 @@ class DuplicateService:
 
         # Load cached extractions
         cached: Dict[int, Dict] = {}
-        async with async_session() as db:
+        async with self.session_factory() as db:
             rows = (await db.execute(
                 sa_select(DuplicateInvoiceCache)
             )).scalars().all()
@@ -570,7 +575,7 @@ class DuplicateService:
 
     async def _cache_extraction(self, doc_id: int, extraction: Dict):
         """Save extraction result to SQLite cache."""
-        async with async_session() as db:
+        async with self.session_factory() as db:
             # Upsert: delete old, insert new
             await db.execute(
                 text("DELETE FROM duplicate_invoice_cache WHERE document_id = :doc_id"),
@@ -593,7 +598,7 @@ class DuplicateService:
         from app.models import PaperlessSettings
         from app.services.paperless_client import PaperlessClient
 
-        async with async_session() as db:
+        async with self.session_factory() as db:
             result = await db.execute(
                 sa_select(PaperlessSettings).where(PaperlessSettings.id == 1)
             )
@@ -613,7 +618,7 @@ class DuplicateService:
 
     async def _get_chat_model(self) -> str:
         """Get the configured chat model from RagConfig."""
-        async with async_session() as db:
+        async with self.session_factory() as db:
             result = await db.execute(
                 sa_select(RagConfig).where(RagConfig.id == 1)
             )
