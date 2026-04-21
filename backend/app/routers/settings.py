@@ -641,10 +641,7 @@ async def seed_llm_keys(db: AsyncSession = Depends(get_db)):
     """Seed LLM key-value settings from existing LLMProvider records. Run once during migration."""
     result = await db.execute(select(LLMProvider).limit(1))
     provider = result.scalar_one_or_none()
-    if provider:
-        if provider.name:
-            await set_setting(LLM_KEY_CLASSIFIER_PROVIDER, provider.name, "str", db)
-        if hasattr(provider, "classifier_model") and provider.classifier_model:
-            await set_setting(LLM_KEY_CLASSIFIER_MODEL, provider.classifier_model, "str", db)
+    if provider and provider.name:
+        await set_setting(LLM_KEY_CLASSIFIER_PROVIDER, provider.name, "str", db)
     return {"success": True}
 
