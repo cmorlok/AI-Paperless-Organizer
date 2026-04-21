@@ -20,8 +20,7 @@ logger = get_logger("app.main")
 from app.routers import paperless, correspondents, tags, document_types, settings, llm, debug, statistics, ignored_items, ocr, cleanup, classifier, rag, api_keys, cloud_import, duplicates
 from app.routers.ocr import ocr_settings
 from app.services.ocr_service import watchdog_state
-from app.services.paperless_client import PaperlessClient
-from app.services.protocols import OcrService, RAGService
+from app.services.protocols import PaperlessClient, OcrService, RAGService
 from app.container import container as di_container
 
 
