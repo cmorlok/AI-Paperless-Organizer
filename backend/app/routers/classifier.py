@@ -18,6 +18,8 @@ from app.services.protocols import PaperlessClient, DocumentClassifierService
 from app.models.classifier import (
     ClassifierConfig, StoragePathProfile, CustomFieldMapping, ClassificationHistory,
 )
+from app.models.settings_model import LLM_KEY_CLASSIFIER_MODEL
+from app.routers.settings import get_setting
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -113,11 +115,8 @@ async def get_config(
     app_settings = app_s.scalar_one_or_none()
     active_provider = (getattr(app_settings, "classifier_provider", None) or "ollama") if app_settings else "ollama"
 
-    # Read model info from central LLMProvider table
-    from app.models import LLMProvider as _LLP
-    llp_result = await db.execute(select(_LLP).where(_LLP.name == active_provider))
-    llp = llp_result.scalar_one_or_none()
-    active_model = (llp.classifier_model or llp.model) if llp else ""
+    # Read model from AppSettings key-value store (LLM-09)
+    active_model = await get_setting(LLM_KEY_CLASSIFIER_MODEL, db) or ""
 
     return {
         "active_provider": active_provider,
@@ -578,7 +577,7 @@ async def test_ollama_connection(
     llp_res = await db.execute(select(_LLP).where(_LLP.name == "ollama"))
     ollama_prov = llp_res.scalar_one_or_none()
     ollama_host = (host or (ollama_prov.api_base_url if ollama_prov else None) or "http://localhost:11434").rstrip("/")
-    model = model or (ollama_prov.classifier_model if ollama_prov else None) or (ollama_prov.model if ollama_prov else "qwen3:4b")
+    model = model or await get_setting(LLM_KEY_CLASSIFIER_MODEL, db) or "qwen3:4b"
 
     try:
         async with httpx.AsyncClient(timeout=30.0) as client:
