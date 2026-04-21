@@ -256,14 +256,8 @@ async def stop_sync_daemon():
 # ── Paperless metadata for dropdowns ────────────────────────────────────────
 
 @router.get("/paperless/tags")
-async def get_paperless_tags(db: AsyncSession = Depends(get_db)):
-    from app.models.settings_model import PaperlessSettings
-    from app.services.paperless_client import PaperlessClient
-    pl_q = await db.execute(select(PaperlessSettings).where(PaperlessSettings.id == 1))
-    pl_settings = pl_q.scalar_one_or_none()
-    if not pl_settings or not pl_settings.is_configured:
-        return []
-    client = PaperlessClient(base_url=pl_settings.url, api_token=pl_settings.api_token)
+@inject
+async def get_paperless_tags(client: FromDishka[PaperlessClient] = None):
     try:
         tags = await client.get_tags(use_cache=False)
         return [{"id": t["id"], "name": t["name"]} for t in tags]
@@ -272,14 +266,8 @@ async def get_paperless_tags(db: AsyncSession = Depends(get_db)):
 
 
 @router.get("/paperless/correspondents")
-async def get_paperless_correspondents(db: AsyncSession = Depends(get_db)):
-    from app.models.settings_model import PaperlessSettings
-    from app.services.paperless_client import PaperlessClient
-    pl_q = await db.execute(select(PaperlessSettings).where(PaperlessSettings.id == 1))
-    pl_settings = pl_q.scalar_one_or_none()
-    if not pl_settings or not pl_settings.is_configured:
-        return []
-    client = PaperlessClient(base_url=pl_settings.url, api_token=pl_settings.api_token)
+@inject
+async def get_paperless_correspondents(client: FromDishka[PaperlessClient] = None):
     try:
         corrs = await client.get_correspondents(use_cache=False)
         return [{"id": c["id"], "name": c["name"]} for c in corrs]
@@ -288,14 +276,8 @@ async def get_paperless_correspondents(db: AsyncSession = Depends(get_db)):
 
 
 @router.get("/paperless/document-types")
-async def get_paperless_document_types(db: AsyncSession = Depends(get_db)):
-    from app.models.settings_model import PaperlessSettings
-    from app.services.paperless_client import PaperlessClient
-    pl_q = await db.execute(select(PaperlessSettings).where(PaperlessSettings.id == 1))
-    pl_settings = pl_q.scalar_one_or_none()
-    if not pl_settings or not pl_settings.is_configured:
-        return []
-    client = PaperlessClient(base_url=pl_settings.url, api_token=pl_settings.api_token)
+@inject
+async def get_paperless_document_types(client: FromDishka[PaperlessClient] = None):
     try:
         types = await client.get_document_types(use_cache=False)
         return [{"id": t["id"], "name": t["name"]} for t in types]
