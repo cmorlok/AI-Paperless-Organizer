@@ -90,10 +90,6 @@ def init_logging() -> None:
 
 
 _NOISY_LOGGERS = [
-    "LiteLLM",
-    "litellm",
-    "litellm.utils",
-    "litellm.main",
     "openai",
     "openai._base_client",
     "anthropic",
@@ -103,10 +99,17 @@ _NOISY_LOGGERS = [
 ]
 
 _VERY_NOISY_LOGGERS = [
+    # LiteLLM — callbacks in llm_service.py provide structured logs instead
+    "LiteLLM",
+    "litellm",
+    "litellm.utils",
+    "litellm.main",
+    # SQL / async DB internals
     "aiosqlite",
     "sqlalchemy.engine",
     "sqlalchemy.engine.Engine",
     "sqlalchemy.pool",
+    # HTTP wire-level tracing
     "httpcore",
     "httpcore.connection",
     "httpcore.http11",

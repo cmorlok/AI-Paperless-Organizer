@@ -21,10 +21,7 @@ _callbacks_registered = False
 
 
 def _log_llm(msg: str, data: dict[str, Any]) -> None:
-    """Log LLM event at DEBUG level using thread-safe logger."""
-    formatted = f"{msg}: {json.dumps(data, indent=2, default=str)}"
-    print(f"DEBUG app.services.llm_service: {formatted}", flush=True)
-    logger.debug(formatted)
+    logger.debug("%s: %s", msg, json.dumps(data, indent=2, default=str))
 
 
 def _get_data_from_kwargs(kwargs: dict[str, Any]) -> dict[str, Any]:
@@ -70,7 +67,7 @@ def _llm_input_callback(kwargs: dict[str, Any]) -> None:
     _log_llm("LLM input", llm_data)
 
 
-def _llm_success_callback(kwargs: dict[str, Any], response_obj: Any, start_time: Any, end_time: Any) -> None:
+async def _llm_success_callback(kwargs: dict[str, Any], response_obj: Any, start_time: Any, end_time: Any) -> None:
     duration = 0.0
     try:
         diff = end_time - start_time
@@ -84,7 +81,7 @@ def _llm_success_callback(kwargs: dict[str, Any], response_obj: Any, start_time:
     _log_llm("LLM success", llm_data)
 
 
-def _llm_failure_callback(kwargs: dict[str, Any], exception: Exception, start_time: Any, end_time: Any) -> None:
+async def _llm_failure_callback(kwargs: dict[str, Any], exception: Exception, start_time: Any, end_time: Any) -> None:
     duration = 0.0
     try:
         diff = end_time - start_time
