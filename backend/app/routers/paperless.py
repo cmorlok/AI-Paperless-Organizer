@@ -3,8 +3,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from app.database import get_db
 from app.models import PaperlessCache
-from app.services.paperless_client import PaperlessClient, get_paperless_client
+from app.services.paperless_client import PaperlessClient
 from app.services.cache import get_cache
+from dishka.integrations.fastapi import inject
+from dishka import FromDishka
 
 router = APIRouter()
 
@@ -31,8 +33,9 @@ async def update_db_cache(db: AsyncSession, key: str, data: list):
 
 
 @router.get("/status")
+@inject
 async def get_paperless_status(
-    client: PaperlessClient = Depends(get_paperless_client)
+    client: FromDishka[PaperlessClient] = None
 ):
     """Check connection status to Paperless-ngx - FAST, no data loading."""
     if not client.base_url:
@@ -57,14 +60,16 @@ async def get_paperless_status(
 
 
 @router.get("/correspondents")
-async def get_correspondents(client: PaperlessClient = Depends(get_paperless_client)):
+@inject
+async def get_correspondents(client: FromDishka[PaperlessClient] = None):
     """Get all correspondents from Paperless."""
     return await client.get_correspondents()
 
 
 @router.get("/tags")
+@inject
 async def get_tags(
-    client: PaperlessClient = Depends(get_paperless_client),
+    client: FromDishka[PaperlessClient] = None,
     db: AsyncSession = Depends(get_db)
 ):
     """Get all tags - in-memory cache → DB cache → Paperless (fallback only)."""
@@ -94,17 +99,19 @@ async def get_tags(
 
 
 @router.get("/document-types")
-async def get_document_types(client: PaperlessClient = Depends(get_paperless_client)):
+@inject
+async def get_document_types(client: FromDishka[PaperlessClient] = None):
     """Get all document types from Paperless."""
     return await client.get_document_types()
 
 
 @router.get("/documents")
+@inject
 async def get_documents(
     correspondent_id: int = None,
     tag_id: int = None,
     document_type_id: int = None,
-    client: PaperlessClient = Depends(get_paperless_client)
+    client: FromDishka[PaperlessClient] = None
 ):
     """Get documents with optional filters."""
     return await client.get_documents(
@@ -115,8 +122,9 @@ async def get_documents(
 
 
 @router.post("/refresh-cache")
+@inject
 async def refresh_cache(
-    client: PaperlessClient = Depends(get_paperless_client),
+    client: FromDishka[PaperlessClient] = None,
     db: AsyncSession = Depends(get_db)
 ):
     """Refresh the cache by fetching fresh data from Paperless and storing in DB."""
@@ -145,12 +153,13 @@ async def refresh_cache(
 
 
 @router.get("/document-previews")
+@inject
 async def get_document_previews(
     correspondent_id: int = None,
     tag_id: int = None,
     document_type_id: int = None,
     limit: int = 5,
-    client: PaperlessClient = Depends(get_paperless_client)
+    client: FromDishka[PaperlessClient] = None
 ):
     """Get document previews for a specific entity."""
     return await client.get_document_previews(

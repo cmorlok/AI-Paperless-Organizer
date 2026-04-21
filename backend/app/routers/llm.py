@@ -1,7 +1,9 @@
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from typing import Optional
-from app.services.llm_service import LitellmService as LLMProviderService, get_llm_service
+from app.services.llm_service import LitellmService as LLMProviderService
+from dishka.integrations.fastapi import inject
+from dishka import FromDishka
 
 router = APIRouter()
 
@@ -13,8 +15,9 @@ class TestPromptRequest(BaseModel):
 
 
 @router.post("/test")
+@inject
 async def test_llm_connection(
-    llm_service: LLMProviderService = Depends(get_llm_service)
+    llm_service: FromDishka[LLMProviderService] = None
 ):
     """Test the active LLM provider connection."""
     try:
@@ -25,9 +28,10 @@ async def test_llm_connection(
 
 
 @router.post("/test-prompt")
+@inject
 async def test_prompt(
     request: TestPromptRequest,
-    llm_service: LLMProviderService = Depends(get_llm_service)
+    llm_service: FromDishka[LLMProviderService] = None
 ):
     """Test a prompt with the active LLM provider."""
     try:

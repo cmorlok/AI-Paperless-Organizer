@@ -1,9 +1,11 @@
 from fastapi import APIRouter, Depends, Query, HTTPException
 from fastapi.responses import Response
 from typing import List, Dict, Any
-from app.services.paperless_client import PaperlessClient, get_paperless_client
+from app.services.paperless_client import PaperlessClient
 from pydantic import BaseModel
 import logging
+from dishka.integrations.fastapi import inject
+from dishka import FromDishka
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -19,11 +21,12 @@ class ScanResult(BaseModel):
 
 
 @router.get("/scan", response_model=ScanResult)
+@inject
 async def scan_junk_documents(
     query: str = Query("", description="Comma-separated search terms"),
     limit: int = Query(50, description="Max results"),
     search_content: bool = Query(False, description="Search in document content, not just title"),
-    client: PaperlessClient = Depends(get_paperless_client)
+    client: FromDishka[PaperlessClient] = None
 ):
     """Scan for junk documents by title or full-text content matching."""
     try:
@@ -73,9 +76,10 @@ async def scan_junk_documents(
 
 
 @router.get("/thumbnail/{document_id}")
+@inject
 async def get_thumbnail(
     document_id: int,
-    client: PaperlessClient = Depends(get_paperless_client)
+    client: FromDishka[PaperlessClient] = None
 ):
     """Proxy a document thumbnail from Paperless (handles auth)."""
     try:
@@ -87,9 +91,10 @@ async def get_thumbnail(
 
 
 @router.post("/delete")
+@inject
 async def delete_junk_documents(
     request: DeleteRequest,
-    client: PaperlessClient = Depends(get_paperless_client)
+    client: FromDishka[PaperlessClient] = None
 ):
     """Delete the specified junk documents."""
     deleted_count = 0

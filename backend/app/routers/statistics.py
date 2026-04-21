@@ -7,8 +7,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from app.database import get_db
 from app.models import PaperlessCache
-from app.services.statistics import StatisticsService, get_statistics_service
-from app.services.paperless_client import PaperlessClient, get_paperless_client
+from app.services.statistics import StatisticsService
+from app.services.paperless_client import PaperlessClient
+from dishka.integrations.fastapi import inject
+from dishka import FromDishka
 
 router = APIRouter()
 
@@ -22,9 +24,10 @@ class RecordStatisticRequest(BaseModel):
 
 
 @router.post("/record")
+@inject
 async def record_statistic(
     request: RecordStatisticRequest,
-    stats_service: StatisticsService = Depends(get_statistics_service)
+    stats_service: FromDishka[StatisticsService] = None
 ):
     """Manually record a cleanup operation statistic."""
     await stats_service.record_operation(
@@ -88,9 +91,10 @@ async def get_cached_counts(db: AsyncSession, paperless: PaperlessClient) -> dic
 
 
 @router.get("/summary")
+@inject
 async def get_statistics_summary(
-    stats_service: StatisticsService = Depends(get_statistics_service),
-    paperless: PaperlessClient = Depends(get_paperless_client),
+    stats_service: FromDishka[StatisticsService] = None,
+    paperless: FromDishka[PaperlessClient] = None,
     db: AsyncSession = Depends(get_db)
 ):
     """Get comprehensive statistics summary for dashboard."""
@@ -115,18 +119,20 @@ async def get_statistics_summary(
 
 
 @router.get("/recent")
+@inject
 async def get_recent_operations(
     limit: int = 10,
-    stats_service: StatisticsService = Depends(get_statistics_service)
+    stats_service: FromDishka[StatisticsService] = None
 ):
     """Get recent cleanup operations."""
     return await stats_service.get_recent_operations(limit)
 
 
 @router.get("/trend")
+@inject
 async def get_daily_trend(
     days: int = 7,
-    stats_service: StatisticsService = Depends(get_statistics_service)
+    stats_service: FromDishka[StatisticsService] = None
 ):
     """Get daily statistics trend."""
     return await stats_service.get_daily_trend(days)
