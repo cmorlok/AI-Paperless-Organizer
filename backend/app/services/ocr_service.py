@@ -199,23 +199,12 @@ class OcrService:
         self.smart_skip_enabled = smart_skip_enabled
 
     async def _ensure_config(self) -> None:
-        """Lazy-load OCR settings from DB on first use."""
-        if self._config_loaded or self._explicit_ollama_url is not None or self.session_factory is None:
-            return
-        from sqlalchemy import select
-        from app.models.settings_model import OCRSettings
-        async with self.session_factory() as db:
-            result = await db.execute(select(OCRSettings).where(OCRSettings.id == 1))
-            settings = result.scalar_one_or_none()
-            if settings:
-                if settings.ollama_url:
-                    self.ollama_urls = [settings.ollama_url.rstrip("/")]
-                if settings.model:
-                    self.model = settings.model
-                if settings.max_image_size:
-                    self.max_image_size = settings.max_image_size
-                if hasattr(settings, 'smart_skip_enabled') and settings.smart_skip_enabled is not None:
-                    self.smart_skip_enabled = settings.smart_skip_enabled
+        """Lazy-load OCR settings from DB on first use.
+
+        OCR settings are currently managed via the ocr_settings JSON file
+        in routers/ocr.py. No dedicated DB model exists yet, so this is a
+        no-op placeholder for future DI-based config loading.
+        """
         self._config_loaded = True
     
     def get_current_url(self) -> str:
