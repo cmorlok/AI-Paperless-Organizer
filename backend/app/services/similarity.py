@@ -444,7 +444,7 @@ Wenn nichts zusammengehört: {{"group_merges": [], "add_to_groups": []}}"""
             "analyzed_count": len(filtered_tags),
             "estimated_input_tokens": estimated_input_tokens,
             "token_limit": token_limit,
-            "model": self.llm.provider.model if self.llm.provider else "unknown"
+            "model": self.llm.model or "unknown"
         }
         
         if estimated_input_tokens > safe_limit:
@@ -533,7 +533,7 @@ Wenn nichts zusammengehört: {{"group_merges": [], "add_to_groups": []}}"""
             "correspondents_count": len(correspondents),
             "estimated_input_tokens": estimated_input_tokens,
             "token_limit": token_limit,
-            "model": self.llm.provider.model if self.llm.provider else "unknown"
+            "model": self.llm.model or "unknown"
         }
         
         if estimated_input_tokens > safe_limit:
@@ -626,7 +626,7 @@ Wenn nichts zusammengehört: {{"group_merges": [], "add_to_groups": []}}"""
             "doctypes_count": len(doc_types),
             "estimated_input_tokens": estimated_input_tokens,
             "token_limit": token_limit,
-            "model": self.llm.provider.model if self.llm.provider else "unknown"
+            "model": self.llm.model or "unknown"
         }
         
         if estimated_input_tokens > safe_limit:
