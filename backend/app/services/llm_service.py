@@ -177,7 +177,8 @@ async def _resolve_provider_credentials(provider: str) -> Dict[str, Any]:
 
 
 def build_ollama_params(
-    temperature: float = 0.1,
+    temperature: float = 0.0,
+    top_p: float = 0.1,
     num_ctx: int = 16384,
     num_predict: Optional[int] = None,
     keep_alive: Optional[str] = None,
@@ -193,7 +194,7 @@ def build_ollama_params(
     'keep_alive' and 'think' are top-level keys.
     'format' carries a JSON schema or the string "json" for structured output.
     """
-    options: Dict[str, Any] = {"temperature": temperature, "num_ctx": num_ctx}
+    options: Dict[str, Any] = {"temperature": temperature, "top_p": top_p, "num_ctx": num_ctx}
     if num_predict is not None:
         options["num_predict"] = num_predict
     if seed is not None:
@@ -217,7 +218,8 @@ async def llm_completion(
     model: str,
     messages: List[Dict[str, Any]],
     provider: Optional[str] = None,
-    temperature: float = 0.1,
+    temperature: float = 0.0,
+    top_p: float = 0.1,
     stream: bool = False,
     keep_alive: Optional[str] = None,
     json_schema: Optional[Dict[str, Any]] = None,
@@ -242,6 +244,7 @@ async def llm_completion(
         "model": model,
         "messages": messages,
         "temperature": temperature,
+        "top_p": top_p,
         "stream": stream,
         **kwargs,
     }
@@ -249,6 +252,7 @@ async def llm_completion(
     if provider == "ollama" and "extra_body" not in kwargs:
         litellm_kwargs["extra_body"] = build_ollama_params(
             temperature=temperature,
+            top_p=top_p,
             num_ctx=num_ctx or 16384,
             num_predict=num_predict,
             keep_alive=keep_alive,
@@ -565,7 +569,8 @@ class LitellmService:
             model=model,
             messages=[{"role": "user", "content": prompt}],
             provider=self.provider.name if self.provider else None,
-            temperature=0.1,
+            temperature=0.0,
+            top_p=0.1,
         )
         return (response.choices[0].message.content or "").strip()
 
