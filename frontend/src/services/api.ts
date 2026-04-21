@@ -89,9 +89,52 @@ export const savePaperlessSettings = (data: { url: string; api_token: string }) 
 
 export const getLLMProviders = () => fetchJson<any[]>('/settings/llm-providers')
 
+// Dynamic LLM provider/model endpoints (LLM-09)
+
+// Get all LiteLLM-supported providers (from LiteLLM, not DB)
+export const getLLMProvidersDynamic = () =>
+  fetchJson<{ name: string; display_name: string }[]>('/settings/llm-providers')
+
+// Get all LLM providers from DB (with id, for save operations)
+export const getLLMProvidersFromDB = () =>
+  fetchJson<{
+    id: number
+    name: string
+    display_name: string
+    api_key: string
+    api_base_url: string
+  }[]>('/settings/llm-providers/db')
+
+// Get available models for a specific provider
+export interface LLMModel {
+  id: string
+  name: string
+  display_name: string
+}
+
+export const getLLMProviderModels = (provider: string) =>
+  fetchJson<{ provider: string; models: LLMModel[] }>(`/settings/llm-providers/models?provider=${encodeURIComponent(provider)}`)
+
 export const updateLLMProvider = (id: number, data: any) =>
-  fetchJson<{ success: boolean }>(`/settings/llm-providers/${id}`, {
+  fetchJson<{ success: boolean }>(`/settings/llm-providers/db/${id}`, {
     method: 'PUT',
+    body: JSON.stringify(data),
+  })
+
+// Update provider connection fields only (LLM-09)
+export const updateLLMProviderConnection = (providerId: number, apiKey: string, apiBaseUrl?: string) =>
+  fetchJson<{ success: boolean }>(`/settings/llm-providers/db/${providerId}`, {
+    method: 'PATCH',
+    body: JSON.stringify({
+      api_key: apiKey,
+      api_base_url: apiBaseUrl,
+    }),
+  })
+
+// Create a new LLM provider record (for providers selected from LiteLLM list that don't exist in DB)
+export const createLLMProvider = (data: { name: string; display_name?: string; api_key?: string; api_base_url?: string }) =>
+  fetchJson<{ id: number; name: string; display_name: string }>('/settings/llm-providers/db', {
+    method: 'POST',
     body: JSON.stringify(data),
   })
 
@@ -139,6 +182,8 @@ export const updateAppSettings = (data: {
   show_debug_menu?: boolean
   sidebar_compact?: boolean
   classifier_provider?: string
+  classifier_model?: string
+  ocr_model?: string
 }) =>
   fetchJson<{ success: boolean }>('/settings/app', {
     method: 'PUT',
@@ -374,24 +419,6 @@ export const recordStatistic = (entityType: string, operation: string, itemsAffe
 // LLM
 export const testLLMConnection = () =>
   fetchJson<{ success: boolean; provider?: string; model?: string; error?: string }>('/llm/test', { method: 'POST' })
-
-export const getActiveLLMProvider = () =>
-  fetchJson<{ configured: boolean; provider?: string; display_name?: string; model?: string }>('/llm/active-provider')
-
-export interface ModelInfo {
-  id: string
-  provider: string
-  context: number
-  input_price: number
-  output_price: number
-  description: string
-}
-
-export const getAvailableModels = (provider?: string) =>
-  fetchJson<{ models: ModelInfo[] }>(`/llm/models${provider ? `?provider=${provider}` : ''}`)
-
-export const getModelInfo = (modelId: string) =>
-  fetchJson<ModelInfo & { model_id: string }>(`/llm/model-info/${modelId}`)
 
 // Statistics
 export const getStatisticsSummary = () =>

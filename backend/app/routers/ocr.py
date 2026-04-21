@@ -18,7 +18,7 @@ from app.database import get_db
 from app.services.paperless_client import PaperlessClient, get_paperless_client
 from app.services.ocr_service import OcrService, batch_state, watchdog_state, single_ocr_running, ocr_page_progress, load_review_queue, save_review_queue, load_ocr_ignore_list, save_ocr_ignore_list, load_ocr_error_list, save_ocr_error_list, load_ocr_error_counts, save_ocr_error_counts, DEFAULT_OLLAMA_URL, DEFAULT_OCR_MODEL
 import app.services.ocr_service as ocr_service_module
-from app.services.llm_provider import LLMProviderService, get_llm_service
+from app.services.llm_service import LitellmService as LLMProviderService, get_llm_service
 
 logger = logging.getLogger(__name__)
 
@@ -29,23 +29,55 @@ SETTINGS_FILE = Path("/app/data/ocr_settings.json")
 
 
 def load_ocr_settings() -> dict:
-    """Load OCR settings from file, or return defaults."""
-    if SETTINGS_FILE.exists():
-        try:
-            with open(SETTINGS_FILE, "r") as f:
-                settings = json.load(f)
-                if "ollama_urls" not in settings:
-                    settings["ollama_urls"] = [settings.get("ollama_url", DEFAULT_OLLAMA_URL)]
-                return settings
-        except Exception:
-            pass
-    return {
+    """Load OCR settings from file + key-value store (LLM-08), or return defaults."""
+    defaults = {
         "ollama_url": DEFAULT_OLLAMA_URL, 
         "ollama_urls": [DEFAULT_OLLAMA_URL],
         "model": DEFAULT_OCR_MODEL,
         "max_image_size": 1344,
         "smart_skip_enabled": True
     }
+    
+    # Load from file
+    file_settings = {}
+    if SETTINGS_FILE.exists():
+        try:
+            with open(SETTINGS_FILE, "r") as f:
+                file_settings = json.load(f)
+                if "ollama_urls" not in file_settings:
+                    file_settings["ollama_urls"] = [file_settings.get("ollama_url", DEFAULT_OLLAMA_URL)]
+        except Exception:
+            pass
+    
+    # Merge: file settings as base
+    # Note: KV store overrides are loaded lazily at runtime (LLM-08)
+    # to avoid asyncio issues during module load
+    return {**defaults, **file_settings}
+
+
+def reload_ocr_settings_with_kv(db) -> dict:
+    """Reload settings with KV store overrides. Call from async context."""
+    import asyncio
+    from app.routers.settings import get_setting
+    from app.models.settings_model import LLM_KEY_OCR_MODEL, LLM_KEY_OCR_PROVIDER
+    
+    settings = load_ocr_settings()
+    
+    async def _load_kv():
+        model = await get_setting(LLM_KEY_OCR_MODEL, db)
+        provider = await get_setting(LLM_KEY_OCR_PROVIDER, db)
+        return model, provider
+    
+    model, provider = asyncio.get_running_loop().run_until_complete(_load_kv())
+    
+    if model:
+        settings["model"] = model
+    if provider:
+        settings["ollama_url"] = provider
+        if "ollama_urls" not in settings:
+            settings["ollama_urls"] = [provider]
+    
+    return settings
 
 
 def save_ocr_settings_to_file(settings: dict):
@@ -956,7 +988,7 @@ async def _run_compare_job(paperless_client, document_id: int, models: list, tar
             if is_pdf and render_dpi not in dpi_image_cache:
                 compare_state["phase"] = "convert"
                 print(f"[Compare] Rendering PDF at {render_dpi} DPI for {model_name}")
-                dpi_images = await loop.run_in_executor(
+                dpi_images = await asyncio.get_running_loop().run_in_executor(
                     None, lambda dpi=render_dpi: convert_from_bytes(file_bytes, dpi=dpi)
                 )
                 dpi_image_cache[render_dpi] = dpi_images
@@ -1213,7 +1245,7 @@ WICHTIG:
 """
 
     try:
-        used_model = eval_model or llm_service.provider.model
+        used_model = eval_model or "gpt-4o"
         print(f"[Evaluate] Sending {len(results)} OCR results to {llm_service.provider.name} / {used_model}")
         
         raw_response = await llm_service.complete(prompt, model_override=eval_model)

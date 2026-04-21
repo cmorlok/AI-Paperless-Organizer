@@ -62,7 +62,6 @@ class IndexRequest(BaseModel):
 class ConfigUpdate(BaseModel):
     embedding_provider: Optional[str] = None
     embedding_model: Optional[str] = None
-    ollama_base_url: Optional[str] = None
     chunk_size: Optional[int] = None
     chunk_overlap: Optional[int] = None
     bm25_weight: Optional[float] = None
@@ -192,15 +191,23 @@ async def update_config(request: ConfigUpdate):
 async def rag_health():
     service = get_rag_service()
     config = await service.get_config_dict()
-    from app.services.rag.embedding_service import EmbeddingService
-    embed_service = EmbeddingService(
-        provider=config["embedding_provider"],
-        model=config["embedding_model"],
-        ollama_base_url=config["ollama_base_url"],
-    )
-    health = await embed_service.check_health()
     index_status = await service.indexer.get_status()
     return {
-        "embedding": health,
+        "embedding": await _probe_embedding(config),
         "index": index_status,
     }
+
+
+async def _probe_embedding(config: dict) -> dict:
+    from app.services.llm_service import llm_embedding
+    provider = config["embedding_provider"]
+    model = config["embedding_model"]
+    try:
+        await llm_embedding(
+            model=model,
+            provider=provider,
+            input=["test"],
+        )
+        return {"healthy": True, "provider": provider, "model": model}
+    except Exception as e:
+        return {"healthy": False, "provider": provider, "model": model, "error": str(e)}

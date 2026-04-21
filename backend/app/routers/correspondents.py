@@ -10,7 +10,7 @@ from app.services.paperless_client import PaperlessClient, get_paperless_client
 from app.services.similarity import SimilarityService, get_similarity_service
 from app.services.merge import MergeService, get_merge_service
 from app.services.statistics import StatisticsService, get_statistics_service
-from app.services.llm_provider import LLMProviderService, get_llm_service
+from app.services.llm_service import LitellmService as LLMProviderService, get_llm_service
 
 router = APIRouter()
 ENTITY_TYPE = "correspondents"
@@ -55,10 +55,9 @@ async def estimate_correspondents(
     estimated_input = 500 + int(items_count * (avg_name_length + 10))
     estimated_tokens = estimated_input // 4
     
-    # Get token limit and model info from LLM provider
-    token_limit = llm.get_token_limit()
-    model_info = llm.get_model_info()
-    model_name = model_info.get("model", "Nicht konfiguriert") if model_info else "Nicht konfiguriert"
+    # Default token limit for batching decisions
+    token_limit = 8000
+    model_name = llm.model or "Nicht konfiguriert"
     safe_limit = int(token_limit * 0.8)
     needs_batching = estimated_tokens > safe_limit
     recommended_batches = max(1, (estimated_tokens + safe_limit - 1) // safe_limit) if needs_batching else 1

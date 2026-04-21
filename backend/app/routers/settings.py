@@ -5,10 +5,53 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from app.database import get_db
 from app.models import PaperlessSettings, LLMProvider, CustomPrompt, IgnoredTag, AppSettings
+from app.models.settings_model import (
+    LLM_KEY_CLASSIFIER_PROVIDER,
+    LLM_KEY_CLASSIFIER_MODEL,
+    LLM_KEY_OCR_PROVIDER,
+    LLM_KEY_OCR_MODEL,
+)
+from app.services.llm_service import list_llm_models, list_llm_providers, PROVIDER_DISPLAY_NAMES
 import hashlib
 from app.prompts.default_prompts import DEFAULT_PROMPTS
 
 router = APIRouter()
+
+
+# ── Key-Value Setting Helpers (LLM-08) ─────────────────────────────────────────
+
+async def get_setting(key: str, db: AsyncSession) -> Optional[str]:
+    """Get a setting value by key. Returns None if not found."""
+    result = await db.execute(
+        select(AppSettings).where(AppSettings.key == key)
+    )
+    setting = result.scalar_one_or_none()
+    return setting.value if setting else None
+
+
+async def set_setting(key: str, value: str, value_type: str = "str", db: AsyncSession = None):
+    """Set a setting value. Creates new row if key doesn't exist, updates if it does."""
+    if db is None:
+        async for session in get_db():
+            await set_setting(key, value, value_type, session)
+            break   # exits cleanly; generator finally-block runs
+        return
+    result = await db.execute(
+        select(AppSettings).where(AppSettings.key == key)
+    )
+    setting = result.scalar_one_or_none()
+    if setting:
+        setting.value = value
+        setting.value_type = value_type
+    else:
+        setting = AppSettings(id=None, key=key, value=value, value_type=value_type)
+        db.add(setting)
+    await db.commit()
+
+
+class SettingUpdateSchema(BaseModel):
+    value: str
+    value_type: Optional[str] = "str"
 
 
 # Pydantic models for requests/responses
@@ -18,14 +61,25 @@ class PaperlessSettingsSchema(BaseModel):
 
 
 class LLMProviderSchema(BaseModel):
+    """Full LLMProvider update schema (used by PUT, now without model fields per D-05)."""
     name: str
     display_name: str
     api_key: Optional[str] = ""
     api_base_url: Optional[str] = ""
-    model: Optional[str] = ""
-    classifier_model: Optional[str] = ""
-    vision_model: Optional[str] = ""
-    is_active: bool = False
+
+
+class LLMProviderPatchSchema(BaseModel):
+    """Patch schema for updating connection fields only (per D-05)."""
+    api_key: Optional[str] = None
+    api_base_url: Optional[str] = None
+
+
+class LLMProviderCreateSchema(BaseModel):
+    """Schema for creating a new LLM provider record."""
+    name: str
+    display_name: Optional[str] = None
+    api_key: Optional[str] = ""
+    api_base_url: Optional[str] = ""
 
 
 class CustomPromptSchema(BaseModel):
@@ -84,39 +138,16 @@ async def save_paperless_settings(
     return {"success": True, "is_configured": settings.is_configured}
 
 
-# LLM Providers
-@router.get("/llm-providers")
-async def get_llm_providers(db: AsyncSession = Depends(get_db)):
-    """Get all LLM provider configurations."""
+# LLM Providers - DB-based (for internal/admin use)
+@router.get("/llm-providers/db")
+async def get_llm_providers_from_db(db: AsyncSession = Depends(get_db)):
+    """Get all LLM provider configurations from database.
+    
+    Returns only providers that have been explicitly configured via POST.
+    The SettingsPanel uses the LiteLLM-based /llm-providers endpoint for the provider dropdown.
+    """
     result = await db.execute(select(LLMProvider).order_by(LLMProvider.name))
     providers = result.scalars().all()
-    
-    ALL_DEFAULTS = [
-        {"name": "openai", "display_name": "OpenAI", "model": "gpt-4o"},
-        {"name": "anthropic", "display_name": "Anthropic Claude", "model": "claude-3-5-sonnet-20241022"},
-        {"name": "azure", "display_name": "Azure OpenAI", "model": "gpt-4"},
-        {"name": "ollama", "display_name": "Ollama (Lokal)", "api_base_url": "http://localhost:11434", "model": "llama3.1"},
-        {"name": "mistral", "display_name": "Mistral AI", "model": "mistral-small-latest"},
-        {"name": "openrouter", "display_name": "OpenRouter", "model": "mistralai/mistral-small-2603"},
-    ]
-
-    if not providers:
-        for p in ALL_DEFAULTS:
-            db.add(LLMProvider(**p))
-        await db.commit()
-        result = await db.execute(select(LLMProvider).order_by(LLMProvider.name))
-        providers = result.scalars().all()
-    else:
-        existing_names = {p.name for p in providers}
-        added = False
-        for p in ALL_DEFAULTS:
-            if p["name"] not in existing_names:
-                db.add(LLMProvider(**p))
-                added = True
-        if added:
-            await db.commit()
-            result = await db.execute(select(LLMProvider).order_by(LLMProvider.name))
-            providers = result.scalars().all()
     
     return [
         {
@@ -125,52 +156,152 @@ async def get_llm_providers(db: AsyncSession = Depends(get_db)):
             "display_name": p.display_name,
             "api_key": "***" if p.api_key else "",
             "api_base_url": p.api_base_url or "",
-            "model": p.model or "",
-            "classifier_model": getattr(p, "classifier_model", "") or "",
-            "vision_model": getattr(p, "vision_model", "") or "",
-            "is_active": p.is_active,
-            "is_configured": p.is_configured,
         }
         for p in providers
     ]
 
 
-@router.put("/llm-providers/{provider_id}")
+# LLM Providers - LiteLLM-based (for SettingsPanel UI)
+@router.get("/llm-providers")
+async def get_llm_providers_from_litellm():
+    """Get all LiteLLM-supported providers from litellm.provider_list."""
+    return list_llm_providers()
+
+
+@router.get("/llm-providers/models")
+async def get_llm_provider_models(provider: str, db: AsyncSession = Depends(get_db)):
+    """Get available models for a specific LiteLLM provider.
+    
+    For local providers (ollama, lm_studio, vllm): queries the provider's
+    API directly using configured base_url from the database.
+    
+    For other providers: falls back to litellm.model_list filtered by 
+    provider prefix (e.g., "openai/").
+    """
+    try:
+        models = await list_llm_models(provider, db)
+        return {"provider": provider, "models": models}
+    except Exception as e:
+        return {"provider": provider, "models": [], "error": str(e)}
+
+
+def _validate_base_url(url: str) -> str:
+    """Validate URL scheme to prevent SSRF attacks (WR-04)."""
+    from urllib.parse import urlparse
+    parsed = urlparse(url)
+    if parsed.scheme not in ("http", "https"):
+        raise ValueError(f"Unsupported URL scheme for provider: {parsed.scheme!r}")
+    return url.rstrip("/")
+
+
+def _format_model_display_name(model_name: str) -> str:
+    """Format model name for display in dropdown."""
+    # Common model name cleanups
+    name = model_name.replace("-", " ").replace("_", " ")
+    
+    # Capitalize words
+    name = " ".join(word.capitalize() for word in name.split())
+    
+    # Common replacements
+    replacements = {
+        "Gpt": "GPT",
+        "Claude": "Claude",
+        "Llama": "Llama",
+        "Mistral": "Mistral",
+        "Qwen": "Qwen",
+        "Gemma": "Gemma",
+        "Deepseek": "DeepSeek",
+    }
+    for old, new in replacements.items():
+        name = name.replace(old, new)
+    
+    return name
+
+
+@router.put("/llm-providers/db/{provider_id}")
 async def update_llm_provider(
     provider_id: int,
     data: LLMProviderSchema,
     db: AsyncSession = Depends(get_db)
 ):
-    """Update an LLM provider configuration."""
+    """Update an LLM provider configuration (connection fields only per D-05)."""
     result = await db.execute(select(LLMProvider).where(LLMProvider.id == provider_id))
     provider = result.scalar_one_or_none()
     
     if not provider:
         raise HTTPException(status_code=404, detail="Provider not found")
     
-    # If setting this provider as active, deactivate others
-    if data.is_active:
-        await db.execute(
-            LLMProvider.__table__.update().values(is_active=False)
-        )
-    
     # Keep old key if *** or empty string is sent (don't accidentally clear the key)
     if data.api_key and data.api_key != "***":
         provider.api_key = data.api_key
     # else: keep existing provider.api_key
-    provider.api_base_url = data.api_base_url
-    provider.model = data.model
-    if data.classifier_model is not None:
-        provider.classifier_model = data.classifier_model
-    if data.vision_model is not None:
-        provider.vision_model = data.vision_model
-    provider.is_active = data.is_active
-    provider.is_configured = bool(
-        provider.api_key or provider.name == "ollama"
-    )
+    if data.api_base_url is not None:
+        provider.api_base_url = data.api_base_url
     
     await db.commit()
     return {"success": True}
+
+
+@router.patch("/llm-providers/db/{provider_id}")
+async def patch_llm_provider(
+    provider_id: int,
+    data: LLMProviderPatchSchema,
+    db: AsyncSession = Depends(get_db)
+):
+    """Update only connection fields (api_key, api_base_url) of an LLM provider.
+
+    Does NOT update model fields — those are set via AppSettings key-value per LLM-08.
+    """
+    result = await db.execute(select(LLMProvider).where(LLMProvider.id == provider_id))
+    provider = result.scalar_one_or_none()
+    
+    if not provider:
+        raise HTTPException(status_code=404, detail="Provider not found")
+    
+    # Only update fields that are provided
+    if data.api_key is not None:
+        # Don't overwrite with empty string if *** is sent (masked = don't change)
+        if data.api_key and data.api_key != "***":
+            provider.api_key = data.api_key
+    
+    if data.api_base_url is not None:
+        provider.api_base_url = data.api_base_url
+    
+    await db.commit()
+    return {"success": True}
+
+
+@router.post("/llm-providers/db")
+async def create_llm_provider(
+    data: LLMProviderCreateSchema,
+    db: AsyncSession = Depends(get_db)
+):
+    """Create a new LLM provider configuration.
+    
+    Used when user selects a provider from LiteLLM list that doesn't exist in DB yet.
+    """
+    # Check if provider with this name already exists
+    result = await db.execute(select(LLMProvider).where(LLMProvider.name == data.name))
+    existing = result.scalar_one_or_none()
+    
+    if existing:
+        raise HTTPException(status_code=409, detail="Provider already exists")
+    
+    # Use provided display_name or derive from PROVIDER_DISPLAY_NAMES
+    display_name = data.display_name or PROVIDER_DISPLAY_NAMES.get(data.name, data.name.title())
+    
+    provider = LLMProvider(
+        name=data.name,
+        display_name=display_name,
+        api_key=data.api_key or "",
+        api_base_url=data.api_base_url or "",
+    )
+    
+    db.add(provider)
+    await db.commit()
+    await db.refresh(provider)
+    
+    return {"id": provider.id, "name": provider.name, "display_name": provider.display_name}
 
 
 # Custom Prompts - Display names for UI
@@ -362,6 +493,8 @@ class AppSettingsSchema(BaseModel):
     show_debug_menu: Optional[bool] = None
     sidebar_compact: Optional[bool] = None
     classifier_provider: Optional[str] = None
+    classifier_model: Optional[str] = None  # Stored in key-value store (LLM-09)
+    ocr_model: Optional[str] = None  # Stored in key-value store (LLM-09)
 
 
 class PasswordVerifySchema(BaseModel):
@@ -386,12 +519,22 @@ async def get_app_settings(db: AsyncSession = Depends(get_db)):
         await db.commit()
         await db.refresh(settings)
     
+    # Check key-value store for classifier_provider first (LLM-08)
+    kv_classifier_provider = await get_setting(LLM_KEY_CLASSIFIER_PROVIDER, db)
+    classifier_provider = kv_classifier_provider or ""
+    
+    # Get key-value settings for model fields (LLM-09)
+    kv_classifier_model = await get_setting(LLM_KEY_CLASSIFIER_MODEL, db)
+    kv_ocr_model = await get_setting(LLM_KEY_OCR_MODEL, db)
+    
     return {
         "password_enabled": settings.password_enabled,
         "password_set": bool(settings.password_hash),
         "show_debug_menu": settings.show_debug_menu,
         "sidebar_compact": settings.sidebar_compact,
-        "classifier_provider": getattr(settings, "classifier_provider", "ollama") or "ollama",
+        "classifier_provider": classifier_provider,
+        "classifier_model": kv_classifier_model or "",
+        "ocr_model": kv_ocr_model or "",
     }
 
 
@@ -422,6 +565,16 @@ async def update_app_settings(
 
     if data.classifier_provider is not None:
         settings.classifier_provider = data.classifier_provider
+        # Also update the key-value store (LLM-08)
+        await set_setting(LLM_KEY_CLASSIFIER_PROVIDER, data.classifier_provider, "str", db)
+    
+    if data.classifier_model is not None:
+        # Store in key-value store (LLM-09)
+        await set_setting(LLM_KEY_CLASSIFIER_MODEL, data.classifier_model, "str", db)
+    
+    if data.ocr_model is not None:
+        # Store in key-value store (LLM-09)
+        await set_setting(LLM_KEY_OCR_MODEL, data.ocr_model, "str", db)
     
     await db.commit()
     
@@ -458,5 +611,40 @@ async def remove_password(db: AsyncSession = Depends(get_db)):
         settings.password_hash = ""
         await db.commit()
     
+    return {"success": True}
+
+
+# ── Key-Value Settings Endpoints (LLM-08) ──────────────────────────────────────
+
+@router.get("/settings/{key}")
+async def get_setting_endpoint(key: str, db: AsyncSession = Depends(get_db)):
+    """Get a setting value by key."""
+    value = await get_setting(key, db)
+    if value is None:
+        raise HTTPException(status_code=404, detail=f"Setting '{key}' not found")
+    return {"key": key, "value": value}
+
+
+@router.put("/settings/{key}")
+async def set_setting_endpoint(
+    key: str,
+    data: SettingUpdateSchema,
+    db: AsyncSession = Depends(get_db)
+):
+    """Set a setting value."""
+    await set_setting(key, data.value, data.value_type or "str", db)
+    return {"success": True, "key": key, "value": data.value}
+
+
+@router.post("/settings/seed-llm-keys")
+async def seed_llm_keys(db: AsyncSession = Depends(get_db)):
+    """Seed LLM key-value settings from existing LLMProvider records. Run once during migration."""
+    result = await db.execute(select(LLMProvider).limit(1))
+    provider = result.scalar_one_or_none()
+    if provider:
+        if provider.name:
+            await set_setting(LLM_KEY_CLASSIFIER_PROVIDER, provider.name, "str", db)
+        if hasattr(provider, "classifier_model") and provider.classifier_model:
+            await set_setting(LLM_KEY_CLASSIFIER_MODEL, provider.classifier_model, "str", db)
     return {"success": True}
 

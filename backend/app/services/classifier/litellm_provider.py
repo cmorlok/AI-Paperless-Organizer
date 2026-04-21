@@ -1,52 +1,33 @@
-"""Ollama classifier provider using Multi-Call strategy.
-
-Since Ollama models don't support tool calling, we split the classification
-into focused sequential LLM calls:
-  1. Analyze: title, correspondent, date, summary
-  2. Document Type: simple pick from list
-  3. Tags: pick from list with context
-  4. Storage Path: assign based on profiles + all context
-  5. Custom Fields: extract configured values
-
-Each call does ONE thing only -- small models work best with focused tasks.
-"""
+"""Classifier providers for LiteLLM — replaces openai_provider.py and ollama_provider.py."""
 
 import json
 import random
+import re
 import time
 import logging
-import re
 from typing import Dict, Any, List, Optional
 
-import httpx
+from app.services.llm_service import llm_completion
 
 from app.services.classifier.base_provider import (
     BaseClassifierProvider, ClassificationResult, DocumentContext,
 )
+from app.services.classifier.tool_definitions import (
+    CLASSIFIER_TOOLS, CLASSIFICATION_RESULT_SCHEMA,
+)
 from app.services.classifier.tool_executor import ToolExecutor
 from app.services.classifier.prompts import (
-    SYSTEM_PROMPT_OLLAMA_ANALYZE,
-    SYSTEM_PROMPT_OLLAMA_STORAGE_PATH,
-    SYSTEM_PROMPT_OLLAMA_CUSTOM_FIELDS,
-    SYSTEM_PROMPT_OLLAMA_VERIFY,
-    RULES_TAGS,
-    RULES_DOCTYPE,
-    RULES_TITLE,
-    RULES_CORRESPONDENT,
-    RULES_DATE,
-    get_correspondent_rules,
+    SYSTEM_PROMPT_OPENAI, SYSTEM_PROMPT_OLLAMA_ANALYZE,
+    SYSTEM_PROMPT_OLLAMA_STORAGE_PATH, SYSTEM_PROMPT_OLLAMA_CUSTOM_FIELDS,
+    SYSTEM_PROMPT_OLLAMA_VERIFY, RULES_TITLE, RULES_TAGS, RULES_CORRESPONDENT,
+    RULES_DOCTYPE, RULES_DATE, get_correspondent_rules,
 )
 
 logger = logging.getLogger(__name__)
-
+MAX_TOOL_ROUNDS = 10
 MAX_CONTENT_CHARS = 10000
 OLLAMA_CALL_TIMEOUT = 180.0
-
 THINKING_MODEL_PREFIXES = ("qwen3", "deepseek-r1", "qwq")
-
-# Models known to hallucinate JSON values even when format=json is set.
-# For these we use strict enum-based schemas to constrain grammar at tokenizer level.
-# Well-behaved models (qwen3, qwen2.5, llama3, etc.) don't need this overhead.
 _STRICT_SCHEMA_MODELS = ("mistral",)
 
 # --- JSON Schemas for structured Ollama output ---
@@ -105,16 +86,314 @@ _SCHEMA_VERIFY = {
 }
 
 
-class OllamaMultiCallProvider(BaseClassifierProvider):
-    """Classifies documents using Ollama with sequential focused calls."""
+class LitellmToolCallingProvider(BaseClassifierProvider):
+    """Classifies documents using LiteLLM tool calling (replaces OpenAIToolCallingProvider).
+
+    Supports OpenAI, Mistral, OpenRouter, Anthropic, and any other LiteLLM-compatible
+    provider that supports tool calling.
+
+    Flow:
+    1. Send document content + tool definitions to the LLM via litellm.acompletion
+    2. LLM may request tool calls (search_tags, search_correspondents, ...)
+    3. We execute those calls locally against our Paperless cache
+    4. Send results back to the LLM
+    5. Repeat until the LLM returns the final classification
+    """
 
     def __init__(
         self,
-        host: str = "http://localhost:11434",
+        model: str,
+        provider: str,
+        tool_executor: Optional[ToolExecutor] = None,
+        provider_label: str = "",
+    ):
+        self.model = model
+        self.provider = provider
+        self.tool_executor = tool_executor
+        self._provider_label = provider_label or provider
+
+    def get_name(self) -> str:
+        return f"{self._provider_label} ({self.model})"
+
+    def supports_tool_calling(self) -> bool:
+        return True
+
+    async def test_connection(self) -> Dict[str, Any]:
+        try:
+            await llm_completion(
+                model=self.model,
+                provider=self.provider,
+                messages=[{"role": "user", "content": "Ping"}],
+                max_tokens=5,
+            )
+            return {"connected": True, "model": self.model}
+        except Exception as e:
+            return {"connected": False, "error": str(e)}
+
+    async def classify(
+        self,
+        document: DocumentContext,
+        config: Dict[str, Any],
+    ) -> ClassificationResult:
+        start_time = time.time()
+        total_input_tokens = 0
+        total_output_tokens = 0
+        total_tool_calls = 0
+
+        enabled_fields = self._get_enabled_fields(config)
+
+        system_prompt = config.get("system_prompt") or SYSTEM_PROMPT_OPENAI
+        system_prompt += f"\n\nAktivierte Felder: {', '.join(enabled_fields)}"
+        tags_min = config.get("tags_min", 1)
+        tags_max = config.get("tags_max", 5)
+        system_prompt += f"\nTag-Anzahl: Mindestens {tags_min}, maximal {tags_max} Tags."
+        if "custom_fields" in enabled_fields:
+            system_prompt += "\nDu MUSST get_custom_field_definitions aufrufen und die Felder extrahieren!"
+        else:
+            system_prompt += "\nCustom Fields sind deaktiviert, ignoriere get_custom_field_definitions."
+        if "storage_path" in enabled_fields:
+            system_prompt += "\nDu MUSST get_storage_paths aufrufen und einen Pfad zuordnen! storage_path_id und storage_path_reason MUESSEN im Ergebnis stehen!"
+        else:
+            system_prompt += "\nSpeicherpfad ist deaktiviert, ignoriere get_storage_paths."
+
+        # Replace default rules with user-configured prompts when set.
+        # If trim_prompt is enabled and no manual prompt_correspondent is set,
+        # swap in the short-name variant automatically.
+        trim_prompt = config.get("correspondent_trim_prompt", False)
+        effective_correspondent_rule = config.get("prompt_correspondent") or (
+            get_correspondent_rules(trim_prompt) if trim_prompt else None
+        )
+        replacements = {
+            RULES_TITLE: config.get("prompt_title"),
+            RULES_TAGS: config.get("prompt_tags"),
+            RULES_CORRESPONDENT: effective_correspondent_rule,
+            RULES_DOCTYPE: config.get("prompt_document_type"),
+            RULES_DATE: config.get("prompt_date"),
+        }
+        for default_rule, user_rule in replacements.items():
+            if user_rule and user_rule.strip():
+                system_prompt = system_prompt.replace(default_rule, user_rule)
+
+        user_content = self._build_user_message(document)
+        logger.info(f"LiteLLM tool-calling user message length: {len(user_content)} chars")
+
+        active_tools = self._filter_tools(config)
+        logger.info(f"LiteLLM active tools: {[t['function']['name'] for t in active_tools]}")
+
+        messages: List[Dict] = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_content},
+        ]
+
+        try:
+            for _round in range(MAX_TOOL_ROUNDS):
+                call_kwargs: Dict[str, Any] = {
+                    "model": self.model,
+                    "messages": messages,
+                    "temperature": 0.2,
+                }
+
+                if active_tools:
+                    call_kwargs["tools"] = active_tools
+
+                litellm_kwargs = dict(call_kwargs)
+                litellm_kwargs["provider"] = self.provider
+                response = await llm_completion(**litellm_kwargs)
+
+                usage = response.usage
+                if usage:
+                    total_input_tokens += usage.prompt_tokens or 0
+                    total_output_tokens += usage.completion_tokens or 0
+
+                choice = response.choices[0]
+
+                if choice.finish_reason == "tool_calls" and choice.message.tool_calls:
+                    # Only keep standard fields – Mistral/OpenRouter reject OpenAI-only
+                    # extras like 'refusal', 'annotations', 'audio', 'function_call'
+                    raw = choice.message.model_dump(exclude_none=True)
+                    clean_msg: Dict[str, Any] = {"role": raw["role"]}
+                    if raw.get("content"):
+                        clean_msg["content"] = raw["content"]
+                    if raw.get("tool_calls"):
+                        clean_msg["tool_calls"] = raw["tool_calls"]
+                    messages.append(clean_msg)
+
+                    for tool_call in choice.message.tool_calls:
+                        total_tool_calls += 1
+                        fn_name = tool_call.function.name
+                        fn_args = json.loads(tool_call.function.arguments)
+
+                        logger.info(f"Tool call: {fn_name}({fn_args})")
+
+                        result_str = await self.tool_executor.execute(fn_name, fn_args)
+
+                        messages.append({
+                            "role": "tool",
+                            "tool_call_id": tool_call.id,
+                            "content": result_str,
+                        })
+                    continue
+
+                # No more tool calls -- parse final response
+                raw = choice.message.content or "{}"
+                raw = raw.strip()
+                if "```" in raw:
+                    import re as _re
+                    m = _re.search(r'```(?:json)?\s*\n(.*?)```', raw, _re.DOTALL)
+                    if m:
+                        raw = m.group(1).strip()
+                if not raw.startswith("{"):
+                    brace = raw.find("{")
+                    if brace >= 0:
+                        raw = raw[brace:]
+
+                try:
+                    data = json.loads(raw)
+                except json.JSONDecodeError:
+                    logger.error(f"Failed to parse JSON response: {raw[:500]}")
+                    return ClassificationResult(
+                        error=f"Invalid JSON from LLM: {raw[:200]}",
+                        tokens_input=total_input_tokens,
+                        tokens_output=total_output_tokens,
+                        duration_seconds=time.time() - start_time,
+                    )
+
+                logger.info(f"LiteLLM tool-calling result keys: {list(data.keys())}")
+                logger.info(f"LiteLLM raw tags: {data.get('tags', [])}")
+                if "storage_path_id" not in data:
+                    logger.warning(f"LiteLLM did NOT return storage_path_id! "
+                                   f"Tool calls made: {total_tool_calls}")
+
+                result = self._parse_result(
+                    data, total_input_tokens, total_output_tokens,
+                    total_tool_calls, start_time,
+                )
+                result.debug_info["content_sent_chars"] = len(user_content)
+                result.debug_info["model"] = self.model
+                result.debug_info["tools_called"] = total_tool_calls
+                result.debug_info["raw_tags_from_llm"] = data.get("tags", [])
+                return result
+
+            return ClassificationResult(
+                error=f"Max tool call rounds ({MAX_TOOL_ROUNDS}) reached",
+                tokens_input=total_input_tokens,
+                tokens_output=total_output_tokens,
+                duration_seconds=time.time() - start_time,
+            )
+
+        except Exception as e:
+            logger.error(f"LiteLLM tool-calling classification failed: {e}", exc_info=True)
+            return ClassificationResult(
+                error=str(e),
+                tokens_input=total_input_tokens,
+                tokens_output=total_output_tokens,
+                duration_seconds=time.time() - start_time,
+            )
+
+    def _get_enabled_fields(self, config: Dict) -> List[str]:
+        fields = []
+        mapping = {
+            "enable_title": "title",
+            "enable_tags": "tags",
+            "enable_correspondent": "correspondent",
+            "enable_document_type": "document_type",
+            "enable_storage_path": "storage_path",
+            "enable_created_date": "created_date",
+            "enable_custom_fields": "custom_fields",
+        }
+        for key, name in mapping.items():
+            if config.get(key, False):
+                fields.append(name)
+        return fields
+
+    def _build_user_message(self, doc: DocumentContext) -> str:
+        parts = [f"Dokument-ID: {doc.document_id}"]
+        if doc.current_title:
+            parts.append(f"Aktueller Titel: {doc.current_title}")
+        if doc.current_tags:
+            parts.append(f"Aktuelle Tags: {', '.join(doc.current_tags)}")
+        if doc.current_correspondent:
+            parts.append(f"Aktueller Korrespondent: {doc.current_correspondent}")
+        if doc.current_document_type:
+            parts.append(f"Aktueller Dokumenttyp: {doc.current_document_type}")
+
+        content = doc.content
+        if len(content) > 15000:
+            content = content[:15000] + "\n[... Inhalt gekuerzt ...]"
+
+        parts.append(f"\n--- DOKUMENTINHALT ---\n{content}")
+        return "\n".join(parts)
+
+    def _filter_tools(self, config: Dict) -> List[Dict]:
+        """Only include tools for enabled features."""
+        tools = []
+        for tool in CLASSIFIER_TOOLS:
+            fn_name = tool["function"]["name"]
+            if fn_name == "search_tags" and config.get("enable_tags"):
+                tools.append(tool)
+            elif fn_name == "search_correspondents" and config.get("enable_correspondent"):
+                tools.append(tool)
+            elif fn_name == "get_document_types" and config.get("enable_document_type"):
+                tools.append(tool)
+            elif fn_name == "get_storage_paths" and config.get("enable_storage_path"):
+                tools.append(tool)
+            elif fn_name == "get_custom_field_definitions" and config.get("enable_custom_fields"):
+                tools.append(tool)
+        return tools
+
+    def _parse_result(
+        self, data: Dict, input_tokens: int, output_tokens: int,
+        tool_calls: int, start_time: float,
+    ) -> ClassificationResult:
+        model_info = {
+            "gpt-4o-mini": (0.15, 0.60),
+            "gpt-4o": (2.50, 10.00),
+            "mistral-small-latest": (0.10, 0.30),
+            "mistral-medium-latest": (0.40, 1.20),
+            "mistral-large-latest": (2.00, 6.00),
+            "codestral-latest": (0.30, 0.90),
+            "open-mistral-nemo": (0.15, 0.15),
+            "ministral-8b-latest": (0.10, 0.10),
+        }
+        input_price, output_price = model_info.get(self.model, (0.15, 0.60))
+        cost = (input_tokens * input_price + output_tokens * output_price) / 1_000_000
+
+        return ClassificationResult(
+            title=data.get("title"),
+            tags=data.get("tags", []),
+            correspondent=data.get("correspondent"),
+            document_type=data.get("document_type"),
+            storage_path_id=data.get("storage_path_id"),
+            storage_path_reason=data.get("storage_path_reason"),
+            created_date=data.get("created_date"),
+            custom_fields=data.get("custom_fields", {}),
+            tokens_input=input_tokens,
+            tokens_output=output_tokens,
+            cost_usd=cost,
+            duration_seconds=time.time() - start_time,
+            tool_calls_count=tool_calls,
+        )
+
+
+class LitellmOllamaProvider(BaseClassifierProvider):
+    """Classifies documents using Ollama via LiteLLM with sequential focused calls.
+
+    Replaces OllamaMultiCallProvider. Since Ollama models don't support tool calling,
+    we split the classification into focused sequential LLM calls:
+      1. Analyze: title, correspondent, date, summary
+      2. Document Type: simple pick from list
+      3. Tags: pick from list with context
+      4. Storage Path: assign based on profiles + all context
+      5. Custom Fields: extract configured values
+
+    Each call does ONE thing only -- small models work best with focused tasks.
+    """
+
+    def __init__(
+        self,
         model: str = "qwen2.5:7b",
         tool_executor: Optional[ToolExecutor] = None,
     ):
-        self.host = host.rstrip("/")
         self.model = model
         self.tool_executor = tool_executor
         self._is_thinking = any(
@@ -133,12 +412,13 @@ class OllamaMultiCallProvider(BaseClassifierProvider):
 
     async def test_connection(self) -> Dict[str, Any]:
         try:
-            async with httpx.AsyncClient(timeout=10.0) as client:
-                resp = await client.get(f"{self.host}/api/tags")
-                resp.raise_for_status()
-                models = [m.get("name", "") for m in resp.json().get("models", [])]
-                found = any(self.model in m or m.startswith(self.model) for m in models)
-                return {"connected": True, "model_available": found, "model": self.model}
+            await llm_completion(
+                model=self.model,
+                provider="ollama",
+                messages=[{"role": "user", "content": "Ping"}],
+                max_tokens=5,
+            )
+            return {"connected": True, "model": self.model}
         except Exception as e:
             return {"connected": False, "error": str(e)}
 
@@ -616,7 +896,7 @@ class OllamaMultiCallProvider(BaseClassifierProvider):
         max_tokens: int = 500, keep_alive: str = "5m",
         json_schema: Optional[Dict[str, Any]] = None,
     ) -> str:
-        """Make a single Ollama call. Uses /api/generate with raw prompt for
+        """Make a single Ollama call via LiteLLM. Uses generate path with raw prompt for
         thinking models (bypasses chat template that triggers thinking),
         /api/chat with format=json/schema for standard models.
         """
@@ -633,70 +913,65 @@ class OllamaMultiCallProvider(BaseClassifierProvider):
         max_tokens: int, keep_alive: str,
         json_schema: Optional[Dict[str, Any]] = None,
     ) -> str:
-        """Standard models: /api/chat with format=json or JSON schema."""
+        """Standard models: chat endpoint with format=json or JSON schema via LiteLLM."""
         messages = [{"role": "system", "content": system_prompt}]
         if user_message:
             messages.append({"role": "user", "content": user_message})
 
-        # Use JSON schema if provided (Ollama >= 0.5 structured output),
-        # otherwise fall back to plain "json" mode.
-        fmt = json_schema if json_schema is not None else "json"
-
-        payload = {
-            "model": self.model,
-            "messages": messages,
-            "stream": False,
-            "format": fmt,
-            "keep_alive": keep_alive,
-            "options": {
-                "temperature": 0.1,
-                "num_ctx": 16384,
-                "num_predict": max_tokens,
-                "seed": random.randint(1, 2**31 - 1),  # bust KV-cache on every call
-            },
-        }
-
-        async with httpx.AsyncClient(timeout=OLLAMA_CALL_TIMEOUT) as client:
-            try:
-                resp = await client.post(f"{self.host}/api/chat", json=payload)
-                resp.raise_for_status()
-            except httpx.HTTPStatusError as e:
-                # Schema enforcement not supported by this Ollama version – retry without schema
-                if json_schema is not None and e.response.status_code in (400, 422):
-                    logger.warning(
-                        f"Ollama schema enforcement rejected (HTTP {e.response.status_code}), "
-                        f"retrying without schema."
-                    )
-                    payload["format"] = "json"
-                    resp = await client.post(f"{self.host}/api/chat", json=payload)
-                    resp.raise_for_status()
-                else:
-                    raise
-
-            data = resp.json()
-            content = data.get("message", {}).get("content", "")
-
-            prompt_tokens = data.get("prompt_eval_count", 0)
-            completion_tokens = data.get("eval_count", 0)
-            self._total_input_tokens += prompt_tokens
-            self._total_output_tokens += completion_tokens
-
-            if not content:
-                logger.warning(f"Empty chat response. Keys: {list(data.get('message', {}).keys())}")
-
-            logger.info(f"Ollama chat: {prompt_tokens}+{completion_tokens} tokens, "
-                        f"{len(content)} chars: {content[:200]}")
+        try:
+            response = await llm_completion(
+                model=self.model,
+                provider="ollama",
+                messages=messages,
+                num_predict=max_tokens,
+                keep_alive=keep_alive,
+                seed=random.randint(1, 2**31 - 1),
+                json_schema=json_schema,
+                json_output=True,
+                timeout=OLLAMA_CALL_TIMEOUT,
+            )
+            content = response.choices[0].message.content or ""
+            if response.usage:
+                self._total_input_tokens  += response.usage.prompt_tokens or 0
+                self._total_output_tokens += response.usage.completion_tokens or 0
+            logger.info(f"Ollama chat via litellm: {len(content)} chars: {content[:200]}")
             return content
+        except Exception as e:
+            # REVIEW FEEDBACK HIGH: Schema enforcement not supported — retry without schema (HTTP 400/422 fallback)
+            # LiteLLM raises BadRequestError (not httpx.HTTPStatusError) for Ollama HTTP 400/422.
+            # The retry condition checks the exception message for "format" or "schema" keywords
+            # since LiteLLM normalizes the error.
+            if json_schema is not None and ("format" in str(e).lower() or "schema" in str(e).lower()):
+                logger.warning(f"Ollama schema enforcement rejected, retrying without schema: {e}")
+                response = await llm_completion(
+                    model=self.model,
+                    provider="ollama",
+                    messages=messages,
+                    num_predict=max_tokens,
+                    keep_alive=keep_alive,
+                    seed=random.randint(1, 2**31 - 1),
+                    json_output=True,
+                    timeout=OLLAMA_CALL_TIMEOUT,
+                )
+                content = response.choices[0].message.content or ""
+                if response.usage:
+                    self._total_input_tokens  += response.usage.prompt_tokens or 0
+                    self._total_output_tokens += response.usage.completion_tokens or 0
+                return content
+            raise
 
     async def _call_ollama_generate(
         self, system_prompt: str, user_message: str,
         max_tokens: int, keep_alive: str,
         json_schema: Optional[Dict[str, Any]] = None,
     ) -> str:
-        """Thinking models: /api/generate bypasses chat template entirely.
+        """Thinking models: raw prompt approach via LiteLLM chat endpoint.
         We construct a raw prompt that forces direct JSON output without
-        triggering the model's thinking behavior.
+        triggering the model's thinking behavior. think=False suppresses
+        thinking output via extra_body per D-01.
         """
+        # Build a raw prompt that forces direct JSON output.
+        # LiteLLM uses /api/chat; we inject the raw prompt as a user turn.
         prompt_parts = [
             "Du bist ein JSON-Extraktor. Antworte AUSSCHLIESSLICH mit validem JSON.",
             "KEIN Denkprozess, KEINE Erklaerung, KEIN Markdown -- NUR das JSON-Objekt.",
@@ -707,63 +982,49 @@ class OllamaMultiCallProvider(BaseClassifierProvider):
         if user_message:
             prompt_parts.extend(["", "INPUT:", user_message])
         prompt_parts.extend(["", "JSON-ANTWORT:"])
-
         raw_prompt = "\n".join(prompt_parts)
 
-        fmt = json_schema if json_schema is not None else "json"
+        messages = [{"role": "user", "content": raw_prompt}]
 
-        payload = {
-            "model": self.model,
-            "prompt": raw_prompt,
-            "stream": False,
-            "raw": True,
-            "format": fmt,
-            "keep_alive": keep_alive,
-            "options": {
-                "temperature": 0.1,
-                "num_ctx": 16384,
-                "num_predict": max(max_tokens, 1500),
-                "think": False,
-                "seed": random.randint(1, 2**31 - 1),  # bust KV-cache on every call
-            },
-        }
-
-        async with httpx.AsyncClient(timeout=OLLAMA_CALL_TIMEOUT) as client:
-            try:
-                resp = await client.post(f"{self.host}/api/generate", json=payload)
-                resp.raise_for_status()
-            except httpx.HTTPStatusError as e:
-                if json_schema is not None and e.response.status_code in (400, 422):
-                    logger.warning(
-                        f"Ollama schema enforcement rejected (HTTP {e.response.status_code}), "
-                        f"retrying without schema."
-                    )
-                    payload["format"] = "json"
-                    resp = await client.post(f"{self.host}/api/generate", json=payload)
-                    resp.raise_for_status()
-                else:
-                    raise
-            data = resp.json()
-            content = data.get("response", "")
-
-            prompt_tokens = data.get("prompt_eval_count", 0)
-            completion_tokens = data.get("eval_count", 0)
-            self._total_input_tokens += prompt_tokens
-            self._total_output_tokens += completion_tokens
-
-            logger.info(f"Ollama generate: {prompt_tokens}+{completion_tokens} tokens, "
-                        f"raw ({len(content)} chars): {content[:300]}")
-
+        try:
+            response = await llm_completion(
+                model=self.model,
+                provider="ollama",
+                messages=messages,
+                num_predict=max(max_tokens, 1500),
+                keep_alive=keep_alive,
+                seed=random.randint(1, 2**31 - 1),
+                think=False,
+                json_schema=json_schema,
+                json_output=True,
+                timeout=OLLAMA_CALL_TIMEOUT,
+            )
+            content = response.choices[0].message.content or ""
+            if response.usage:
+                self._total_input_tokens  += response.usage.prompt_tokens or 0
+                self._total_output_tokens += response.usage.completion_tokens or 0
             content = self._strip_thinking_text(content)
-
-            if not content:
-                logger.warning(f"Empty generate response after stripping. "
-                              f"Raw keys: {list(data.keys())}")
-                raw = json.dumps(data, ensure_ascii=False)[:500]
-                logger.warning(f"Raw data: {raw}")
-
-            logger.info(f"Ollama generate cleaned ({len(content)} chars): {content[:200]}")
+            logger.info(f"Ollama generate via litellm: {len(content)} chars: {content[:200]}")
             return content
+        except Exception as e:
+                if json_schema is not None and ("format" in str(e).lower() or "schema" in str(e).lower()):
+                    logger.warning(f"Ollama schema enforcement rejected in generate, retrying without schema: {e}")
+                    response = await llm_completion(
+                        model=self.model,
+                        provider="ollama",
+                        messages=messages,
+                        num_predict=max(max_tokens, 1500),
+                        keep_alive=keep_alive,
+                        think=False,
+                        json_output=True,
+                        timeout=OLLAMA_CALL_TIMEOUT,
+                    )
+                    content = response.choices[0].message.content or ""
+                    if response.usage:
+                        self._total_input_tokens  += response.usage.prompt_tokens or 0
+                        self._total_output_tokens += response.usage.completion_tokens or 0
+                    return self._strip_thinking_text(content)
+                raise
 
     @staticmethod
     def _contains_non_latin(text: str) -> bool:
@@ -832,12 +1093,14 @@ class OllamaMultiCallProvider(BaseClassifierProvider):
     async def _unload_model(self):
         """Unload model from GPU memory after classification."""
         try:
-            async with httpx.AsyncClient(timeout=10.0) as client:
-                await client.post(
-                    f"{self.host}/api/generate",
-                    json={"model": self.model, "keep_alive": 0},
-                )
-                logger.info(f"Ollama model '{self.model}' unloaded from GPU")
+            await llm_completion(
+                model=self.model,
+                provider="ollama",
+                messages=[{"role": "user", "content": ""}],
+                extra_body={"keep_alive": 0},
+                max_tokens=1,
+            )
+            logger.info(f"Ollama model '{self.model}' unloaded from GPU")
         except Exception as e:
             logger.warning(f"Could not unload Ollama model: {e}")
 

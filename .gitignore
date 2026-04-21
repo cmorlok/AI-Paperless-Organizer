@@ -152,6 +152,9 @@ debug-*.log
 # Claude Code / Agent Skills (lokal, nicht für Repo)
 # =========================
 CLAUDE.md
+AGENTS.md
 .claude/
 .agents/
 skills-lock.json
+.gsd/
+.planning/

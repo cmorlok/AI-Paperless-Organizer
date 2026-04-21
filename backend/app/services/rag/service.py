@@ -2,7 +2,6 @@ import json
 import logging
 from typing import AsyncGenerator, Optional, Dict, Any, List, Tuple
 
-import httpx
 from sqlalchemy import select as sa_select, func as sa_func, delete as sa_delete
 from app.database import async_session
 from app.models.rag import RagConfig, RagChatSession, RagChatMessage
@@ -11,6 +10,7 @@ from app.services.rag.search_engine import SearchEngine, SearchResult
 from app.services.rag.indexer import Indexer
 from app.services.rag.rerank_service import RerankService
 from app.services import ollama_lock
+from app.services.llm_service import llm_completion
 
 logger = logging.getLogger(__name__)
 
@@ -46,7 +46,6 @@ class RAGService:
         return EmbeddingService(
             provider=config.embedding_provider,
             model=config.embedding_model,
-            ollama_base_url=config.ollama_base_url,
         )
 
     async def search(
@@ -453,98 +452,53 @@ class RAGService:
         yield json.dumps({"type": "done"})
 
     async def _stream_llm(self, config: RagConfig, messages: list) -> AsyncGenerator[str, None]:
-        if config.chat_model_provider == "ollama":
-            async for token in self._stream_ollama(config, messages):
-                yield token
-        elif config.chat_model_provider == "openai":
-            async for token in self._stream_openai(config, messages):
-                yield token
-        else:
-            async for token in self._stream_ollama(config, messages):
-                yield token
+        """Stream LLM response via LiteLLM — unified path for all providers."""
+        model_name = config.chat_model or "gpt-4o-mini"
+        provider_name = getattr(config, "chat_model_provider", "openai") or "openai"
 
-    async def _stream_ollama(self, config: RagConfig, messages: list) -> AsyncGenerator[str, None]:
-        import asyncio
-        url = f"{config.ollama_base_url}/api/chat"
-        # num_ctx must be set explicitly – Ollama defaults to 2048 which is far too small
-        # for RAG contexts. Use at least 2× max_context_tokens to cover prompt overhead.
-        num_ctx = max(8192, (getattr(config, "max_context_tokens", 4000) or 4000) * 2)
-        payload = {
-            "model": config.chat_model,
-            "messages": messages,
-            "stream": True,
-            "think": False,
-            "options": {"num_ctx": num_ctx},
-        }
+        is_ollama = provider_name == "ollama"
 
-        acquired = await ollama_lock.acquire("rag_chat", timeout=120)
-        if not acquired:
-            logger.warning("RAG chat: OllamaLock timeout – Classifier läuft noch, bitte erneut versuchen")
-            yield "\n\n[Ollama ist gerade belegt (Klassifizierung läuft). Bitte in 30 Sekunden erneut versuchen.]"
-            return
-
-        _retry_sleeps = [8, 20, 40]  # Ollama needs time to swap models back after embedding
         try:
-            for attempt in range(len(_retry_sleeps) + 1):
-                try:
-                    if attempt > 0:
-                        sleep = _retry_sleeps[attempt - 1]
-                        logger.info(f"Ollama chat retry {attempt+1}/{len(_retry_sleeps)+1} for {config.chat_model}, waiting {sleep}s for model swap...")
-                        await asyncio.sleep(sleep)
+            if is_ollama:
+                # CRITICAL REVIEW FEEDBACK HIGH: ollama_lock MUST be acquired BEFORE llm_completion
+                acquired = await ollama_lock.acquire("rag_chat", timeout=120)
+                if not acquired:
+                    logger.warning("RAG chat: OllamaLock timeout – Classifier läuft noch, bitte erneut versuchen")
+                    yield "\n\n[Ollama ist gerade belegt (Klassifizierung läuft). Bitte in 30 Sekunden erneut versuchen.]"
+                    return
 
-                    async with httpx.AsyncClient(timeout=300.0) as client:
-                        async with client.stream("POST", url, json=payload) as resp:
-                            resp.raise_for_status()
-                            async for line in resp.aiter_lines():
-                                if line.strip():
-                                    try:
-                                        data = json.loads(line)
-                                        content = data.get("message", {}).get("content", "")
-                                        if content:
-                                            yield content
-                                        if data.get("done"):
-                                            break
-                                    except json.JSONDecodeError:
-                                        continue
-                    return
-                except httpx.HTTPStatusError as e:
-                    if e.response.status_code == 500 and attempt < len(_retry_sleeps):
-                        logger.warning(f"Ollama 500 error (attempt {attempt+1}), retrying after model swap...")
-                        continue
-                    logger.error(f"Ollama streaming error: {e}")
-                    yield f"\n\n[Fehler: Ollama-Modell '{config.chat_model}' konnte nicht geladen werden. Bitte versuche es erneut.]"
-                    return
-                except Exception as e:
-                    logger.error(f"Ollama streaming error: {e}")
-                    yield f"\n\n[Fehler: {e}]"
-                    return
-        finally:
-            ollama_lock.release("rag_chat")
-
-    async def _stream_openai(self, config: RagConfig, messages: list) -> AsyncGenerator[str, None]:
-        try:
-            from openai import AsyncOpenAI
-            # Get OpenAI API key from LLM providers table
-            from app.models import LLMProvider
-            async with async_session() as db:
-                result = await db.execute(
-                    sa_select(LLMProvider).where(LLMProvider.name == "openai")
+            try:
+                stream = await llm_completion(
+                    model=model_name,
+                    provider=provider_name,
+                    messages=messages,
+                    stream=True,
+                    temperature=0.2,
+                    num_ctx=max(8192, (getattr(config, "max_context_tokens", 4000) or 4000) * 2),
+                    keep_alive="10m",
+                    think=False,
+                    timeout=300.0,
                 )
-                provider = result.scalar_one_or_none()
-                api_key = provider.api_key if provider else ""
 
-            client = AsyncOpenAI(api_key=api_key)
-            stream = await client.chat.completions.create(
-                model=config.chat_model or "gpt-4o-mini",
-                messages=messages,
-                stream=True,
-            )
-            async for chunk in stream:
-                delta = chunk.choices[0].delta if chunk.choices else None
-                if delta and delta.content:
-                    yield delta.content
+                async for chunk in stream:
+                    # LiteLLM returns OpenAI-compatible SSE format:
+                    # {"choices": [{"delta": {"content": "..."}, "finish_reason": null}]}
+                    delta = chunk.choices[0].delta if chunk.choices else None
+                    content = getattr(delta, "content", None) or ""
+                    finish = getattr(chunk.choices[0], "finish_reason", None)
+
+                    if content:
+                        yield content
+
+                    if finish is not None and finish != "length":
+                        break
+
+            finally:
+                if is_ollama:
+                    ollama_lock.release("rag_chat")
+
         except Exception as e:
-            logger.error(f"OpenAI streaming error: {e}")
+            logger.warning(f"Streaming error: {e}")
             yield f"\n\n[Fehler: {e}]"
 
     # --- LLM Query Rewriting (your idea!) ---
@@ -552,12 +506,13 @@ class RAGService:
     async def _rewrite_query_llm(
         self, question: str, chat_history: list, config: RagConfig
     ) -> str:
-        """Rewrite/expand the user query using the LLM for better document retrieval.
+        """Rewrite/expand the user query using LiteLLM for better document retrieval.
 
         The LLM adds synonyms, official German document names and relevant terminology.
         Returns the expanded query string, or the original question on any error.
-        This is the user's core idea: let the AI understand the query before searching.
         """
+        import re as _re
+
         if not question.strip():
             return question
 
@@ -580,52 +535,29 @@ class RAGService:
             f"Anfrage: {question}"
         )
 
+        messages = [{"role": "user", "content": prompt}]
+
+        model_name = config.chat_model or "gpt-4o-mini"
+        provider_name = getattr(config, "chat_model_provider", "openai") or "openai"
+
         try:
-            provider = getattr(config, 'chat_model_provider', 'ollama')
-            if provider == "openai":
-                return await self._rewrite_openai(prompt, config)
-            else:
-                return await self._rewrite_ollama(prompt, config)
+            result = await llm_completion(
+                model=model_name,
+                provider=provider_name,
+                messages=messages,
+                temperature=0.0,
+                max_tokens=200,
+                num_ctx=4096,
+                keep_alive="5m",
+                think=False,
+            )
+            rewritten = (result.choices[0].message.content or "").strip()
+            # Strip any markdown fences or explanatory text
+            rewritten = _re.sub(r'^```.*?\n|```$', '', rewritten, flags=_re.DOTALL).strip()
+            return rewritten if rewritten else question
         except Exception as e:
             logger.warning(f"Query rewrite failed, using original: {e}")
             return question
-
-    async def _rewrite_ollama(self, prompt: str, config: RagConfig) -> str:
-        """Non-streaming Ollama call for query rewriting – fast, low token count."""
-        url = f"{config.ollama_base_url}/api/generate"
-        async with httpx.AsyncClient(timeout=8.0) as client:
-            resp = await client.post(url, json={
-                "model": config.chat_model,
-                "prompt": prompt,
-                "stream": False,
-                "think": False,
-                "options": {"num_predict": 60, "temperature": 0.1, "num_ctx": 2048},
-            })
-            resp.raise_for_status()
-            result = resp.json().get("response", "").strip()
-            # Strip any accidental thinking tags that some models emit
-            import re as _re
-            result = _re.sub(r'<think>.*?</think>', '', result, flags=_re.DOTALL).strip()
-            return result
-
-    async def _rewrite_openai(self, prompt: str, config: RagConfig) -> str:
-        """OpenAI call for query rewriting."""
-        from openai import AsyncOpenAI
-        from app.models import LLMProvider
-        async with async_session() as db:
-            result = await db.execute(
-                sa_select(LLMProvider).where(LLMProvider.name == "openai")
-            )
-            provider = result.scalar_one_or_none()
-            api_key = provider.api_key if provider else ""
-        client = AsyncOpenAI(api_key=api_key)
-        resp = await client.chat.completions.create(
-            model=config.chat_model or "gpt-4o-mini",
-            messages=[{"role": "user", "content": prompt}],
-            max_tokens=60,
-            temperature=0.1,
-        )
-        return resp.choices[0].message.content.strip() if resp.choices else ""
 
     # Session management
     async def get_sessions(self) -> list:
@@ -694,18 +626,28 @@ class RAGService:
 
     async def get_config_dict(self) -> dict:
         config = await self._get_config()
+        
+        # Merge RagConfig DB values with AppSettings key-value overrides (LLM-08)
+        from app.models.settings_model import LLM_KEY_CLASSIFIER_PROVIDER, LLM_KEY_CLASSIFIER_MODEL
+        from app.database import async_session
+        
+        async with async_session() as db:
+            from app.routers.settings import get_setting
+            chat_provider = await get_setting(LLM_KEY_CLASSIFIER_PROVIDER, db)
+            chat_model = await get_setting(LLM_KEY_CLASSIFIER_MODEL, db)
+        
         return {
             "embedding_provider": config.embedding_provider,
             "embedding_model": config.embedding_model,
-            "ollama_base_url": config.ollama_base_url,
             "chunk_size": config.chunk_size,
             "chunk_overlap": config.chunk_overlap,
             "bm25_weight": config.bm25_weight,
             "semantic_weight": config.semantic_weight,
             "max_sources": config.max_sources,
             "max_context_tokens": config.max_context_tokens,
-            "chat_model_provider": config.chat_model_provider,
-            "chat_model": config.chat_model,
+            # Use key-value store first, fall back to RagConfig (LLM-08)
+            "chat_model_provider": chat_provider or config.chat_model_provider or "openai",
+            "chat_model": chat_model or config.chat_model or "gpt-4o-mini",
             "chat_system_prompt": config.chat_system_prompt,
             "auto_index_enabled": config.auto_index_enabled,
             "auto_index_interval": config.auto_index_interval,
@@ -722,7 +664,7 @@ class RAGService:
                 db.add(config)
 
             allowed = {
-                "embedding_provider", "embedding_model", "ollama_base_url",
+                "embedding_provider", "embedding_model",
                 "chunk_size", "chunk_overlap", "bm25_weight", "semantic_weight",
                 "max_sources", "max_context_tokens", "chat_model_provider",
                 "chat_model", "chat_system_prompt", "auto_index_enabled",

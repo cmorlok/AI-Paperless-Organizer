@@ -167,20 +167,20 @@ export default function Layout({ children }: LayoutProps) {
         // Only load status after authentication
         Promise.all([
           api.getPaperlessStatus().catch(() => ({ connected: false })),
-          api.getActiveLLMProvider().catch(() => ({ configured: false }))
-        ]).then(([paperless, llm]) => {
+          api.getLLMProvidersFromDB().catch(() => [])
+        ]).then(([paperless, providers]) => {
           setPaperlessConnected(paperless.connected)
-          setLlmConfigured(llm.configured)
+          setLlmConfigured(providers.length > 0)
         })
       })
       .catch(() => {
         // If settings fail, still try to load (first time setup)
         Promise.all([
           api.getPaperlessStatus().catch(() => ({ connected: false })),
-          api.getActiveLLMProvider().catch(() => ({ configured: false }))
-        ]).then(([paperless, llm]) => {
+          api.getLLMProvidersFromDB().catch(() => [])
+        ]).then(([paperless, providers]) => {
           setPaperlessConnected(paperless.connected)
-          setLlmConfigured(llm.configured)
+          setLlmConfigured(providers.length > 0)
         })
       })
 

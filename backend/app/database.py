@@ -5,16 +5,13 @@ from sqlalchemy.orm import DeclarativeBase
 from app.config import settings
 import os
 
-# Ensure data directory exists
 os.makedirs("data", exist_ok=True)
 
-# Create async engine
 engine = create_async_engine(
     settings.database_url,
     echo=settings.debug,
 )
 
-# Session factory
 async_session = async_sessionmaker(
     engine,
     class_=AsyncSession,
@@ -29,9 +26,9 @@ class Base(DeclarativeBase):
 def run_migrations() -> None:
     """Run Alembic migrations to head.
 
-    For databases that pre-date Alembic (i.e. they have tables but no
-    alembic_version row), the database is automatically stamped at head so
-    that the already-applied schema changes are not re-executed.
+    Pre-Alembic databases (tables exist, no alembic_version) were created by
+    the old _migrate_columns system. Their schema matches 0001, so we stamp at
+    0001 and run subsequent migrations. Fresh databases start at base.
     """
     from sqlalchemy import create_engine, inspect
     from alembic.config import Config
@@ -45,16 +42,25 @@ def run_migrations() -> None:
 
     inspector = inspect(sync_engine)
     table_names = inspector.get_table_names()
-    sync_engine.dispose()
+    has_alembic = "alembic_version" in table_names
 
-    is_pre_alembic = "classifier_config" in table_names and "alembic_version" not in table_names
-
-    if is_pre_alembic:
-        # Existing installation: all DDL was already applied by the old
-        # _migrate_columns system — just record that we're at head.
-        command.stamp(cfg, "head")
-    else:
+    if has_alembic:
         command.upgrade(cfg, "head")
+        sync_engine.dispose()
+        return
+
+    # Pre-Alembic DB: has tables but no alembic_version
+    # Schema matches 0001 (old _migrate_columns created all tables)
+    # Stamp at 0001 so 0001's upgrade is skipped, run 0002 onwards
+    if "classifier_config" in table_names:
+        command.stamp(cfg, "0001")
+        sync_engine.dispose()
+        command.upgrade(cfg, "head")
+        return
+
+    # Fresh DB: no tables, run full migration from base
+    sync_engine.dispose()
+    command.upgrade(cfg, "head")
 
 
 async def get_db():

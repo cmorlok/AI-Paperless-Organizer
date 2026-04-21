@@ -14,13 +14,13 @@ from collections import defaultdict
 from datetime import datetime
 from typing import Dict, List, Optional, Set, Tuple
 
-import httpx
 from sqlalchemy import select as sa_select, text
 
 from app.database import async_session
 from app.models.duplicates import DuplicateInvoiceCache
 from app.models.rag import RagConfig
 from app.services.ollama_lock import acquire as ollama_acquire, release as ollama_release
+from app.services.llm_service import llm_completion
 
 logger = logging.getLogger(__name__)
 
@@ -419,7 +419,6 @@ class DuplicateService:
 
         # Load LLM config
         chat_model = await self._get_chat_model()
-        ollama_url = await self._get_ollama_url()
 
         # Load cached extractions
         cached: Dict[int, Dict] = {}
@@ -458,7 +457,7 @@ class DuplicateService:
             content_trimmed = content[:3000]
 
             extraction = await self._extract_invoice_data(
-                content_trimmed, chat_model, ollama_url
+                content_trimmed, chat_model
             )
             if extraction:
                 extractions[doc_id] = extraction
@@ -504,9 +503,9 @@ class DuplicateService:
         return results
 
     async def _extract_invoice_data(
-        self, content: str, model: str, ollama_url: str
+        self, content: str, model: str,
     ) -> Optional[Dict]:
-        """Extract invoice number and amount from document content via Ollama."""
+        """Extract invoice number and amount from document content via LiteLLM."""
         got = await ollama_acquire("duplicates", timeout=120)
         if not got:
             logger.warning("Could not acquire OllamaLock for invoice extraction")
@@ -522,27 +521,15 @@ class DuplicateService:
                 f"Dokumenttext:\n{content}"
             )
 
-            async with httpx.AsyncClient(timeout=60.0) as client:
-                response = await client.post(
-                    f"{ollama_url}/api/chat",
-                    json={
-                        "model": model,
-                        "messages": [
-                            {"role": "user", "content": prompt}
-                        ],
-                        "stream": False,
-                        "options": {
-                            "temperature": 0,
-                            "num_ctx": 4096,
-                        },
-                    },
-                )
-                response.raise_for_status()
-                data = response.json()
-
-            reply = data.get("message", {}).get("content", "")
-
-            # Parse JSON from reply
+            response = await llm_completion(
+                model=model,
+                provider="ollama",
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0,
+                num_ctx=4096,
+                timeout=60.0,
+            )
+            reply = response.choices[0].message.content or ""
             return self._parse_invoice_json(reply)
 
         except Exception as e:
@@ -634,17 +621,6 @@ class DuplicateService:
         if config and config.chat_model:
             return config.chat_model
         return "qwen3.5:4b"
-
-    async def _get_ollama_url(self) -> str:
-        """Get the configured Ollama URL from RagConfig."""
-        async with async_session() as db:
-            result = await db.execute(
-                sa_select(RagConfig).where(RagConfig.id == 1)
-            )
-            config = result.scalar_one_or_none()
-        if config and config.ollama_base_url:
-            return config.ollama_base_url.rstrip("/")
-        return "http://host.docker.internal:11434"
 
     async def get_document_types(self, pl_client) -> List[Dict]:
         """Proxy to PaperlessClient.get_document_types()."""

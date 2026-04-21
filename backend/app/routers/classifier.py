@@ -629,70 +629,7 @@ async def test_ollama_connection(
         }
 
 
-@router.post("/mistral/test")
-async def test_mistral_connection(
-    db: AsyncSession = Depends(get_db),
-):
-    """Test Mistral API connection."""
-    from app.models import LLMProvider as _LLP
-    llp_res = await db.execute(select(_LLP).where(_LLP.name == "mistral"))
-    prov = llp_res.scalar_one_or_none()
-    api_key = prov.api_key if prov else ""
-    model = (prov.classifier_model or prov.model) if prov else "mistral-small-latest"
 
-    if not api_key:
-        return {"connected": False, "message": "Kein Mistral API-Key konfiguriert. Einstellungen → LLM."}
-
-    try:
-        from openai import AsyncOpenAI
-        client = AsyncOpenAI(api_key=api_key, base_url="https://api.mistral.ai/v1")
-        await client.chat.completions.create(
-            model=model,
-            messages=[{"role": "user", "content": "Antworte mit OK"}],
-            max_tokens=5,
-        )
-        return {
-            "connected": True,
-            "model": model,
-            "message": f"Mistral verbunden, Modell '{model}' funktioniert.",
-        }
-    except Exception as e:
-        return {"connected": False, "model": model, "message": f"Fehler: {str(e)}"}
-
-
-@router.post("/openrouter/test")
-async def test_openrouter_connection(
-    db: AsyncSession = Depends(get_db),
-):
-    """Test OpenRouter API connection."""
-    from app.models import LLMProvider as _LLP
-    llp_res = await db.execute(select(_LLP).where(_LLP.name == "openrouter"))
-    prov = llp_res.scalar_one_or_none()
-    api_key = prov.api_key if prov else ""
-    model = (prov.classifier_model or prov.model) if prov else "mistralai/mistral-small-2603"
-
-    if not api_key:
-        return {"connected": False, "message": "Kein OpenRouter API-Key konfiguriert. Einstellungen → LLM."}
-
-    try:
-        from openai import AsyncOpenAI
-        client = AsyncOpenAI(
-            api_key=api_key,
-            base_url="https://openrouter.ai/api/v1",
-            default_headers={"HTTP-Referer": "https://github.com/syberx/AI-Paperless-Organizer"},
-        )
-        await client.chat.completions.create(
-            model=model,
-            messages=[{"role": "user", "content": "OK"}],
-            max_tokens=5,
-        )
-        return {
-            "connected": True,
-            "model": model,
-            "message": f"OpenRouter verbunden, Modell '{model}' funktioniert.",
-        }
-    except Exception as e:
-        return {"connected": False, "model": model, "message": f"Fehler: {str(e)}"}
 
 
 # --- Storage Path Profiles ---
@@ -879,8 +816,23 @@ async def analyze_document(
     service: DocumentClassifierService = Depends(_get_service),
 ):
     """Analyze a single document and return classification proposals."""
-    result = await service.classify_document(document_id)
-    return asdict(result)
+    try:
+        result = await service.classify_document(document_id)
+        if result.error:
+            logger.error(
+                "Analyze failed for document_id=%s: %s",
+                document_id, result.error,
+            )
+            raise HTTPException(status_code=500, detail=result.error)
+        return asdict(result)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(
+            "Analyze failed for document_id=%s: %s",
+            document_id, e, exc_info=True,
+        )
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 class BenchmarkSlot(BaseModel):

@@ -4,7 +4,6 @@ import logging
 from datetime import datetime
 from typing import Optional, Set
 
-import httpx
 from sqlalchemy import select as sa_select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -13,6 +12,7 @@ from app.models.rag import RagConfig, RagIndexingState
 from app.services.rag.embedding_service import EmbeddingService
 from app.services.rag.chunking import ChunkingService
 from app.services.rag.search_engine import SearchEngine
+from app.services.llm_service import llm_completion
 
 logger = logging.getLogger(__name__)
 
@@ -123,7 +123,6 @@ class Indexer:
             embedding_service = EmbeddingService(
                 provider=config.embedding_provider,
                 model=config.embedding_model,
-                ollama_base_url=config.ollama_base_url,
             )
             chunking_service = ChunkingService(
                 chunk_size=config.chunk_size,
@@ -342,22 +341,19 @@ class Indexer:
             "Nur der Kontext, keine Erklärungen, keine Einleitung wie 'Dieser Abschnitt...'."
         )
         try:
-            url = f"{config.ollama_base_url}/api/generate"
-            async with httpx.AsyncClient(timeout=25.0) as client:
-                resp = await client.post(url, json={
-                    "model": config.chat_model,
-                    "prompt": prompt,
-                    "stream": False,
-                    "think": False,
-                    "options": {"num_predict": 80, "temperature": 0.1},
-                })
-                resp.raise_for_status()
-                import re as _re
-                context = resp.json().get("response", "").strip()
-                # Strip thinking tags some models emit even with think=False
-                context = _re.sub(r'<think>.*?</think>', '', context, flags=_re.DOTALL).strip()
-                if context:
-                    return f"[Kontext: {context}]\n\n"
+            import re as _re
+            response = await llm_completion(
+                model=config.chat_model,
+                provider=config.chat_model_provider,
+                messages=[{"role": "user", "content": prompt}],
+                num_predict=80,
+                think=False,
+                timeout=25.0,
+            )
+            context = (response.choices[0].message.content or "").strip()
+            context = _re.sub(r'<think>.*?</think>', '', context, flags=_re.DOTALL).strip()
+            if context:
+                return f"[Kontext: {context}]\n\n"
         except Exception as e:
             logger.warning(f"Context generation failed for doc {doc.get('id')}: {e}")
         return ""

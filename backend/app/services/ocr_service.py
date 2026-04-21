@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Optional, Dict, List, Any
 from PIL import Image
 from pdf2image import convert_from_bytes
+from app.services.llm_service import llm_completion
 
 # Raise PIL pixel limit for large PDF pages rendered at high DPI
 Image.MAX_IMAGE_PIXELS = 500_000_000  # 500 megapixels (default is ~178MP)
@@ -400,6 +401,13 @@ class OcrService:
         return cleaned if cleaned else text.strip()
 
     @staticmethod
+    def _strip_thinking_text(text: str) -> str:
+        """Strip residual thinking tags (e.g. <|thinking|>...<|/thinking|>) from text output."""
+        import re
+        cleaned = re.sub(r'<\|thinking\|>.*?<\|/thinking\|>', '', text, flags=re.DOTALL).strip()
+        return cleaned if cleaned else text.strip()
+
+    @staticmethod
     def _strip_ocr_commentary(text: str) -> str:
         """Remove trailing meta-commentary (e.g. 'Got it, let me transcribe...') from OCR output.
         Keeps only the actual transcribed document text."""
@@ -582,15 +590,15 @@ class OcrService:
         return cleaned
     
     async def _run_ollama_ocr(self, image_b64: str, prompt_text: str, model_params: dict, timeout: float) -> dict | str | None:
-        """Execute a single Ollama OCR request. Returns dict with _cleaned, _raw, _loop_ratio."""
+        """Execute a single Ollama OCR request via LiteLLM."""
         name_lower = (self.model or "").lower()
         use_think_param = "qwen3" in name_lower
-        
+
         print(f"[OCR][DEBUG] Model: {self.model}, repeat_pen={model_params['repeat_penalty']}, predict={model_params['num_predict']}")
-        
+
         attempts = len(self.ollama_urls)
         last_error = None
-        
+
         for _ in range(attempts):
             url = self.get_current_url()
             try:
@@ -602,80 +610,70 @@ class OcrService:
                     "Missing a single number is a critical OCR failure. Raw verbatim transcription only."
                 )
 
-                request_body = {
-                    "model": self.model,
-                    "messages": [
-                        {"role": "system", "content": system_msg},
-                        {"role": "user", "content": prompt_text, "images": [image_b64]}
-                    ],
-                    "stream": False,
-                    "keep_alive": "30m",
+                # LiteLLM multimodal format (OpenAI-compatible, works with Ollama vision)
+                user_content = [
+                    {"type": "text", "text": prompt_text},
+                    {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{image_b64}"}},
+                ]
+
+                # Per D-01: Ollama params in extra_body.options; think at top level for qwen3
+                extra_body: dict = {
                     "options": {
-                        "temperature": model_params["temperature"],
+                        "temperature":    model_params["temperature"],
                         "repeat_penalty": model_params["repeat_penalty"],
-                        "num_ctx": model_params["num_ctx"],
-                        "num_predict": model_params["num_predict"]
-                    }
+                        "num_ctx":        model_params["num_ctx"],
+                        "num_predict":    model_params["num_predict"],
+                    },
+                    "keep_alive": "30m",
                 }
                 if use_think_param:
-                    request_body["think"] = False
+                    extra_body["think"] = False  # D-01: suppress thinking at top level
 
-                async with httpx.AsyncClient(timeout=timeout) as client:
-                    response = await client.post(f"{url}/api/chat", json=request_body)
-                    
-                    if response.status_code != 200:
-                        error_body = response.text[:500]
-                        raise RuntimeError(f"Ollama error {response.status_code}: {error_body}")
-                    
-                    result = response.json()
-                    message = result.get("message", {})
-                    text_content = message.get("content", "").strip()
-                    
-                    text_content = self._strip_reasoning(text_content)
-                    text_content = self._strip_ocr_commentary(text_content)
-                    
-                    thinking_text = message.get("thinking", "")
-                    if not text_content and thinking_text:
-                        print(f"[OCR] Content empty but thinking has {len(thinking_text)} chars, using as content")
-                        text_content = self._strip_reasoning(thinking_text)
-                    
-                    raw_len = len(text_content) if text_content else 0
-                    
-                    if text_content:
-                        text_content = self._clean_repetitions(text_content)
-                    
-                    cleaned_len = len(text_content) if text_content else 0
-                    loop_ratio = 1 - (cleaned_len / raw_len) if raw_len > 0 else 0
-                    
-                    if raw_len != cleaned_len:
-                        print(f"[OCR] Repetition cleanup: {raw_len} -> {cleaned_len} chars ({loop_ratio:.0%} removed)")
-                    
-                    eval_count = result.get("eval_count", 0)
-                    if eval_count >= 8000:
-                        print(f"[OCR] WARNING: Token limit likely hit ({eval_count} tokens)")
-                    
-                    if not text_content:
-                        print(f"[OCR DEBUG] No text extracted. Keys: {list(message.keys())}")
-                        try:
-                            with open("/app/data/failed_ocr_debug.png", "wb") as f:
-                                import base64 as b64mod
-                                f.write(b64mod.b64decode(image_b64))
-                        except Exception:
-                            pass
-                        return None
-                    
-                    src = "thinking-fallback" if (not message.get("content", "").strip() and thinking_text) else "content"
-                    print(f"[OCR] Success: {cleaned_len} chars, {eval_count} tokens from {src}")
-                    
-                    return {"_cleaned": text_content, "_raw_len": raw_len, "_loop_ratio": loop_ratio}
-                    
+                response = await llm_completion(
+                    model=self.model,
+                    provider="ollama",
+                    messages=[
+                        {"role": "system", "content": system_msg},
+                        {"role": "user",   "content": user_content},
+                    ],
+                    api_base=url,
+                    extra_body=extra_body,
+                    timeout=timeout,
+                )
+
+                text_content = (response.choices[0].message.content or "").strip()
+                # CRITICAL REVIEW FEEDBACK HIGH: Preserve post-processing functions
+                text_content = self._strip_reasoning(text_content)
+                text_content = self._strip_ocr_commentary(text_content)
+
+                raw_len = len(text_content) if text_content else 0
+                if text_content:
+                    text_content = self._clean_repetitions(text_content)
+                cleaned_len = len(text_content) if text_content else 0
+                loop_ratio = 1 - (cleaned_len / raw_len) if raw_len > 0 else 0
+
+                if raw_len != cleaned_len:
+                    print(f"[OCR] Repetition cleanup: {raw_len} -> {cleaned_len} chars ({loop_ratio:.0%} removed)")
+
+                eval_count = 0
+                if response.usage:
+                    eval_count = response.usage.completion_tokens or 0
+                if eval_count >= 8000:
+                    print(f"[OCR] WARNING: Token limit likely hit ({eval_count} tokens)")
+
+                return {
+                    "_cleaned": text_content,
+                    "_raw":     text_content,
+                    "_loop_ratio": loop_ratio,
+                }
+
             except Exception as e:
-                logger.warning(f"OCR failed at {url}: {e}")
-                print(f"[OCR] Connection failed to {url}. Trying next server...")
                 last_error = e
+                print(f"[OCR] Error on {url}: {e}")
                 self.rotate_url()
-                
-        raise RuntimeError(f"All Ollama servers ({attempts}) failed. Last error: {last_error}")
+
+        print(f"[OCR] All URLs failed. Last error: {last_error}")
+        return None
 
     def save_stats(self, doc_id: int, duration: float, pages: int, chars: int, success: bool = True):
         """Save OCR statistics to JSON file. Only call AFTER document was actually updated."""

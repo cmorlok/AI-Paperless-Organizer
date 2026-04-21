@@ -12,12 +12,19 @@ from app.models.classifier import (
     ClassifierConfig, StoragePathProfile, CustomFieldMapping, ClassificationHistory,
 )
 from app.models import LLMProvider
+from app.models.settings_model import (
+    LLM_KEY_CLASSIFIER_PROVIDER,
+    LLM_KEY_CLASSIFIER_MODEL,
+)
+from app.routers.settings import get_setting
 from app.services.paperless_client import PaperlessClient
 from app.services.classifier.base_provider import (
     BaseClassifierProvider, ClassificationResult, DocumentContext,
 )
-from app.services.classifier.openai_provider import OpenAIToolCallingProvider
-from app.services.classifier.ollama_provider import OllamaMultiCallProvider
+from app.services.classifier.litellm_provider import (
+    LitellmToolCallingProvider,
+    LitellmOllamaProvider,
+)
 from app.services.classifier.tool_executor import ToolExecutor
 
 logger = logging.getLogger(__name__)
@@ -206,7 +213,13 @@ class DocumentClassifierService:
         return provider
 
     async def _get_classifier_provider_name(self) -> str:
-        """Get the classifier provider name from AppSettings."""
+        """Get the classifier provider name from AppSettings key-value store (LLM-08)."""
+        # Try key-value store first
+        from app.routers.settings import get_setting
+        kv_provider = await get_setting(LLM_KEY_CLASSIFIER_PROVIDER, self.db)
+        if kv_provider:
+            return kv_provider
+        # Fall back to scalar column for backward compatibility
         from app.models import AppSettings
         result = await self.db.execute(select(AppSettings).where(AppSettings.id == 1))
         app_settings = result.scalar_one_or_none()
@@ -228,44 +241,14 @@ class DocumentClassifierService:
         model_override: Optional[str] = None,
     ) -> BaseClassifierProvider:
         """Create a provider instance from the central LLMProvider table."""
-        llm = await self._get_llm_provider(provider_name)
-        model = model_override or llm.classifier_model or llm.model
+        model = model_override or await get_setting(LLM_KEY_CLASSIFIER_MODEL, self.db)
 
-        if provider_name == "openai":
-            if not llm.api_key:
-                raise ValueError("OpenAI API key not configured. Set it in Settings → LLM.")
-            return OpenAIToolCallingProvider(
-                api_key=llm.api_key, model=model, tool_executor=tool_executor,
-            )
-        elif provider_name == "mistral":
-            if not llm.api_key:
-                raise ValueError("Mistral API key not configured. Set it in Settings → LLM.")
-            return OpenAIToolCallingProvider(
-                api_key=llm.api_key, model=model, tool_executor=tool_executor,
-                base_url="https://api.mistral.ai/v1", provider_label="Mistral",
-            )
-        elif provider_name == "openrouter":
-            if not llm.api_key:
-                raise ValueError("OpenRouter API key not configured. Set it in Settings → LLM.")
-            return OpenAIToolCallingProvider(
-                api_key=llm.api_key, model=model, tool_executor=tool_executor,
-                base_url="https://openrouter.ai/api/v1", provider_label="OpenRouter",
-                extra_headers={"HTTP-Referer": "https://github.com/syberx/AI-Paperless-Organizer"},
-            )
-        elif provider_name == "ollama":
-            host = llm.api_base_url or "http://localhost:11434"
-            return OllamaMultiCallProvider(
-                host=host, model=model, tool_executor=tool_executor,
-            )
-        elif provider_name == "anthropic":
-            if not llm.api_key:
-                raise ValueError("Anthropic API key not configured. Set it in Settings → LLM.")
-            return OpenAIToolCallingProvider(
-                api_key=llm.api_key, model=model, tool_executor=tool_executor,
-                base_url="https://api.anthropic.com/v1", provider_label="Anthropic",
-            )
-        else:
-            raise ValueError(f"Unknown provider: {provider_name}")
+        if provider_name == "ollama":
+            return LitellmOllamaProvider(model=model, tool_executor=tool_executor)
+
+        from app.services.llm_service import PROVIDER_DISPLAY_NAMES
+        label = PROVIDER_DISPLAY_NAMES.get(provider_name, provider_name.replace("_", " ").title())
+        return LitellmToolCallingProvider(model=model, provider=provider_name, tool_executor=tool_executor, provider_label=label)
 
     async def _get_active_classifier_provider_name(self) -> str:
         """Alias for backward compat."""
@@ -725,7 +708,7 @@ class DocumentClassifierService:
         classifier_provider_name = await self._get_classifier_provider_name()
         try:
             llm_prov = await self._get_llm_provider(classifier_provider_name)
-            history_model = llm_prov.classifier_model or llm_prov.model
+            history_model = await get_setting(LLM_KEY_CLASSIFIER_MODEL, self.db) or "unknown"
         except Exception:
             history_model = "unknown"
 
