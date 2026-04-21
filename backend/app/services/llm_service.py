@@ -1,15 +1,119 @@
 """Unified LLM service — uses LiteLLM for all providers."""
 
 import json
-import logging
 import re
+import time
 import traceback
 from typing import Optional, Dict, Any, List
 
 import httpx
 import litellm
 
-logger = logging.getLogger(__name__)
+from app.core.logging import get_logger
+
+logger = get_logger("llm")
+
+# =========================================================================
+# LiteLLM callback-based request/response logging
+# =========================================================================
+
+_callbacks_registered = False
+
+
+def _log_llm(msg: str, data: dict[str, Any]) -> None:
+    """Log LLM event at DEBUG level using thread-safe logger."""
+    formatted = f"{msg}: {json.dumps(data, indent=2, default=str)}"
+    print(f"DEBUG app.services.llm_service: {formatted}", flush=True)
+    logger.debug(formatted)
+
+
+def _get_data_from_kwargs(kwargs: dict[str, Any]) -> dict[str, Any]:
+    """Extract common data from litellm kwargs for logging."""
+    provider = kwargs.get("metadata", {}).get("custom_llm_provider") if "metadata" in kwargs else None
+    model = kwargs.get("model", "unknown")
+    additional_args = kwargs.get("additional_args", {})
+    request = additional_args.get("complete_input_dict", {})
+    if request == {}:
+        request = {
+            "model": model,
+            "messages": kwargs.get("messages", []),
+            **kwargs.get("optional_params", {}),
+        }
+    return {"provider": provider, "model": model, "request": request}
+
+
+def _llm_input_callback(kwargs: dict[str, Any]) -> None:
+    api_base = kwargs.get("additional_args", {}).get("api_base")
+    request_url = "unknown"
+    if api_base:
+        if isinstance(api_base, str):
+            request_url = api_base
+        elif isinstance(api_base, (list, tuple)):
+            try:
+                scheme = str(api_base[0]) if len(api_base) > 0 and api_base[0] else "http"
+                host = str(api_base[2]) if len(api_base) > 2 else ""
+                port = api_base[3] if len(api_base) > 3 and api_base[3] else None
+                path = str(api_base[4]) if len(api_base) > 4 else ""
+                url = f"{scheme}://{host}"
+                if port:
+                    url = f"{url}:{port}"
+                if path:
+                    url = f"{url}{path}"
+                request_url = url
+            except Exception:
+                request_url = str(api_base)
+    if request_url == "unknown":
+        request_url = str(kwargs.get("base_url") or kwargs.get("api_base") or "unknown")
+
+    llm_data = _get_data_from_kwargs(kwargs)
+    llm_data.update({"event": "input", "request_url": request_url})
+    _log_llm("LLM input", llm_data)
+
+
+def _llm_success_callback(kwargs: dict[str, Any], response_obj: Any, start_time: Any, end_time: Any) -> None:
+    duration = 0.0
+    try:
+        diff = end_time - start_time
+        duration = diff.total_seconds() if hasattr(diff, "total_seconds") else float(diff)
+    except Exception:
+        pass
+
+    response = response_obj.model_dump() if hasattr(response_obj, "model_dump") else str(response_obj)
+    llm_data = _get_data_from_kwargs(kwargs)
+    llm_data.update({"event": "success", "response": response, "duration": duration, "status": "success"})
+    _log_llm("LLM success", llm_data)
+
+
+def _llm_failure_callback(kwargs: dict[str, Any], exception: Exception, start_time: Any, end_time: Any) -> None:
+    duration = 0.0
+    try:
+        diff = end_time - start_time
+        duration = diff.total_seconds() if hasattr(diff, "total_seconds") else float(diff)
+    except Exception:
+        pass
+
+    error_msg = str(exception) if exception else ""
+    if not error_msg or error_msg == "None":
+        error_msg = str(kwargs.get("exception", kwargs.get("error", "")))
+
+    llm_data = _get_data_from_kwargs(kwargs)
+    llm_data.update({"event": "failure", "error": error_msg, "duration": duration, "status": "error"})
+    _log_llm("LLM failure", llm_data)
+
+
+def _register_litellm_callbacks() -> None:
+    """Register input/success/failure callbacks with LiteLLM (idempotent)."""
+    global _callbacks_registered
+    if _callbacks_registered:
+        return
+    _callbacks_registered = True
+    litellm.logging_callback_manager.add_litellm_input_callback(_llm_input_callback)
+    litellm.logging_callback_manager.add_litellm_success_callback(_llm_success_callback)
+    litellm.logging_callback_manager.add_litellm_failure_callback(_llm_failure_callback)
+
+
+# Register callbacks on module load
+_register_litellm_callbacks()
 
 
 def extract_litellm_error(exc: Exception) -> str:
@@ -48,8 +152,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import get_db, async_session
 from app.models import LLMProvider
 from app.models.settings_model import LLM_KEY_CLASSIFIER_MODEL, LLM_KEY_CLASSIFIER_PROVIDER
-
-logger = logging.getLogger(__name__)
 
 # Static extra headers injected per provider on every call.
 _PROVIDER_EXTRA_HEADERS: Dict[str, Dict[str, str]] = {

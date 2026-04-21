@@ -9,15 +9,12 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from contextlib import asynccontextmanager
 
+from app.core.logging import init_logging, ensure_logging, get_logger
 from app.database import run_migrations
 
-logging.basicConfig(
-    level=logging.DEBUG,
-    format="%(levelname)s %(name)s: %(message)s",
-    stream=sys.stdout,
-    force=True,
-)
-logger = logging.getLogger(__name__)
+# Initialize logging system FIRST, before any other modules that might use get_logger()
+init_logging()
+logger = get_logger("app.main")
 
 from app.routers import paperless, correspondents, tags, document_types, settings, llm, debug, statistics, ignored_items, ocr, cleanup, classifier, rag, api_keys, cloud_import, duplicates
 from app.routers.ocr import ocr_settings, get_ocr_service
@@ -32,18 +29,14 @@ async def lifespan(app: FastAPI):
     from app.models.settings_model import PaperlessSettings
     from sqlalchemy import select as sa_select
 
-    # Re-apply logging config — uvicorn's reloader overrides basicConfig
-    for handler in logging.root.handlers[:]:
-        logging.root.removeHandler(handler)
-    logging.root.setLevel(logging.DEBUG)
-    _handler = logging.StreamHandler(sys.stdout)
-    _handler.setLevel(logging.DEBUG)
-    _handler.setFormatter(logging.Formatter("%(levelname)s %(name)s: %(message)s"))
-    logging.root.addHandler(_handler)
-    logger.info("Logging initialized: level=DEBUG, all request/response logging active")
-
     # Run database migrations (Alembic upgrade to head)
+    # NOTE: alembic/env.py calls fileConfig(alembic.ini) which resets the root logger
+    # to level=WARN with a plain handler — ensure_logging() must run AFTER this.
     await asyncio.get_running_loop().run_in_executor(None, run_migrations)
+
+    # Re-apply our logging config after Alembic's fileConfig reset the root logger.
+    ensure_logging()
+    logger.info("Logging active — worker process ready")
 
     # Auto-start watchdog if it was enabled before shutdown
     if ocr_settings.get("watchdog_enabled"):
@@ -184,10 +177,10 @@ app = FastAPI(
 
 
 def _log(level: str, msg: str, *args):
-    """Log via both logging and print — ensures output even when uvicorn overrides logging config."""
+    """Log via structured logger."""
     formatted = msg % args if args else msg
-    print(f"{level} app.main: {formatted}", flush=True)
-    getattr(logger, level.lower())(msg, *args)
+    log_level = getattr(logging, level.upper())
+    logger.log(log_level, formatted)
 
 
 @app.middleware("http")

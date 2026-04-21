@@ -26,7 +26,10 @@ config.set_main_option(
 )
 
 if config.config_file_name is not None:
-    fileConfig(config.config_file_name)
+    # disable_existing_loggers=False prevents fileConfig from disabling every
+    # logger created before this call (e.g. app.main, llm, etc.), which would
+    # silently drop all application logs for the rest of the process lifetime.
+    fileConfig(config.config_file_name, disable_existing_loggers=False)
 
 target_metadata = Base.metadata
 
