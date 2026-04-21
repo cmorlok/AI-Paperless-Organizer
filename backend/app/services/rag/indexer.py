@@ -26,8 +26,9 @@ _CONTEXTUAL_RETRIEVAL_MAX_CONTENT_LEN = 999_999
 class Indexer:
     """Manages document indexing: fetches from Paperless, chunks, embeds, stores."""
 
-    def __init__(self, search_engine: SearchEngine):
+    def __init__(self, search_engine, paperless_client):
         self.search_engine = search_engine
+        self.paperless_client = paperless_client
         self._indexing_task: Optional[asyncio.Task] = None
 
     async def _get_config(self, db: AsyncSession) -> Optional[RagConfig]:
@@ -43,16 +44,6 @@ class Indexer:
             await db.commit()
             await db.refresh(state)
         return state
-
-    async def _get_paperless_client(self):
-        from app.models import PaperlessSettings
-        from app.services.paperless_client import PaperlessClient
-        async with async_session() as db:
-            result = await db.execute(sa_select(PaperlessSettings).where(PaperlessSettings.id == 1))
-            settings = result.scalar_one_or_none()
-            if not settings or not settings.is_configured:
-                raise ValueError("Paperless-ngx ist nicht konfiguriert")
-            return PaperlessClient(base_url=settings.url, api_token=settings.api_token)
 
     async def start_indexing(self, force: bool = False):
         if self._indexing_task and not self._indexing_task.done():
@@ -84,7 +75,7 @@ class Indexer:
             await db.commit()
 
         try:
-            client = await self._get_paperless_client()
+            client = self.paperless_client
             self.search_engine.init_chroma(force=force)
 
             already_indexed: Set[int] = set()

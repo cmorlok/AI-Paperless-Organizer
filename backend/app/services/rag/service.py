@@ -20,11 +20,12 @@ logger = logging.getLogger(__name__)
 class RAGService:
     """Orchestrates RAG chat: retrieves context, generates answers with source attribution."""
 
-    def __init__(self, session_factory=None):
+    def __init__(self, session_factory, paperless_client):
         self.search_engine = SearchEngine()
-        self.indexer = Indexer(self.search_engine)
+        self.indexer = Indexer(self.search_engine, paperless_client=paperless_client)
         self._initialized = False
         self.session_factory = session_factory or async_session
+        self.paperless_client = paperless_client
 
     async def initialize(self):
         if self._initialized:
