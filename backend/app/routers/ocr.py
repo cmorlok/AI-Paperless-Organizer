@@ -14,11 +14,14 @@ from typing import Optional, List
 import httpx
 
 from sqlalchemy.ext.asyncio import AsyncSession
-from app.database import get_db, async_session
-from app.services.paperless_client import PaperlessClient, get_paperless_client
+from app.database import get_db
+from dishka.integrations.fastapi import inject
+from dishka import FromDishka
+
+from app.services.paperless_client import PaperlessClient
 from app.services.ocr_service import OcrService, batch_state, watchdog_state, single_ocr_running, ocr_page_progress, load_review_queue, save_review_queue, load_ocr_ignore_list, save_ocr_ignore_list, load_ocr_error_list, save_ocr_error_list, load_ocr_error_counts, save_ocr_error_counts, DEFAULT_OLLAMA_URL, DEFAULT_OCR_MODEL
 import app.services.ocr_service as ocr_service_module
-from app.services.llm_service import LitellmService as LLMProviderService, get_llm_service
+from app.services.llm_service import LitellmService as LLMProviderService
 
 logger = logging.getLogger(__name__)
 
@@ -127,18 +130,6 @@ class OcrEvaluateRequest(BaseModel):
 
 # --- Helper ---
 
-def get_ocr_service() -> OcrService:
-    """Get OCR service with current settings."""
-    return OcrService(
-        ollama_url=ocr_settings.get("ollama_url", DEFAULT_OLLAMA_URL),
-        ollama_urls=ocr_settings.get("ollama_urls", []),
-        model=ocr_settings["model"],
-        max_image_size=ocr_settings.get("max_image_size", 1344),
-        smart_skip_enabled=ocr_settings.get("smart_skip_enabled", True),
-        session_factory=async_session,
-    )
-
-
 # --- Settings Endpoints ---
 
 @router.get("/settings")
@@ -152,7 +143,8 @@ async def get_ocr_settings():
 
 
 @router.post("/settings")
-async def save_ocr_settings_endpoint(request: OcrSettingsRequest, client: PaperlessClient = Depends(get_paperless_client)):
+@inject
+async def save_ocr_settings_endpoint(request: OcrSettingsRequest, client: FromDishka[PaperlessClient] = None):
     """Save OCR settings."""
     ocr_settings["ollama_url"] = request.ollama_url
     if request.ollama_urls:
@@ -187,10 +179,12 @@ async def get_watchdog_status():
     }
 
 @router.post("/watchdog/settings")
+@inject
 async def set_watchdog_settings(
-    request: WatchdogSettingsRequest, 
+    request: WatchdogSettingsRequest,
     background_tasks: BackgroundTasks,
-    client: PaperlessClient = Depends(get_paperless_client)
+    client: FromDishka[PaperlessClient] = None,
+    service: FromDishka[OcrService] = None,
 ):
     """Enable/Disable watchdog and set interval."""
     watchdog_state["interval_minutes"] = max(1, request.interval_minutes)
@@ -203,7 +197,6 @@ async def set_watchdog_settings(
     if request.enabled and not watchdog_state["enabled"]:
         # Start watchdog
         watchdog_state["enabled"] = True
-        service = get_ocr_service()
         # We need to run this as a long-running background task
         # background_tasks is for one-off. For permanent loop, we need asyncio.create_task?
         # But we don't have the loop handy easily here? 
@@ -246,8 +239,9 @@ async def resume_batch_ocr():
 # --- Tag Management ---
 
 @router.get("/tags/ensure")
+@inject
 async def ensure_ocr_tags(
-    client: PaperlessClient = Depends(get_paperless_client)
+    client: FromDishka[PaperlessClient] = None
 ):
     """Ensure runocr and ocrfinish tags exist in Paperless."""
     try:
@@ -262,9 +256,9 @@ async def ensure_ocr_tags(
 
 
 @router.post("/test-connection")
-async def test_ocr_connection():
+@inject
+async def test_ocr_connection(service: FromDishka[OcrService] = None):
     """Test connection to Ollama."""
-    service = get_ocr_service()
     result = await service.test_connection()
     # Add model name to result for UI feedback
     result["model"] = service.model
@@ -273,15 +267,16 @@ async def test_ocr_connection():
 
 
 @router.get("/stats")
-async def get_ocr_stats():
+@inject
+async def get_ocr_stats(service: FromDishka[OcrService] = None):
     """Get OCR statistics."""
-    service = get_ocr_service()
     return service.get_stats()
 
 
 @router.get("/status")
+@inject
 async def get_ocr_status(
-    client: PaperlessClient = Depends(get_paperless_client)
+    client: FromDishka[PaperlessClient] = None
 ):
     """Get overall OCR status - total docs, finished docs, percentage. Uses count-only queries for speed."""
     try:
@@ -311,16 +306,17 @@ async def get_ocr_status(
 # --- Single Document OCR ---
 
 @router.post("/single/{document_id}")
+@inject
 async def ocr_single_document(
     document_id: int,
     force: bool = False,
-    client: PaperlessClient = Depends(get_paperless_client),
+    client: FromDishka[PaperlessClient] = None,
     db: AsyncSession = Depends(get_db),
+    service: FromDishka[OcrService] = None,
 ):
     """Run OCR on a single document with page-level persistence and resume support."""
     try:
         ocr_service_module.single_ocr_running = True
-        service = get_ocr_service()
         result = await service.ocr_document(client, document_id, force=force, db_session=db)
         return result
     except ValueError as e:
@@ -358,22 +354,23 @@ async def get_ocr_progress(document_id: int):
 
 
 @router.post("/apply/{document_id}")
+@inject
 async def apply_ocr_result(
     document_id: int,
     request: OcrApplyRequest,
-    client: PaperlessClient = Depends(get_paperless_client)
+    client: FromDishka[PaperlessClient] = None,
+    service: FromDishka[OcrService] = None,
 ):
     """Apply new OCR content to a document.
-    
+
     Fires off the Paperless update as async task for instant response.
     The PATCH to Paperless can take 20-30s due to full-text re-indexing,
     so we don't make the user wait.
     """
     print(f"[OCR] Request to apply result for doc {document_id}")
-    
+
     async def _apply_in_background():
         try:
-            service = get_ocr_service()
             await service.apply_ocr_result(
                 client, document_id, request.content, request.set_finish_tag
             )
@@ -381,7 +378,7 @@ async def apply_ocr_result(
         except Exception as e:
             print(f"[OCR] Error applying result for doc {document_id}: {e}")
             logger.error(f"Background apply error: {e}")
-    
+
     # Fire and forget: don't wait for Paperless re-indexing
     asyncio.create_task(_apply_in_background())
     return {"success": True, "document_id": document_id, "status": "saving"}
@@ -390,17 +387,17 @@ async def apply_ocr_result(
 # --- Batch OCR ---
 
 @router.post("/batch/start")
+@inject
 async def start_batch_ocr(
     request: BatchOcrRequest,
     background_tasks: BackgroundTasks,
-    client: PaperlessClient = Depends(get_paperless_client)
+    client: FromDishka[PaperlessClient] = None,
+    service: FromDishka[OcrService] = None,
 ):
     """Start batch OCR processing in the background."""
     if batch_state["running"]:
         raise HTTPException(status_code=409, detail="Ein Batch-OCR-Job läuft bereits")
-    
-    service = get_ocr_service()
-    
+
     # Run batch OCR as background task
     background_tasks.add_task(
         service.batch_ocr,
@@ -464,8 +461,9 @@ async def stop_batch_ocr():
 # --- Tag Management ---
 
 @router.get("/tags/ensure")
+@inject
 async def ensure_ocr_tags(
-    client: PaperlessClient = Depends(get_paperless_client)
+    client: FromDishka[PaperlessClient] = None
 ):
     """Ensure runocr and ocrfinish tags exist in Paperless."""
     try:
@@ -489,18 +487,19 @@ async def get_review_queue():
 
 
 @router.post("/review/apply/{document_id}")
+@inject
 async def apply_review_item(
     document_id: int,
-    client: PaperlessClient = Depends(get_paperless_client)
+    client: FromDishka[PaperlessClient] = None,
+    service: FromDishka[OcrService] = None,
 ):
     """Apply review queue item (accept the new OCR text)."""
     queue = load_review_queue()
     item = next((q for q in queue if q["document_id"] == document_id), None)
     if not item:
         raise HTTPException(status_code=404, detail="Dokument nicht in Review Queue")
-    
+
     try:
-        service = get_ocr_service()
         await service.apply_ocr_result(client, document_id, item["new_content"], True)
         # Remove from queue
         queue = [q for q in queue if q["document_id"] != document_id]
@@ -522,8 +521,9 @@ async def dismiss_review_item(document_id: int):
 
 
 @router.post("/review/reset-all")
+@inject
 async def reset_all_review_items(
-    client: PaperlessClient = Depends(get_paperless_client)
+    client: FromDishka[PaperlessClient] = None
 ):
     """Reset all review queue items: remove ocrpruefen tag so batch OCR re-processes them."""
     queue = load_review_queue()
@@ -558,8 +558,9 @@ async def reset_all_review_items(
 
 
 @router.post("/review/keep-all-originals")
+@inject
 async def keep_all_originals(
-    client: PaperlessClient = Depends(get_paperless_client)
+    client: FromDishka[PaperlessClient] = None
 ):
     """Keep all original contents: set ocrfinish on all review items without changing content."""
     queue = load_review_queue()
@@ -634,9 +635,10 @@ async def get_ocr_ignore_list():
 
 
 @router.post("/ignore/add/{document_id}")
+@inject
 async def add_to_ocr_ignore_list(
     document_id: int,
-    client: PaperlessClient = Depends(get_paperless_client)
+    client: FromDishka[PaperlessClient] = None
 ):
     """Add a document to the OCR ignore list."""
     ignore_list = load_ocr_ignore_list()
@@ -684,9 +686,10 @@ async def get_ocr_errors():
 
 
 @router.delete("/errors/remove/{document_id}")
+@inject
 async def remove_from_ocr_error_list(
     document_id: int,
-    client: PaperlessClient = Depends(get_paperless_client)
+    client: FromDishka[PaperlessClient] = None
 ):
     """Remove a document from the error list and remove its ocrfehler tag so it can be retried."""
     # Remove from error list
@@ -728,9 +731,10 @@ async def clear_ocr_error_list():
 # --- Document Preview Proxy ---
 
 @router.get("/preview/{document_id}")
+@inject
 async def get_document_preview(
     document_id: int,
-    client: PaperlessClient = Depends(get_paperless_client)
+    client: FromDishka[PaperlessClient] = None
 ):
     """Proxy document preview from Paperless. Auto-detects PDF vs image."""
     try:
@@ -760,9 +764,10 @@ async def get_document_preview(
 
 
 @router.get("/thumbnail/{document_id}")
+@inject
 async def get_document_thumbnail(
     document_id: int,
-    client: PaperlessClient = Depends(get_paperless_client)
+    client: FromDishka[PaperlessClient] = None
 ):
     """Proxy document thumbnail from Paperless (small image, handles auth)."""
     try:
@@ -891,28 +896,32 @@ async def _wait_for_ollama_ready(max_wait: int = 60) -> bool:
     return False
 
 
-async def _run_compare_job(paperless_client, document_id: int, models: list, target_page: int):
+async def _run_compare_job(ocr_service: OcrService, paperless_client, document_id: int, models: list, target_page: int):
     """Background task that runs the actual model comparison."""
     import io
     from PIL import Image
     from pdf2image import convert_from_bytes
-    
+
     job_start = time.time()
     compare_state["_job_start"] = job_start
-    
+
+    # Save original service settings to restore after job
+    original_model = ocr_service.model
+    original_max_image_size = ocr_service.max_image_size
+
     try:
         # Phase: Download
         compare_state["phase"] = "download"
         doc = await paperless_client.get_document(document_id)
         if not doc:
             raise ValueError(f"Dokument {document_id} nicht gefunden")
-        
+
         compare_state["title"] = doc.get("title", f"Dokument {document_id}")
         compare_state["old_content"] = doc.get("content", "") or ""
-        
+
         file_bytes = await paperless_client.download_document_file(document_id)
         print(f"[Compare] Downloaded doc {document_id}: {len(file_bytes)} bytes")
-        
+
         # Phase: Initial convert (for page count detection)
         compare_state["phase"] = "convert"
         is_pdf = True
@@ -928,12 +937,12 @@ async def _run_compare_job(paperless_client, document_id: int, models: list, tar
             img = Image.open(io.BytesIO(file_bytes))
             preview_images = [img]
             total_pages = 1
-        
+
         if total_pages == 0:
             raise ValueError("Keine Seiten extrahiert")
-        
+
         compare_state["total_pages"] = total_pages
-        
+
         # Select page indices
         if target_page > 0 and target_page <= total_pages:
             page_indices = [target_page - 1]
@@ -941,17 +950,17 @@ async def _run_compare_job(paperless_client, document_id: int, models: list, tar
         else:
             page_indices = list(range(total_pages))
             compare_state["compared_page"] = 0
-        
+
         # Cache for DPI-specific image conversions (avoid re-rendering same DPI)
         dpi_image_cache = {}
-        
+
         # Run each model with model-specific image preparation
         for model_idx, model_name in enumerate(models):
             compare_state["current_model"] = model_name
             compare_state["current_model_index"] = model_idx
             compare_state["current_page"] = 0
             compare_state["elapsed_seconds"] = round(time.time() - job_start, 1)
-            
+
             # Health check: wait for Ollama to be ready before starting each model
             compare_state["phase"] = "health_check"
             print(f"[Compare] Checking Ollama health before model: {model_name}")
@@ -968,23 +977,19 @@ async def _run_compare_job(paperless_client, document_id: int, models: list, tar
                     "error": error_msg
                 })
                 continue
-            
+
             # Get model-specific optimal parameters
             model_params = OcrService.get_model_params(model_name)
             optimal_image_size = model_params["max_image_size"]
             render_dpi = model_params.get("render_dpi", 200)
-            
+
             compare_state["phase"] = "model_loading"
             print(f"[Compare] Testing model: {model_name} (image: {optimal_image_size}px, DPI: {render_dpi}, ctx: {model_params['num_ctx']}, repeat_pen: {model_params['repeat_penalty']})")
-            
-            service = OcrService(
-                ollama_url=ocr_settings.get("ollama_url", DEFAULT_OLLAMA_URL),
-                ollama_urls=ocr_settings.get("ollama_urls", []),
-                model=model_name,
-                max_image_size=optimal_image_size,
-                smart_skip_enabled=False
-            )
-            
+
+            # Temporarily configure service for this model
+            ocr_service.model = model_name
+            ocr_service.max_image_size = optimal_image_size
+
             # Convert PDF at the right DPI for this model (cached)
             if is_pdf and render_dpi not in dpi_image_cache:
                 compare_state["phase"] = "convert"
@@ -993,33 +998,33 @@ async def _run_compare_job(paperless_client, document_id: int, models: list, tar
                     None, lambda dpi=render_dpi: convert_from_bytes(file_bytes, dpi=dpi)
                 )
                 dpi_image_cache[render_dpi] = dpi_images
-            
+
             source_images = dpi_image_cache.get(render_dpi, preview_images) if is_pdf else preview_images
             pages_to_process = [(idx, source_images[idx]) for idx in page_indices]
-            
+
             # Prepare images at the optimal resolution for THIS model
             prepared_pages = []
             for idx, img in pages_to_process:
                 src_w, src_h = img.size
-                prepared_bytes = service._prepare_image_for_ollama(img, max_size=optimal_image_size)
+                prepared_bytes = ocr_service._prepare_image_for_ollama(img, max_size=optimal_image_size)
                 # Debug: log exact image info
                 from PIL import Image as PilImage
                 debug_img = PilImage.open(io.BytesIO(prepared_bytes))
                 prep_w, prep_h = debug_img.size
                 print(f"[Compare][DEBUG] {model_name} page {idx+1}: source={src_w}x{src_h}, prepared={prep_w}x{prep_h}, bytes={len(prepared_bytes)}, format={debug_img.format}")
                 prepared_pages.append((idx, prepared_bytes))
-            
+
             model_start = time.time()
             page_texts = []
             error_msg = None
-            
+
             try:
                 for page_idx, prepared_bytes in prepared_pages:
                     compare_state["phase"] = "ocr_page"
                     compare_state["current_page"] = page_idx + 1
                     compare_state["elapsed_seconds"] = round(time.time() - job_start, 1)
-                    
-                    page_text = await service._ocr_single_image(
+
+                    page_text = await ocr_service._ocr_single_image(
                         prepared_bytes,
                         page_num=page_idx + 1,
                         total_pages=total_pages,
@@ -1034,10 +1039,10 @@ async def _run_compare_job(paperless_client, document_id: int, models: list, tar
                 error_type = type(e).__name__
                 logger.error(f"[Compare] Model {model_name} failed ({error_type}): {e}")
                 print(f"[Compare] {model_name} FAILED ({error_type}): {e}")
-            
+
             model_duration = time.time() - model_start
             full_text = "\n\n".join(page_texts) if page_texts else ""
-            
+
             compare_state["results"].append({
                 "model": model_name,
                 "text": full_text,
@@ -1046,23 +1051,23 @@ async def _run_compare_job(paperless_client, document_id: int, models: list, tar
                 "pages_processed": len(page_texts),
                 "error": error_msg
             })
-            
+
             print(f"[Compare] {model_name}: {len(full_text)} chars in {model_duration:.1f}s")
-            
+
             # Unload model from VRAM before loading the next
             compare_state["phase"] = "unloading"
             compare_state["elapsed_seconds"] = round(time.time() - job_start, 1)
             await _unload_model_from_vram(model_name)
-            
+
             # If model had an error, wait for Ollama to recover before next model
             if error_msg:
                 print(f"[Compare] Modell hatte Fehler, warte 5s auf Ollama-Recovery...")
                 await asyncio.sleep(5)
-        
+
         compare_state["phase"] = "done"
         compare_state["elapsed_seconds"] = round(time.time() - job_start, 1)
         print(f"[Compare] All {len(models)} models done in {compare_state['elapsed_seconds']}s")
-        
+
     except Exception as e:
         compare_state["phase"] = "error"
         compare_state["error"] = str(e)
@@ -1070,32 +1075,37 @@ async def _run_compare_job(paperless_client, document_id: int, models: list, tar
         logger.error(f"[Compare] Job failed: {e}")
     finally:
         compare_state["running"] = False
+        # Restore original service settings
+        ocr_service.model = original_model
+        ocr_service.max_image_size = original_max_image_size
 
 
 @router.post("/compare")
+@inject
 async def start_compare(
     request: OcrCompareRequest,
-    client: PaperlessClient = Depends(get_paperless_client)
+    client: FromDishka[PaperlessClient] = None,
+    service: FromDishka[OcrService] = None,
 ):
     """Start OCR model comparison as background task."""
     if compare_state["running"]:
         raise HTTPException(status_code=409, detail="Ein Vergleich läuft bereits")
-    
+
     models = request.models
     if not models or len(models) == 0:
         raise HTTPException(status_code=400, detail="Mindestens ein Modell auswählen")
     if len(models) > 5:
         raise HTTPException(status_code=400, detail="Maximal 5 Modelle gleichzeitig")
-    
+
     reset_compare_state()
     compare_state["running"] = True
     compare_state["document_id"] = request.document_id
     compare_state["models"] = models
     compare_state["total_models"] = len(models)
     compare_state["phase"] = "starting"
-    
-    asyncio.create_task(_run_compare_job(client, request.document_id, models, request.page))
-    
+
+    asyncio.create_task(_run_compare_job(service, client, request.document_id, models, request.page))
+
     return {"started": True, "models": len(models)}
 
 
@@ -1122,9 +1132,10 @@ async def get_compare_status():
 
 
 @router.post("/compare/evaluate")
+@inject
 async def evaluate_ocr_results(
     request: OcrEvaluateRequest,
-    llm_service: LLMProviderService = Depends(get_llm_service)
+    llm_service: FromDishka[LLMProviderService] = None
 ):
     """Send OCR comparison results to an external LLM for quality evaluation.
     
