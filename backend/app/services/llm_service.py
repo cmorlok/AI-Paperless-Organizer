@@ -1,5 +1,7 @@
 """Unified LLM service — uses LiteLLM for all providers."""
 
+from __future__ import annotations
+
 import json
 import re
 import time
@@ -142,11 +144,10 @@ def log_llm_error(msg: str, exc: Exception):
     tb = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
     print(f"ERROR app.services.llm_service: {msg}: {detail}\n{tb}", flush=True)
     logger.error("%s: %s", msg, detail, exc_info=True)
-from fastapi import Depends
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.database import get_db, async_session
+from app.database import async_session
 from app.models import LLMProvider
 from app.models.settings_model import LLM_KEY_CLASSIFIER_MODEL, LLM_KEY_CLASSIFIER_PROVIDER
 
@@ -551,16 +552,37 @@ async def get_setting(key: str, db: AsyncSession) -> Optional[str]:
 class LitellmService:
     """Service for interacting with various LLM providers via LiteLLM."""
 
-    def __init__(self, provider: Optional[LLMProvider] = None, model: Optional[str] = None):
+    def __init__(self, provider: Optional[LLMProvider] = None, model: Optional[str] = None, session_factory: Optional[Any] = None):
         self.provider = provider
         self.model = model
+        self.session_factory = session_factory
+        self._config_loaded = False
+
+    async def _ensure_config(self) -> None:
+        """Lazy-load provider/model from DB on first use."""
+        if self._config_loaded or self.provider is not None or self.session_factory is None:
+            return
+        from app.models.settings_model import LLM_KEY_CLASSIFIER_PROVIDER, LLM_KEY_CLASSIFIER_MODEL
+        async with self.session_factory() as db:
+            provider_name = await get_setting(LLM_KEY_CLASSIFIER_PROVIDER, db)
+            if provider_name:
+                result = await db.execute(
+                    select(LLMProvider).where(LLMProvider.name == provider_name)
+                )
+                self.provider = result.scalars().first()
+            if not self.provider:
+                result = await db.execute(select(LLMProvider).limit(1))
+                self.provider = result.scalars().first()
+            self.model = await get_setting(LLM_KEY_CLASSIFIER_MODEL, db) or self.model
+        self._config_loaded = True
 
     async def complete(self, prompt: str, model_override: Optional[str] = None) -> str:
         """Send a completion request to the LLM provider via LiteLLM.
-        
+
         LiteLLM handles provider routing internally based on model name prefix
         (e.g., 'anthropic/claude-3-5-sonnet', 'ollama/llama3').
         """
+        await self._ensure_config()
         model = model_override or self.model
         if not model:
             raise ValueError("No model specified")
@@ -576,6 +598,7 @@ class LitellmService:
 
     async def test_connection(self) -> Dict:
         """Test connection to the LLM provider."""
+        await self._ensure_config()
         if not self.provider:
             raise ValueError("No LLM provider configured")
         response = await self.complete("Antworte nur mit: OK")
@@ -788,19 +811,4 @@ class LitellmService:
             }
 
 
-async def get_llm_service(db: AsyncSession = Depends(get_db)) -> LitellmService:
-    """Dependency to get LLM service with provider from AppSettings."""
-    provider_name = await get_setting(LLM_KEY_CLASSIFIER_PROVIDER, db)
-    provider = None
-    if provider_name:
-        result = await db.execute(
-            select(LLMProvider).where(LLMProvider.name == provider_name)
-        )
-        provider = result.scalars().first()
-    
-    if not provider:
-        result = await db.execute(select(LLMProvider).limit(1))
-        provider = result.scalars().first()
-    
-    model = await get_setting(LLM_KEY_CLASSIFIER_MODEL, db)
-    return LitellmService(provider, model=model)
+

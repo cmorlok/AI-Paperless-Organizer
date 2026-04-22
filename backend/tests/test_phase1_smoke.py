@@ -34,7 +34,7 @@ class TestPhase1Smoke:
 
     def test_llm_service_importable(self):
         """LLM-01: llm_service.py must be importable with core methods."""
-        from app.services.llm_service import LitellmService, get_llm_service
+        from app.services.llm_service import LitellmService
 
         # Verify core methods exist
         assert hasattr(LitellmService, "complete")
@@ -51,7 +51,7 @@ class TestPhase1Smoke:
         print("PASS: LitellmService importable with core methods")
 
     def test_all_6_consumers_updated(self):
-        """LLM-01: All 6 consumer files must import from llm_service."""
+        """LLM-01 / DI-01: All 6 consumer files must import LLM types from protocols."""
         consumer_files = [
             "app/routers/llm.py",
             "app/routers/tags.py",
@@ -66,8 +66,8 @@ class TestPhase1Smoke:
         for rel_path in consumer_files:
             file_path = backend_root / rel_path
             content = file_path.read_text()
-            assert "from app.services.llm_service import" in content, \
-                f"{rel_path} does not import from llm_service"
+            assert "from app.services.protocols import" in content and "LLMService" in content, \
+                f"{rel_path} does not import LLMService from protocols"
             assert "from app.services.llm_provider import" not in content, \
                 f"{rel_path} still imports from llm_provider"
 

@@ -5,20 +5,13 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from starlette.requests import Request
+from dishka.integrations.fastapi import inject
+from dishka import FromDishka
+
+from app.services.protocols import RAGService
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
-
-# Singleton RAG service instance
-_rag_service = None
-
-
-def get_rag_service():
-    global _rag_service
-    if _rag_service is None:
-        from app.services.rag.service import RAGService
-        _rag_service = RAGService()
-    return _rag_service
 
 
 async def _check_api_auth(request: Request) -> bool:
@@ -81,10 +74,10 @@ class ConfigUpdate(BaseModel):
 # --- Chat Endpoints ---
 
 @router.post("/chat")
-async def chat(body: ChatRequest, request: Request):
+@inject
+async def chat(body: ChatRequest, request: Request, service: FromDishka[RAGService] = None):
     if not await _check_api_auth(request):
         raise HTTPException(status_code=401, detail="Ungültiger API-Key")
-    service = get_rag_service()
     filters = body.filters.model_dump(exclude_none=True) if body.filters else None
 
     async def event_stream():
@@ -106,10 +99,10 @@ async def chat(body: ChatRequest, request: Request):
 # --- Search Endpoint ---
 
 @router.post("/search")
-async def search(body: SearchRequest, request: Request):
+@inject
+async def search(body: SearchRequest, request: Request, service: FromDishka[RAGService] = None):
     if not await _check_api_auth(request):
         raise HTTPException(status_code=401, detail="Ungültiger API-Key")
-    service = get_rag_service()
     filters = body.filters.model_dump(exclude_none=True) if body.filters else None
 
     results = await service.search(
@@ -127,8 +120,8 @@ async def search(body: SearchRequest, request: Request):
 # --- Indexing Endpoints ---
 
 @router.post("/index/start")
-async def start_indexing(request: IndexRequest):
-    service = get_rag_service()
+@inject
+async def start_indexing(request: IndexRequest, service: FromDishka[RAGService] = None):
     if service.indexer.is_indexing:
         raise HTTPException(status_code=409, detail="Indexierung läuft bereits")
 
@@ -137,22 +130,22 @@ async def start_indexing(request: IndexRequest):
 
 
 @router.get("/index/status")
-async def indexing_status():
-    service = get_rag_service()
+@inject
+async def indexing_status(service: FromDishka[RAGService] = None):
     return await service.indexer.get_status()
 
 
 # --- Session Endpoints ---
 
 @router.get("/sessions")
-async def list_sessions():
-    service = get_rag_service()
+@inject
+async def list_sessions(service: FromDishka[RAGService] = None):
     return await service.get_sessions()
 
 
 @router.get("/sessions/{session_id}")
-async def get_session(session_id: str):
-    service = get_rag_service()
+@inject
+async def get_session(session_id: str, service: FromDishka[RAGService] = None):
     session = await service.get_session(session_id)
     if not session:
         raise HTTPException(status_code=404, detail="Session nicht gefunden")
@@ -160,8 +153,8 @@ async def get_session(session_id: str):
 
 
 @router.delete("/sessions/{session_id}")
-async def delete_session(session_id: str):
-    service = get_rag_service()
+@inject
+async def delete_session(session_id: str, service: FromDishka[RAGService] = None):
     deleted = await service.delete_session(session_id)
     if not deleted:
         raise HTTPException(status_code=404, detail="Session nicht gefunden")
@@ -171,14 +164,14 @@ async def delete_session(session_id: str):
 # --- Config Endpoints ---
 
 @router.get("/config")
-async def get_config():
-    service = get_rag_service()
+@inject
+async def get_config(service: FromDishka[RAGService] = None):
     return await service.get_config_dict()
 
 
 @router.put("/config")
-async def update_config(request: ConfigUpdate):
-    service = get_rag_service()
+@inject
+async def update_config(request: ConfigUpdate, service: FromDishka[RAGService] = None):
     updates = request.model_dump(exclude_none=True)
     if not updates:
         raise HTTPException(status_code=400, detail="Keine Änderungen angegeben")
@@ -188,8 +181,8 @@ async def update_config(request: ConfigUpdate):
 # --- Health Check ---
 
 @router.get("/health")
-async def rag_health():
-    service = get_rag_service()
+@inject
+async def rag_health(service: FromDishka[RAGService] = None):
     config = await service.get_config_dict()
     index_status = await service.indexer.get_status()
     return {

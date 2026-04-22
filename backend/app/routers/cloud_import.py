@@ -11,11 +11,14 @@ from sqlalchemy import select, desc
 from app.database import get_db
 from app.models.cloud_import import CloudSource, CloudImportLog
 from app.services.cloud_import_service import (
-    get_cloud_import_service,
     get_cloud_sync_state,
     cloud_sync_loop,
     _cloud_sync_state,
 )
+from app.container import container as di_container
+from dishka.integrations.fastapi import inject
+from dishka import FromDishka
+from app.services.protocols import PaperlessClient, CloudImportService
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -101,35 +104,27 @@ async def delete_source(source_id: int, db: AsyncSession = Depends(get_db)):
 # ── Connection test ──────────────────────────────────────────────────────────
 
 @router.post("/sources/{source_id}/test")
-async def test_source(source_id: int, db: AsyncSession = Depends(get_db)):
+@inject
+async def test_source(source_id: int, db: AsyncSession = Depends(get_db), service: FromDishka[CloudImportService] = None):
     result = await db.execute(select(CloudSource).where(CloudSource.id == source_id))
     source = result.scalar_one_or_none()
     if not source:
         raise HTTPException(status_code=404, detail="Quelle nicht gefunden")
-    return await get_cloud_import_service().test_connection(source)
+    return await service.test_connection(source)
 
 
 # ── Manual sync trigger ──────────────────────────────────────────────────────
 
 @router.post("/sources/{source_id}/sync")
-async def sync_source_now(source_id: int, db: AsyncSession = Depends(get_db)):
-    from app.models.settings_model import PaperlessSettings
-    from app.services.paperless_client import PaperlessClient
-
+@inject
+async def sync_source_now(source_id: int, db: AsyncSession = Depends(get_db), client: FromDishka[PaperlessClient] = None, service: FromDishka[CloudImportService] = None):
     result = await db.execute(select(CloudSource).where(CloudSource.id == source_id))
     source = result.scalar_one_or_none()
     if not source:
         raise HTTPException(status_code=404, detail="Quelle nicht gefunden")
 
-    pl_q = await db.execute(select(PaperlessSettings).where(PaperlessSettings.id == 1))
-    pl_settings = pl_q.scalar_one_or_none()
-    if not pl_settings or not pl_settings.is_configured:
-        raise HTTPException(status_code=400, detail="Paperless nicht konfiguriert")
-
-    pl_client = PaperlessClient(base_url=pl_settings.url, api_token=pl_settings.api_token)
-
     try:
-        stats = await get_cloud_import_service().sync_source(source, pl_client, db)
+        stats = await service.sync_source(source, client, db)
         from datetime import datetime
         source.last_checked_at = datetime.utcnow()
         source.last_status = "idle"
@@ -142,15 +137,15 @@ async def sync_source_now(source_id: int, db: AsyncSession = Depends(get_db)):
 # ── Folder browser ───────────────────────────────────────────────────────────
 
 @router.get("/sources/{source_id}/folders")
-async def browse_source_folders(source_id: int, path: str = "/", db: AsyncSession = Depends(get_db)):
+@inject
+async def browse_source_folders(source_id: int, path: str = "/", db: AsyncSession = Depends(get_db), service: FromDishka[CloudImportService] = None):
     """List folders on a source for folder picker UI."""
     result = await db.execute(select(CloudSource).where(CloudSource.id == source_id))
     source = result.scalar_one_or_none()
     if not source:
         raise HTTPException(status_code=404, detail="Quelle nicht gefunden")
     try:
-        svc = get_cloud_import_service()
-        folders = await svc.list_folders(source, path)
+        folders = await service.list_folders(source, path)
         return {"path": path, "folders": folders}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -159,19 +154,19 @@ async def browse_source_folders(source_id: int, path: str = "/", db: AsyncSessio
 # ── File listing ─────────────────────────────────────────────────────────────
 
 @router.get("/sources/{source_id}/files")
-async def list_source_files(source_id: int, db: AsyncSession = Depends(get_db)):
+@inject
+async def list_source_files(source_id: int, db: AsyncSession = Depends(get_db), service: FromDishka[CloudImportService] = None):
     result = await db.execute(select(CloudSource).where(CloudSource.id == source_id))
     source = result.scalar_one_or_none()
     if not source:
         raise HTTPException(status_code=404, detail="Quelle nicht gefunden")
     try:
-        svc = get_cloud_import_service()
         if source.source_type == "webdav":
-            files = await svc.list_files_webdav(source)
+            files = await service.list_files_webdav(source)
         elif source.source_type == "rclone":
-            files = await svc.list_files_rclone(source)
+            files = await service.list_files_rclone(source)
         elif source.source_type == "local":
-            files = await svc.list_files_local(source)
+            files = await service.list_files_local(source)
         else:
             files = []
         return {"files": files}
@@ -242,7 +237,7 @@ async def start_sync_daemon():
     _cloud_sync_state["enabled"] = True
     _cloud_sync_state["files_imported_session"] = 0
     _cloud_sync_state["errors_session"] = 0
-    _cloud_sync_state["task"] = asyncio.get_running_loop().create_task(cloud_sync_loop())
+    _cloud_sync_state["task"] = asyncio.get_running_loop().create_task(cloud_sync_loop(di_container))
     logger.info("Cloud sync daemon gestartet")
     return {"status": "started"}
 
@@ -261,14 +256,8 @@ async def stop_sync_daemon():
 # ── Paperless metadata for dropdowns ────────────────────────────────────────
 
 @router.get("/paperless/tags")
-async def get_paperless_tags(db: AsyncSession = Depends(get_db)):
-    from app.models.settings_model import PaperlessSettings
-    from app.services.paperless_client import PaperlessClient
-    pl_q = await db.execute(select(PaperlessSettings).where(PaperlessSettings.id == 1))
-    pl_settings = pl_q.scalar_one_or_none()
-    if not pl_settings or not pl_settings.is_configured:
-        return []
-    client = PaperlessClient(base_url=pl_settings.url, api_token=pl_settings.api_token)
+@inject
+async def get_paperless_tags(client: FromDishka[PaperlessClient] = None):
     try:
         tags = await client.get_tags(use_cache=False)
         return [{"id": t["id"], "name": t["name"]} for t in tags]
@@ -277,14 +266,8 @@ async def get_paperless_tags(db: AsyncSession = Depends(get_db)):
 
 
 @router.get("/paperless/correspondents")
-async def get_paperless_correspondents(db: AsyncSession = Depends(get_db)):
-    from app.models.settings_model import PaperlessSettings
-    from app.services.paperless_client import PaperlessClient
-    pl_q = await db.execute(select(PaperlessSettings).where(PaperlessSettings.id == 1))
-    pl_settings = pl_q.scalar_one_or_none()
-    if not pl_settings or not pl_settings.is_configured:
-        return []
-    client = PaperlessClient(base_url=pl_settings.url, api_token=pl_settings.api_token)
+@inject
+async def get_paperless_correspondents(client: FromDishka[PaperlessClient] = None):
     try:
         corrs = await client.get_correspondents(use_cache=False)
         return [{"id": c["id"], "name": c["name"]} for c in corrs]
@@ -293,14 +276,8 @@ async def get_paperless_correspondents(db: AsyncSession = Depends(get_db)):
 
 
 @router.get("/paperless/document-types")
-async def get_paperless_document_types(db: AsyncSession = Depends(get_db)):
-    from app.models.settings_model import PaperlessSettings
-    from app.services.paperless_client import PaperlessClient
-    pl_q = await db.execute(select(PaperlessSettings).where(PaperlessSettings.id == 1))
-    pl_settings = pl_q.scalar_one_or_none()
-    if not pl_settings or not pl_settings.is_configured:
-        return []
-    client = PaperlessClient(base_url=pl_settings.url, api_token=pl_settings.api_token)
+@inject
+async def get_paperless_document_types(client: FromDishka[PaperlessClient] = None):
     try:
         types = await client.get_document_types(use_cache=False)
         return [{"id": t["id"], "name": t["name"]} for t in types]

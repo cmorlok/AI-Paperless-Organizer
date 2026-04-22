@@ -1,5 +1,7 @@
 """OCR Service using Ollama Vision models."""
 
+from __future__ import annotations
+
 import base64
 import httpx
 import asyncio
@@ -176,17 +178,34 @@ watchdog_state = {
 
 class OcrService:
     """Service for OCR using Ollama Vision models."""
-    
-    def __init__(self, ollama_url: str = DEFAULT_OLLAMA_URL, model: str = DEFAULT_OCR_MODEL, ollama_urls: List[str] = None, max_image_size: int = 1344, smart_skip_enabled: bool = False):
+
+    def __init__(self, ollama_url: Optional[str] = None, model: Optional[str] = None, ollama_urls: Optional[List[str]] = None, max_image_size: int = 1344, smart_skip_enabled: bool = False, session_factory: Optional[Any] = None):
+        self._explicit_ollama_url = ollama_url
+        self._explicit_ollama_urls = ollama_urls
+        self._explicit_model = model
+        self.session_factory = session_factory
+        self._config_loaded = False
+
         if ollama_urls and len(ollama_urls) > 0:
             self.ollama_urls = [u.rstrip("/") for u in ollama_urls if u.strip()]
-        else:
+        elif ollama_url:
             self.ollama_urls = [ollama_url.rstrip("/")]
-            
+        else:
+            self.ollama_urls = [DEFAULT_OLLAMA_URL]
+
         self.current_url_index = 0
-        self.model = model
+        self.model = model or DEFAULT_OCR_MODEL
         self.max_image_size = max_image_size
         self.smart_skip_enabled = smart_skip_enabled
+
+    async def _ensure_config(self) -> None:
+        """Lazy-load OCR settings from DB on first use.
+
+        OCR settings are currently managed via the ocr_settings JSON file
+        in routers/ocr.py. No dedicated DB model exists yet, so this is a
+        no-op placeholder for future DI-based config loading.
+        """
+        self._config_loaded = True
     
     def get_current_url(self) -> str:
         if not self.ollama_urls:
@@ -203,6 +222,7 @@ class OcrService:
         """Test connection to Ollama and check if the model is available.
         Attempts all configured URLs until one works.
         """
+        await self._ensure_config()
         last_error = None
         for url in self.ollama_urls:
             try:
@@ -767,6 +787,7 @@ class OcrService:
 
     async def ocr_document(self, paperless_client, document_id: int, force: bool = False, db_session=None) -> Dict[str, Any]:
         """OCR a document with page-level persistence. Supports resume after failures."""
+        await self._ensure_config()
         start_time = time.time()
         print(f"[OCR] Starting OCR for document {document_id}")
 

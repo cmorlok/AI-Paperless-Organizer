@@ -6,11 +6,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, delete
 from app.database import get_db
 from app.models import SavedAnalysis
-from app.services.paperless_client import PaperlessClient, get_paperless_client
-from app.services.similarity import SimilarityService, get_similarity_service
-from app.services.merge import MergeService, get_merge_service
-from app.services.statistics import StatisticsService, get_statistics_service
-from app.services.llm_service import LitellmService as LLMProviderService, get_llm_service
+from app.services.protocols import (
+    PaperlessClient,
+    SimilarityService,
+    MergeService,
+    StatisticsService,
+    LLMService as LLMProviderService,
+)
+from dishka.integrations.fastapi import inject
+from dishka import FromDishka
 
 router = APIRouter()
 ENTITY_TYPE = "document_types"
@@ -29,15 +33,17 @@ class AnalyzeRequest(BaseModel):
 
 
 @router.get("/")
-async def list_document_types(client: PaperlessClient = Depends(get_paperless_client)):
+@inject
+async def list_document_types(client: FromDishka[PaperlessClient] = None):
     """List all document types with document counts."""
     return await client.get_document_types_with_counts()
 
 
 @router.get("/estimate")
+@inject
 async def estimate_document_types(
-    client: PaperlessClient = Depends(get_paperless_client),
-    llm: LLMProviderService = Depends(get_llm_service)
+    client: FromDishka[PaperlessClient] = None,
+    llm: FromDishka[LLMProviderService] = None
 ):
     """Estimate tokens needed for analysis."""
     doc_types = await client.get_document_types_with_counts()
@@ -141,9 +147,10 @@ async def mark_group_processed(
 
 
 @router.post("/analyze")
+@inject
 async def analyze_document_types(
     request: AnalyzeRequest = None,
-    similarity_service: SimilarityService = Depends(get_similarity_service),
+    similarity_service: FromDishka[SimilarityService] = None,
     db: AsyncSession = Depends(get_db)
 ):
     """Analyze document types and find similar groups using AI."""
@@ -174,9 +181,10 @@ async def analyze_document_types(
 
 
 @router.post("/merge")
+@inject
 async def merge_document_types(
     request: MergeRequest,
-    merge_service: MergeService = Depends(get_merge_service)
+    merge_service: FromDishka[MergeService] = None
 ):
     """Merge multiple document types into one."""
     result = await merge_service.merge_document_types(
@@ -188,16 +196,18 @@ async def merge_document_types(
 
 
 @router.get("/history")
+@inject
 async def get_merge_history(
-    merge_service: MergeService = Depends(get_merge_service)
+    merge_service: FromDishka[MergeService] = None
 ):
     """Get merge history for document types."""
     return await merge_service.get_history("document_types")
 
 
 @router.get("/empty")
+@inject
 async def get_empty_document_types(
-    client: PaperlessClient = Depends(get_paperless_client)
+    client: FromDishka[PaperlessClient] = None
 ):
     """Get document types with 0 documents."""
     doc_types = await client.get_document_types_with_counts()
@@ -209,9 +219,10 @@ async def get_empty_document_types(
 
 
 @router.delete("/empty")
+@inject
 async def delete_empty_document_types(
-    client: PaperlessClient = Depends(get_paperless_client),
-    stats_service: StatisticsService = Depends(get_statistics_service)
+    client: FromDishka[PaperlessClient] = None,
+    stats_service: FromDishka[StatisticsService] = None
 ):
     """Delete all document types with 0 documents - PARALLEL for speed."""
     doc_types = await client.get_document_types_with_counts()
@@ -260,9 +271,10 @@ async def delete_empty_document_types(
 
 
 @router.delete("/{document_type_id}")
+@inject
 async def delete_document_type_by_id(
     document_type_id: int,
-    client: PaperlessClient = Depends(get_paperless_client)
+    client: FromDishka[PaperlessClient] = None
 ):
     """Delete a single document type."""
     try:

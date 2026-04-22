@@ -6,11 +6,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, delete
 from app.database import get_db
 from app.models import SavedAnalysis
-from app.services.paperless_client import PaperlessClient, get_paperless_client
-from app.services.similarity import SimilarityService, get_similarity_service
-from app.services.merge import MergeService, get_merge_service
-from app.services.statistics import StatisticsService, get_statistics_service
-from app.services.llm_service import LitellmService as LLMProviderService, get_llm_service
+from app.services.protocols import (
+    PaperlessClient,
+    SimilarityService,
+    MergeService,
+    StatisticsService,
+    LLMService as LLMProviderService,
+)
+from dishka.integrations.fastapi import inject
+from dishka import FromDishka
 
 router = APIRouter()
 ENTITY_TYPE = "correspondents"
@@ -37,15 +41,17 @@ class MergeGroup(BaseModel):
 
 
 @router.get("/")
-async def list_correspondents(client: PaperlessClient = Depends(get_paperless_client)):
+@inject
+async def list_correspondents(client: FromDishka[PaperlessClient] = None):
     """List all correspondents with document counts."""
     return await client.get_correspondents_with_counts()
 
 
 @router.get("/estimate")
+@inject
 async def estimate_correspondents(
-    client: PaperlessClient = Depends(get_paperless_client),
-    llm: LLMProviderService = Depends(get_llm_service)
+    client: FromDishka[PaperlessClient] = None,
+    llm: FromDishka[LLMProviderService] = None
 ):
     """Estimate tokens needed for analysis."""
     correspondents = await client.get_correspondents_with_counts()
@@ -150,9 +156,10 @@ async def mark_group_processed(
 
 
 @router.post("/analyze")
+@inject
 async def analyze_correspondents(
     request: AnalyzeRequest = None,
-    similarity_service: SimilarityService = Depends(get_similarity_service),
+    similarity_service: FromDishka[SimilarityService] = None,
     db: AsyncSession = Depends(get_db)
 ):
     """Analyze correspondents and find similar groups using AI."""
@@ -183,9 +190,10 @@ async def analyze_correspondents(
 
 
 @router.post("/merge")
+@inject
 async def merge_correspondents(
     request: MergeRequest,
-    merge_service: MergeService = Depends(get_merge_service)
+    merge_service: FromDishka[MergeService] = None
 ):
     """Merge multiple correspondents into one."""
     result = await merge_service.merge_correspondents(
@@ -197,16 +205,18 @@ async def merge_correspondents(
 
 
 @router.get("/history")
+@inject
 async def get_merge_history(
-    merge_service: MergeService = Depends(get_merge_service)
+    merge_service: FromDishka[MergeService] = None
 ):
     """Get merge history for correspondents."""
     return await merge_service.get_history("correspondents")
 
 
 @router.get("/empty")
+@inject
 async def get_empty_correspondents(
-    client: PaperlessClient = Depends(get_paperless_client)
+    client: FromDishka[PaperlessClient] = None
 ):
     """Get correspondents with 0 documents."""
     correspondents = await client.get_correspondents_with_counts()
@@ -218,9 +228,10 @@ async def get_empty_correspondents(
 
 
 @router.delete("/empty")
+@inject
 async def delete_empty_correspondents(
-    client: PaperlessClient = Depends(get_paperless_client),
-    stats_service: StatisticsService = Depends(get_statistics_service)
+    client: FromDishka[PaperlessClient] = None,
+    stats_service: FromDishka[StatisticsService] = None
 ):
     """Delete all correspondents with 0 documents - PARALLEL for speed."""
     correspondents = await client.get_correspondents_with_counts()
@@ -269,9 +280,10 @@ async def delete_empty_correspondents(
 
 
 @router.delete("/{correspondent_id}")
+@inject
 async def delete_correspondent(
     correspondent_id: int,
-    client: PaperlessClient = Depends(get_paperless_client)
+    client: FromDishka[PaperlessClient] = None
 ):
     """Delete a single correspondent."""
     try:

@@ -1,11 +1,12 @@
 """Main classifier service that orchestrates document classification."""
 
+from __future__ import annotations
+
 import logging
 import re
 from typing import Dict, Any, Optional, List
 from dataclasses import asdict
 
-from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
 from app.models.classifier import (
@@ -17,7 +18,7 @@ from app.models.settings_model import (
     LLM_KEY_CLASSIFIER_MODEL,
 )
 from app.routers.settings import get_setting
-from app.services.paperless_client import PaperlessClient
+from app.services.protocols import PaperlessClient
 from app.services.classifier.base_provider import (
     BaseClassifierProvider, ClassificationResult, DocumentContext,
 )
@@ -111,82 +112,106 @@ def _clean_title(title: str, created_date: str = None) -> str:
 class DocumentClassifierService:
     """Orchestrates document classification using the configured provider."""
 
-    def __init__(self, db: AsyncSession, paperless: PaperlessClient):
-        self.db = db
+    def __init__(self, paperless: Optional[PaperlessClient] = None, session_factory: Optional[Any] = None):
         self.paperless = paperless
+        self.session_factory = session_factory
 
     async def get_config(self) -> ClassifierConfig:
-        result = await self.db.execute(
-            select(ClassifierConfig).where(ClassifierConfig.id == 1)
-        )
-        config = result.scalar_one_or_none()
-        if not config:
-            config = ClassifierConfig(id=1)
-            self.db.add(config)
-            await self.db.commit()
-            await self.db.refresh(config)
-        return config
+        if self.session_factory is None:
+            raise RuntimeError("No session_factory configured")
+        async with self.session_factory() as db:
+            result = await db.execute(
+                select(ClassifierConfig).where(ClassifierConfig.id == 1)
+            )
+            config = result.scalar_one_or_none()
+            if not config:
+                config = ClassifierConfig(id=1)
+                db.add(config)
+                await db.commit()
+                await db.refresh(config)
+            return config
 
     async def save_config(self, data: Dict[str, Any]) -> ClassifierConfig:
-        config = await self.get_config()
-        for key, value in data.items():
-            if hasattr(config, key) and key not in ("id", "created_at", "updated_at"):
-                setattr(config, key, value)
-        await self.db.commit()
-        await self.db.refresh(config)
-        return config
+        if self.session_factory is None:
+            raise RuntimeError("No session_factory configured")
+        async with self.session_factory() as db:
+            result = await db.execute(
+                select(ClassifierConfig).where(ClassifierConfig.id == 1)
+            )
+            config = result.scalar_one_or_none()
+            if not config:
+                config = ClassifierConfig(id=1)
+                db.add(config)
+            for key, value in data.items():
+                if hasattr(config, key) and key not in ("id", "created_at", "updated_at"):
+                    setattr(config, key, value)
+            await db.commit()
+            await db.refresh(config)
+            return config
 
     async def get_storage_profiles(self) -> List[StoragePathProfile]:
-        result = await self.db.execute(
-            select(StoragePathProfile).order_by(StoragePathProfile.person_name)
-        )
-        return list(result.scalars().all())
+        if self.session_factory is None:
+            return []
+        async with self.session_factory() as db:
+            result = await db.execute(
+                select(StoragePathProfile).order_by(StoragePathProfile.person_name)
+            )
+            return list(result.scalars().all())
 
     async def save_storage_profile(self, data: Dict[str, Any]) -> StoragePathProfile:
-        path_id = data.get("paperless_path_id")
-        result = await self.db.execute(
-            select(StoragePathProfile).where(
-                StoragePathProfile.paperless_path_id == path_id
+        if self.session_factory is None:
+            raise RuntimeError("No session_factory configured")
+        async with self.session_factory() as db:
+            path_id = data.get("paperless_path_id")
+            result = await db.execute(
+                select(StoragePathProfile).where(
+                    StoragePathProfile.paperless_path_id == path_id
+                )
             )
-        )
-        profile = result.scalar_one_or_none()
-        if not profile:
-            profile = StoragePathProfile(paperless_path_id=path_id)
-            self.db.add(profile)
+            profile = result.scalar_one_or_none()
+            if not profile:
+                profile = StoragePathProfile(paperless_path_id=path_id)
+                db.add(profile)
 
-        for key, value in data.items():
-            if hasattr(profile, key) and key not in ("id", "created_at", "updated_at"):
-                setattr(profile, key, value)
+            for key, value in data.items():
+                if hasattr(profile, key) and key not in ("id", "created_at", "updated_at"):
+                    setattr(profile, key, value)
 
-        await self.db.commit()
-        await self.db.refresh(profile)
-        return profile
+            await db.commit()
+            await db.refresh(profile)
+            return profile
 
     async def get_custom_field_mappings(self) -> List[CustomFieldMapping]:
-        result = await self.db.execute(
-            select(CustomFieldMapping).order_by(CustomFieldMapping.paperless_field_name)
-        )
-        return list(result.scalars().all())
+        if self.session_factory is None:
+            return []
+        async with self.session_factory() as db:
+            result = await db.execute(
+                select(CustomFieldMapping).order_by(CustomFieldMapping.paperless_field_name)
+            )
+            return list(result.scalars().all())
 
     async def save_custom_field_mapping(self, data: Dict[str, Any]) -> CustomFieldMapping:
-        field_id = data.get("paperless_field_id")
-        result = await self.db.execute(
-            select(CustomFieldMapping).where(
-                CustomFieldMapping.paperless_field_id == field_id
+        if self.session_factory is None:
+            raise RuntimeError("No session_factory configured")
+        async with self.session_factory() as db:
+            field_id = data.get("paperless_field_id")
+            result = await db.execute(
+                select(CustomFieldMapping).where(
+                    CustomFieldMapping.paperless_field_id == field_id
+                )
             )
-        )
-        mapping = result.scalar_one_or_none()
-        if not mapping:
-            mapping = CustomFieldMapping(paperless_field_id=field_id)
-            self.db.add(mapping)
+            mapping = result.scalar_one_or_none()
+            if not mapping:
+                mapping = CustomFieldMapping(paperless_field_id=field_id)
+                db.add(mapping)
 
-        for key, value in data.items():
-            if hasattr(mapping, key) and key not in ("id", "created_at", "updated_at"):
-                setattr(mapping, key, value)
+            for key, value in data.items():
+                if hasattr(mapping, key) and key not in ("id", "created_at", "updated_at"):
+                    setattr(mapping, key, value)
 
-        await self.db.commit()
-        await self.db.refresh(mapping)
-        return mapping
+            await db.commit()
+            await db.refresh(mapping)
+            return mapping
 
     def _build_tool_executor(
         self, config: ClassifierConfig,
@@ -204,28 +229,34 @@ class DocumentClassifierService:
 
     async def _get_llm_provider(self, provider_name: str) -> 'LLMProvider':
         """Get a configured LLMProvider from the central table."""
-        result = await self.db.execute(
-            select(LLMProvider).where(LLMProvider.name == provider_name)
-        )
-        provider = result.scalar_one_or_none()
-        if not provider:
-            raise ValueError(f"Provider '{provider_name}' not found in LLM settings.")
-        return provider
+        if self.session_factory is None:
+            raise RuntimeError("No session_factory configured")
+        async with self.session_factory() as db:
+            result = await db.execute(
+                select(LLMProvider).where(LLMProvider.name == provider_name)
+            )
+            provider = result.scalar_one_or_none()
+            if not provider:
+                raise ValueError(f"Provider '{provider_name}' not found in LLM settings.")
+            return provider
 
     async def _get_classifier_provider_name(self) -> str:
         """Get the classifier provider name from AppSettings key-value store (LLM-08)."""
+        if self.session_factory is None:
+            return "ollama"
         # Try key-value store first
         from app.routers.settings import get_setting
-        kv_provider = await get_setting(LLM_KEY_CLASSIFIER_PROVIDER, self.db)
-        if kv_provider:
-            return kv_provider
-        # Fall back to scalar column for backward compatibility
-        from app.models import AppSettings
-        result = await self.db.execute(select(AppSettings).where(AppSettings.id == 1))
-        app_settings = result.scalar_one_or_none()
-        if app_settings and getattr(app_settings, "classifier_provider", None):
-            return app_settings.classifier_provider
-        return "ollama"
+        async with self.session_factory() as db:
+            kv_provider = await get_setting(LLM_KEY_CLASSIFIER_PROVIDER, db)
+            if kv_provider:
+                return kv_provider
+            # Fall back to scalar column for backward compatibility
+            from app.models import AppSettings
+            result = await db.execute(select(AppSettings).where(AppSettings.id == 1))
+            app_settings = result.scalar_one_or_none()
+            if app_settings and getattr(app_settings, "classifier_provider", None):
+                return app_settings.classifier_provider
+            return "ollama"
 
     async def _build_provider(self, config: ClassifierConfig) -> BaseClassifierProvider:
         """Build the appropriate provider based on central LLM settings."""
@@ -241,7 +272,11 @@ class DocumentClassifierService:
         model_override: Optional[str] = None,
     ) -> BaseClassifierProvider:
         """Create a provider instance from the central LLMProvider table."""
-        model = model_override or await get_setting(LLM_KEY_CLASSIFIER_MODEL, self.db)
+        if self.session_factory is not None:
+            async with self.session_factory() as db:
+                model = model_override or await get_setting(LLM_KEY_CLASSIFIER_MODEL, db)
+        else:
+            model = model_override
 
         if provider_name == "ollama":
             return LitellmOllamaProvider(model=model, tool_executor=tool_executor)
@@ -696,38 +731,44 @@ class DocumentClassifierService:
 
         await self._post_process(result, config, document.content)
 
-        # Remove old "pending" entries for this document before inserting the new one.
-        # This prevents stale results from appearing in history / being loaded again.
-        from sqlalchemy import delete as sa_delete
-        await self.db.execute(
-            sa_delete(ClassificationHistory)
-            .where(ClassificationHistory.document_id == document_id)
-            .where(ClassificationHistory.status == "pending")
-        )
-
         classifier_provider_name = await self._get_classifier_provider_name()
         try:
             llm_prov = await self._get_llm_provider(classifier_provider_name)
-            history_model = await get_setting(LLM_KEY_CLASSIFIER_MODEL, self.db) or "unknown"
         except Exception:
-            history_model = "unknown"
+            pass
 
-        history = ClassificationHistory(
-            document_id=document_id,
-            document_title=doc_data.get("title", ""),
-            provider=classifier_provider_name,
-            model=history_model,
-            result_json=asdict(result),
-            tokens_input=result.tokens_input,
-            tokens_output=result.tokens_output,
-            cost_usd=result.cost_usd,
-            duration_seconds=result.duration_seconds,
-            tool_calls_count=result.tool_calls_count,
-            status="error" if result.error else "pending",
-            error_message=result.error or "",
-        )
-        self.db.add(history)
-        await self.db.commit()
+        if self.session_factory is not None:
+            async with self.session_factory() as db:
+                # Remove old "pending" entries for this document before inserting the new one.
+                # This prevents stale results from appearing in history / being loaded again.
+                from sqlalchemy import delete as sa_delete
+                await db.execute(
+                    sa_delete(ClassificationHistory)
+                    .where(ClassificationHistory.document_id == document_id)
+                    .where(ClassificationHistory.status == "pending")
+                )
+
+                try:
+                    history_model = await get_setting(LLM_KEY_CLASSIFIER_MODEL, db) or "unknown"
+                except Exception:
+                    history_model = "unknown"
+
+                history = ClassificationHistory(
+                    document_id=document_id,
+                    document_title=doc_data.get("title", ""),
+                    provider=classifier_provider_name,
+                    model=history_model,
+                    result_json=asdict(result),
+                    tokens_input=result.tokens_input,
+                    tokens_output=result.tokens_output,
+                    cost_usd=result.cost_usd,
+                    duration_seconds=result.duration_seconds,
+                    tool_calls_count=result.tool_calls_count,
+                    status="error" if result.error else "pending",
+                    error_message=result.error or "",
+                )
+                db.add(history)
+                await db.commit()
 
         return result
 
@@ -939,23 +980,25 @@ class DocumentClassifierService:
         result = await self.paperless.update_document(document_id, update_data)
 
         # Mark latest pending/review history entry for this document as applied
-        try:
-            from sqlalchemy import select, desc
-            from app.models.classifier import ClassificationHistory
-            hist_q = await self.db.execute(
-                select(ClassificationHistory)
-                .where(ClassificationHistory.document_id == document_id)
-                .where(ClassificationHistory.status.in_(["pending", "review"]))
-                .order_by(desc(ClassificationHistory.id))
-                .limit(1)
-            )
-            hist = hist_q.scalars().first()
-            if hist:
-                hist.status = "applied"
-                await self.db.commit()
-                logger.info(f"History entry {hist.id} marked as applied for doc {document_id} (was: {hist.status})")
-        except Exception as e:
-            logger.warning(f"Could not update history status: {e}")
+        if self.session_factory is not None:
+            try:
+                from sqlalchemy import select, desc
+                from app.models.classifier import ClassificationHistory
+                async with self.session_factory() as db:
+                    hist_q = await db.execute(
+                        select(ClassificationHistory)
+                        .where(ClassificationHistory.document_id == document_id)
+                        .where(ClassificationHistory.status.in_(["pending", "review"]))
+                        .order_by(desc(ClassificationHistory.id))
+                        .limit(1)
+                    )
+                    hist = hist_q.scalars().first()
+                    if hist:
+                        hist.status = "applied"
+                        await db.commit()
+                        logger.info(f"History entry {hist.id} marked as applied for doc {document_id} (was: {hist.status})")
+            except Exception as e:
+                logger.warning(f"Could not update history status: {e}")
 
         # Always refresh cache after apply -- new tags/correspondents must be
         # visible immediately for the next classification call.
@@ -1035,20 +1078,22 @@ class DocumentClassifierService:
         # Mark as "review" in history if needed
         if review_reason:
             try:
-                hist_q = await self.db.execute(
-                    select(ClassificationHistory)
-                    .where(ClassificationHistory.document_id == document_id)
-                    .where(ClassificationHistory.status == "pending")
-                    .order_by(ClassificationHistory.id.desc())
-                    .limit(1)
-                )
-                hist = hist_q.scalars().first()
-                if hist:
-                    hist.status = "review"
-                    hist.error_message = review_reason
-                    if has_tag_ideas:
-                        hist.tag_ideas = tag_ideas
-                    await self.db.commit()
+                if self.session_factory is not None:
+                    async with self.session_factory() as db:
+                        hist_q = await db.execute(
+                            select(ClassificationHistory)
+                            .where(ClassificationHistory.document_id == document_id)
+                            .where(ClassificationHistory.status == "pending")
+                            .order_by(ClassificationHistory.id.desc())
+                            .limit(1)
+                        )
+                        hist = hist_q.scalars().first()
+                        if hist:
+                            hist.status = "review"
+                            hist.error_message = review_reason
+                            if has_tag_ideas:
+                                hist.tag_ideas = tag_ideas
+                            await db.commit()
             except Exception as e:
                 logger.warning(f"Could not mark as review: {e}")
             if getattr(config, "review_tag_enabled", False):
@@ -1078,16 +1123,18 @@ class DocumentClassifierService:
     async def _save_tag_ideas(self, document_id: int, tag_ideas: List[str]):
         """Save tag ideas on the latest history entry for a document."""
         try:
-            hist_q = await self.db.execute(
-                select(ClassificationHistory)
-                .where(ClassificationHistory.document_id == document_id)
-                .order_by(ClassificationHistory.id.desc())
-                .limit(1)
-            )
-            hist = hist_q.scalars().first()
-            if hist:
-                hist.tag_ideas = tag_ideas
-                await self.db.commit()
+            if self.session_factory is not None:
+                async with self.session_factory() as db:
+                    hist_q = await db.execute(
+                        select(ClassificationHistory)
+                        .where(ClassificationHistory.document_id == document_id)
+                        .order_by(ClassificationHistory.id.desc())
+                        .limit(1)
+                    )
+                    hist = hist_q.scalars().first()
+                    if hist:
+                        hist.tag_ideas = tag_ideas
+                        await db.commit()
         except Exception as e:
             logger.warning(f"Could not save tag ideas for doc {document_id}: {e}")
 

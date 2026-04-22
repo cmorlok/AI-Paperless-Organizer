@@ -8,6 +8,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from contextlib import asynccontextmanager
+from dishka.integrations.fastapi import setup_dishka
 
 from app.core.logging import init_logging, ensure_logging, get_logger
 from app.database import run_migrations
@@ -17,9 +18,10 @@ init_logging()
 logger = get_logger("app.main")
 
 from app.routers import paperless, correspondents, tags, document_types, settings, llm, debug, statistics, ignored_items, ocr, cleanup, classifier, rag, api_keys, cloud_import, duplicates
-from app.routers.ocr import ocr_settings, get_ocr_service
+from app.routers.ocr import ocr_settings
 from app.services.ocr_service import watchdog_state
-from app.services.paperless_client import PaperlessClient
+from app.services.protocols import PaperlessClient, OcrService, RAGService
+from app.container import container as di_container
 
 
 @asynccontextmanager
@@ -41,23 +43,15 @@ async def lifespan(app: FastAPI):
     # Auto-start watchdog if it was enabled before shutdown
     if ocr_settings.get("watchdog_enabled"):
         try:
-            async with async_session() as db_sess:
-                result = await db_sess.execute(sa_select(PaperlessSettings).where(PaperlessSettings.id == 1))
-                pl_settings = result.scalar_one_or_none()
-
-            if pl_settings and pl_settings.is_configured:
-                client = PaperlessClient(base_url=pl_settings.url, api_token=pl_settings.api_token)
-                service = get_ocr_service()
+            async with di_container() as ctx:
+                client = await ctx.get(PaperlessClient)
+                service = await ctx.get(OcrService)
                 watchdog_state["enabled"] = True
                 watchdog_state["interval_minutes"] = ocr_settings.get("watchdog_interval", 5)
                 loop = asyncio.get_running_loop()
                 watchdog_state["task"] = loop.create_task(service.watchdog_loop(client))
                 logging.getLogger(__name__).info(
                     f"Watchdog auto-started (interval: {watchdog_state['interval_minutes']} min)"
-                )
-            else:
-                logging.getLogger(__name__).warning(
-                    "Watchdog: Paperless nicht konfiguriert – Watchdog wird nicht gestartet."
                 )
         except Exception as e:
             logging.getLogger(__name__).error(f"Watchdog auto-start failed: {e}")
@@ -71,7 +65,7 @@ async def lifespan(app: FastAPI):
             if cls_config and getattr(cls_config, "auto_classify_enabled", False):
                 from app.routers.classifier import _auto_classify_state, _auto_classify_loop
                 _auto_classify_state["enabled"] = True
-                asyncio.get_running_loop().create_task(_auto_classify_loop())
+                asyncio.get_running_loop().create_task(_auto_classify_loop(di_container))
                 logging.getLogger(__name__).info("Auto-classify auto-started")
     except Exception as e:
         logging.getLogger(__name__).error(f"Auto-classify auto-start failed: {e}")
@@ -117,11 +111,12 @@ async def lifespan(app: FastAPI):
                 and rag_state.total_documents > 0
                 and rag_state.indexed_documents < rag_state.total_documents
             ):
-                from app.routers.rag import get_rag_service
-                asyncio.get_running_loop().create_task(get_rag_service().indexer.start_indexing(force=False))
-                logging.getLogger(__name__).info(
-                    f"RAG: auto-resuming indexing ({rag_state.indexed_documents}/{rag_state.total_documents} already done)"
-                )
+                async with di_container() as ctx:
+                    rag_service = await ctx.get(RAGService)
+                    asyncio.get_running_loop().create_task(rag_service.indexer.start_indexing(force=False))
+                    logging.getLogger(__name__).info(
+                        f"RAG: auto-resuming indexing ({rag_state.indexed_documents}/{rag_state.total_documents} already done)"
+                    )
     except Exception as e:
         logging.getLogger(__name__).error(f"RAG status reset failed: {e}")
 
@@ -136,7 +131,7 @@ async def lifespan(app: FastAPI):
             has_sources = src_q.scalars().first() is not None
         if has_sources:
             _cloud_sync_state["enabled"] = True
-            asyncio.get_running_loop().create_task(cloud_sync_loop())
+            asyncio.get_running_loop().create_task(cloud_sync_loop(di_container))
             logging.getLogger(__name__).info("Cloud sync daemon auto-started")
     except Exception as e:
         logging.getLogger(__name__).error(f"Cloud sync auto-start failed: {e}")
@@ -174,6 +169,9 @@ app = FastAPI(
     version="1.0.0",
     lifespan=lifespan
 )
+
+setup_dishka(di_container, app)
+app.container = di_container
 
 
 def _log(level: str, msg: str, *args):

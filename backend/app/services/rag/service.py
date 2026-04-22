@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import json
 import logging
 from typing import AsyncGenerator, Optional, Dict, Any, List, Tuple
@@ -18,10 +20,12 @@ logger = logging.getLogger(__name__)
 class RAGService:
     """Orchestrates RAG chat: retrieves context, generates answers with source attribution."""
 
-    def __init__(self):
+    def __init__(self, session_factory, paperless_client):
         self.search_engine = SearchEngine()
-        self.indexer = Indexer(self.search_engine)
+        self.indexer = Indexer(self.search_engine, paperless_client=paperless_client)
         self._initialized = False
+        self.session_factory = session_factory or async_session
+        self.paperless_client = paperless_client
 
     async def initialize(self):
         if self._initialized:
@@ -32,7 +36,7 @@ class RAGService:
         logger.info("RAG service initialized")
 
     async def _get_config(self) -> RagConfig:
-        async with async_session() as db:
+        async with self.session_factory() as db:
             result = await db.execute(sa_select(RagConfig).where(RagConfig.id == 1))
             config = result.scalar_one_or_none()
             if not config:
@@ -91,7 +95,7 @@ class RAGService:
         config = await self._get_config()
 
         # Get or create session
-        async with async_session() as db:
+        async with self.session_factory() as db:
             if session_id:
                 result = await db.execute(
                     sa_select(RagChatSession).where(RagChatSession.id == session_id)
@@ -115,7 +119,7 @@ class RAGService:
 
         # Load recent chat history BEFORE searching so we can enrich short queries
         chat_history = []
-        async with async_session() as db:
+        async with self.session_factory() as db:
             result = await db.execute(
                 sa_select(RagChatMessage)
                 .where(RagChatMessage.session_id == session_id)
@@ -439,7 +443,7 @@ class RAGService:
         yield json.dumps({"type": "citations", "cited": cited_indices})
 
         # Save assistant message
-        async with async_session() as db:
+        async with self.session_factory() as db:
             assistant_msg = RagChatMessage(
                 session_id=session_id,
                 role="assistant",
@@ -561,7 +565,7 @@ class RAGService:
 
     # Session management
     async def get_sessions(self) -> list:
-        async with async_session() as db:
+        async with self.session_factory() as db:
             result = await db.execute(
                 sa_select(RagChatSession).order_by(RagChatSession.updated_at.desc())
             )
@@ -583,7 +587,7 @@ class RAGService:
             return out
 
     async def get_session(self, session_id: str) -> Optional[dict]:
-        async with async_session() as db:
+        async with self.session_factory() as db:
             result = await db.execute(
                 sa_select(RagChatSession).where(RagChatSession.id == session_id)
             )
@@ -614,7 +618,7 @@ class RAGService:
             }
 
     async def delete_session(self, session_id: str) -> bool:
-        async with async_session() as db:
+        async with self.session_factory() as db:
             await db.execute(
                 sa_delete(RagChatMessage).where(RagChatMessage.session_id == session_id)
             )
@@ -629,9 +633,8 @@ class RAGService:
         
         # Merge RagConfig DB values with AppSettings key-value overrides (LLM-08)
         from app.models.settings_model import LLM_KEY_CLASSIFIER_PROVIDER, LLM_KEY_CLASSIFIER_MODEL
-        from app.database import async_session
-        
-        async with async_session() as db:
+
+        async with self.session_factory() as db:
             from app.routers.settings import get_setting
             chat_provider = await get_setting(LLM_KEY_CLASSIFIER_PROVIDER, db)
             chat_model = await get_setting(LLM_KEY_CLASSIFIER_MODEL, db)
@@ -656,7 +659,7 @@ class RAGService:
         }
 
     async def update_config(self, updates: dict) -> dict:
-        async with async_session() as db:
+        async with self.session_factory() as db:
             result = await db.execute(sa_select(RagConfig).where(RagConfig.id == 1))
             config = result.scalar_one_or_none()
             if not config:

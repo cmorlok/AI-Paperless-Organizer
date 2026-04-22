@@ -6,11 +6,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, delete
 from app.database import get_db
 from app.models import SavedAnalysis, PaperlessCache
-from app.services.paperless_client import PaperlessClient, get_paperless_client
-from app.services.similarity import SimilarityService, get_similarity_service
-from app.services.merge import MergeService, get_merge_service
-from app.services.statistics import StatisticsService, get_statistics_service
-from app.services.llm_service import LitellmService as LLMProviderService, get_llm_service
+from app.services.protocols import (
+    PaperlessClient,
+    SimilarityService,
+    MergeService,
+    StatisticsService,
+    LLMService as LLMProviderService,
+)
+from dishka.integrations.fastapi import inject
+from dishka import FromDishka
 
 router = APIRouter()
 ENTITY_TYPE = "tags"
@@ -29,16 +33,18 @@ class AnalyzeRequest(BaseModel):
 
 
 @router.get("/")
-async def list_tags(client: PaperlessClient = Depends(get_paperless_client)):
+@inject
+async def list_tags(client: FromDishka[PaperlessClient] = None):
     """List all tags with document counts."""
     return await client.get_tags_with_counts()
 
 
 @router.get("/estimate")
+@inject
 async def estimate_tags(
     analysis_type: str = "nonsense",
-    client: PaperlessClient = Depends(get_paperless_client),
-    llm: LLMProviderService = Depends(get_llm_service)
+    client: FromDishka[PaperlessClient] = None,
+    llm: FromDishka[LLMProviderService] = None
 ):
     """Estimate tokens needed for specific analysis type.
     
@@ -176,9 +182,10 @@ async def mark_group_processed(
 
 
 @router.post("/analyze")
+@inject
 async def analyze_tags(
     request: AnalyzeRequest = None,
-    similarity_service: SimilarityService = Depends(get_similarity_service),
+    similarity_service: FromDishka[SimilarityService] = None,
     db: AsyncSession = Depends(get_db)
 ):
     """Analyze tags and find similar groups using AI."""
@@ -209,9 +216,10 @@ async def analyze_tags(
 
 
 @router.post("/merge")
+@inject
 async def merge_tags(
     request: MergeRequest,
-    merge_service: MergeService = Depends(get_merge_service)
+    merge_service: FromDishka[MergeService] = None
 ):
     """Merge multiple tags into one."""
     result = await merge_service.merge_tags(
@@ -223,16 +231,18 @@ async def merge_tags(
 
 
 @router.get("/history")
+@inject
 async def get_merge_history(
-    merge_service: MergeService = Depends(get_merge_service)
+    merge_service: FromDishka[MergeService] = None
 ):
     """Get merge history for tags."""
     return await merge_service.get_history("tags")
 
 
 @router.get("/empty")
+@inject
 async def get_empty_tags(
-    client: PaperlessClient = Depends(get_paperless_client)
+    client: FromDishka[PaperlessClient] = None
 ):
     """Get tags with 0 documents."""
     tags = await client.get_tags_with_counts()
@@ -244,9 +254,10 @@ async def get_empty_tags(
 
 
 @router.delete("/empty")
+@inject
 async def delete_empty_tags(
-    client: PaperlessClient = Depends(get_paperless_client),
-    stats_service: StatisticsService = Depends(get_statistics_service)
+    client: FromDishka[PaperlessClient] = None,
+    stats_service: FromDishka[StatisticsService] = None
 ):
     """Delete all tags with 0 documents - PARALLEL for speed."""
     tags = await client.get_tags_with_counts()
@@ -298,9 +309,10 @@ class BulkDeleteRequest(BaseModel):
     tag_ids: List[int]
 
 @router.post("/bulk-delete")
+@inject
 async def bulk_delete_tags(
     request: BulkDeleteRequest,
-    client: PaperlessClient = Depends(get_paperless_client),
+    client: FromDishka[PaperlessClient] = None,
     db: AsyncSession = Depends(get_db)
 ):
     """Delete multiple tags in parallel and keep DB cache in sync."""
@@ -366,9 +378,10 @@ async def remove_tags_from_saved_analyses(
     return {"success": True, "updated": updated}
 
 @router.delete("/{tag_id}")
+@inject
 async def delete_tag(
     tag_id: int,
-    client: PaperlessClient = Depends(get_paperless_client)
+    client: FromDishka[PaperlessClient] = None
 ):
     """Delete a single tag by ID."""
     try:
@@ -432,8 +445,9 @@ async def delete_saved_nonsense_analysis(db: AsyncSession = Depends(get_db)):
 
 
 @router.post("/analyze-nonsense")
+@inject
 async def analyze_nonsense_tags(
-    similarity_service: SimilarityService = Depends(get_similarity_service),
+    similarity_service: FromDishka[SimilarityService] = None,
     db: AsyncSession = Depends(get_db)
 ):
     """Analyze tags to find nonsensical/useless tags using AI and SAVE results."""
@@ -515,8 +529,9 @@ async def delete_saved_correspondent_analysis(db: AsyncSession = Depends(get_db)
 
 
 @router.post("/analyze-correspondent-matches")
+@inject
 async def analyze_correspondent_matches(
-    similarity_service: SimilarityService = Depends(get_similarity_service),
+    similarity_service: FromDishka[SimilarityService] = None,
     db: AsyncSession = Depends(get_db)
 ):
     """Analyze tags that should be correspondents using AI and SAVE results."""
@@ -598,8 +613,9 @@ async def delete_saved_doctype_analysis(db: AsyncSession = Depends(get_db)):
 
 
 @router.post("/analyze-doctype-matches")
+@inject
 async def analyze_doctype_matches(
-    similarity_service: SimilarityService = Depends(get_similarity_service),
+    similarity_service: FromDishka[SimilarityService] = None,
     db: AsyncSession = Depends(get_db)
 ):
     """Analyze tags that should be document types using AI and SAVE results."""

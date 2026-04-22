@@ -197,8 +197,9 @@ class TestRAGServiceIntegration:
 
     def test_rag_service_imports_cleanly(self):
         """Verify RAGService imports without errors."""
+        from unittest.mock import AsyncMock
         from app.services.rag.service import RAGService
-        service = RAGService()
+        service = RAGService(session_factory=None, paperless_client=AsyncMock())
         assert hasattr(service, "_stream_llm")
         assert hasattr(service, "_rewrite_query_llm")
 
@@ -227,7 +228,7 @@ class TestRAGServiceIntegration:
         assert not hasattr(RAGService, "_rewrite_openai"), "_rewrite_openai should be deleted"
 
     def test_litellm_import_in_rag_service(self):
-        """Verify litellm is imported in rag/service.py."""
+        """Verify RAGService uses the unified llm_completion abstraction instead of importing litellm directly."""
         import ast
         from pathlib import Path
         service_path = Path(__file__).parent.parent / "app" / "services" / "rag" / "service.py"
@@ -241,4 +242,5 @@ class TestRAGServiceIntegration:
             elif isinstance(node, ast.ImportFrom):
                 if node.module:
                     imports.append(node.module)
-        assert "litellm" in imports, "litellm should be imported in rag/service.py"
+        assert "app.services.llm_service" in imports, "rag/service.py should import from app.services.llm_service (unified LLM abstraction)"
+        assert "litellm" not in imports, "rag/service.py should NOT import litellm directly — use llm_completion from llm_service"

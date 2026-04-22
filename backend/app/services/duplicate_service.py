@@ -6,13 +6,15 @@ Three scan levels:
 3. Invoice duplicates (LLM-based invoice number + amount extraction)
 """
 
+from __future__ import annotations
+
 import asyncio
 import json
 import logging
 import os
 from collections import defaultdict
 from datetime import datetime
-from typing import Dict, List, Optional, Set, Tuple
+from typing import Dict, List, Optional, Set, Tuple, Any
 
 from sqlalchemy import select as sa_select, text
 
@@ -60,6 +62,10 @@ def _is_cancelled() -> bool:
 
 class DuplicateService:
 
+    def __init__(self, session_factory, paperless_client):
+        self.session_factory = session_factory or async_session
+        self.paperless_client = paperless_client
+
     async def scan_all(self, modes: List[str], similarity_threshold: float = 0.92):
         """Run selected scan modes as a background task.
 
@@ -82,19 +88,17 @@ class DuplicateService:
         _scan_state["cancel_requested"] = False
 
         try:
-            # Build a PaperlessClient from DB settings (with retry)
-            pl_client = None
+            # Use injected PaperlessClient (with retry)
+            pl_client = self.paperless_client
             for attempt in range(3):
                 try:
-                    pl_client = await self._get_paperless_client()
-                    # Test connection
                     await pl_client.test_connection()
                     break
                 except Exception as e:
                     logger.warning(f"Paperless connection attempt {attempt+1}/3 failed: {e}")
                     if attempt < 2:
                         await asyncio.sleep(5)
-            if pl_client is None:
+            else:
                 raise ConnectionError("Paperless-ngx nicht erreichbar nach 3 Versuchen")
 
             if "exact" in modes and not _is_cancelled():
@@ -422,7 +426,7 @@ class DuplicateService:
 
         # Load cached extractions
         cached: Dict[int, Dict] = {}
-        async with async_session() as db:
+        async with self.session_factory() as db:
             rows = (await db.execute(
                 sa_select(DuplicateInvoiceCache)
             )).scalars().all()
@@ -570,7 +574,7 @@ class DuplicateService:
 
     async def _cache_extraction(self, doc_id: int, extraction: Dict):
         """Save extraction result to SQLite cache."""
-        async with async_session() as db:
+        async with self.session_factory() as db:
             # Upsert: delete old, insert new
             await db.execute(
                 text("DELETE FROM duplicate_invoice_cache WHERE document_id = :doc_id"),
@@ -588,24 +592,6 @@ class DuplicateService:
     # Helpers
     # ------------------------------------------------------------------
 
-    async def _get_paperless_client(self):
-        """Create a PaperlessClient from DB settings."""
-        from app.models import PaperlessSettings
-        from app.services.paperless_client import PaperlessClient
-
-        async with async_session() as db:
-            result = await db.execute(
-                sa_select(PaperlessSettings).where(PaperlessSettings.id == 1)
-            )
-            settings = result.scalar_one_or_none()
-
-        if settings and settings.is_configured:
-            return PaperlessClient(
-                base_url=settings.url,
-                api_token=settings.api_token,
-            )
-        raise ValueError("Paperless-ngx is not configured")
-
     async def _build_correspondent_map(self, pl_client) -> Dict[int, str]:
         """Build a {id: name} map of correspondents."""
         correspondents = await pl_client.get_correspondents()
@@ -613,7 +599,7 @@ class DuplicateService:
 
     async def _get_chat_model(self) -> str:
         """Get the configured chat model from RagConfig."""
-        async with async_session() as db:
+        async with self.session_factory() as db:
             result = await db.execute(
                 sa_select(RagConfig).where(RagConfig.id == 1)
             )

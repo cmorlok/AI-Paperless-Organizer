@@ -1,52 +1,57 @@
 """Similarity detection service using LLM."""
 
+from __future__ import annotations
+
 import json
 import re
 import fnmatch
-from typing import Dict, List
-from fastapi import Depends
-from sqlalchemy.ext.asyncio import AsyncSession
+from typing import Dict, List, Optional, Any
 from sqlalchemy import select
-from app.database import get_db
+from app.database import async_session
 from app.models import CustomPrompt, IgnoredTag
-from app.services.paperless_client import PaperlessClient, get_paperless_client
-from app.services.llm_service import LitellmService as LLMProviderService, get_llm_service
+from app.services.protocols import PaperlessClient, LLMService
 from app.prompts.default_prompts import DEFAULT_PROMPTS
 
 
 class SimilarityService:
     """Service for finding similar entities using LLM analysis."""
-    
+
     def __init__(
-        self, 
-        paperless_client: PaperlessClient,
-        llm_service: LLMProviderService,
-        db: AsyncSession
+        self,
+        paperless_client: Optional[PaperlessClient] = None,
+        llm_service: Optional[LLMService] = None,
+        session_factory: Optional[Any] = None,
     ):
         self.paperless = paperless_client
         self.llm = llm_service
-        self.db = db
-    
+        self.session_factory = session_factory
+
     async def _get_prompt(self, entity_type: str) -> str:
         """Get the prompt template for an entity type."""
-        result = await self.db.execute(
-            select(CustomPrompt).where(
-                CustomPrompt.entity_type == entity_type,
-                CustomPrompt.is_active == True
+        if self.session_factory is None:
+            return DEFAULT_PROMPTS.get(entity_type, "")
+        async with self.session_factory() as db:
+            result = await db.execute(
+                select(CustomPrompt).where(
+                    CustomPrompt.entity_type == entity_type,
+                    CustomPrompt.is_active == True
+                )
             )
-        )
-        prompt = result.scalar_one_or_none()
-        
-        if prompt:
-            return prompt.prompt_template
-        
-        return DEFAULT_PROMPTS.get(entity_type, "")
-    
+            prompt = result.scalar_one_or_none()
+
+            if prompt:
+                return prompt.prompt_template
+
+            return DEFAULT_PROMPTS.get(entity_type, "")
+
     async def _get_ignored_patterns(self) -> List[Dict]:
         """Get all ignored tag patterns."""
-        result = await self.db.execute(select(IgnoredTag))
-        ignored = result.scalars().all()
-        return [{"pattern": i.pattern, "is_regex": i.is_regex, "reason": i.reason} for i in ignored]
+        if self.session_factory is None:
+            return []
+        async with self.session_factory() as db:
+            result = await db.execute(select(IgnoredTag))
+            ignored = result.scalars().all()
+            return [{"pattern": i.pattern, "is_regex": i.is_regex, "reason": i.reason} for i in ignored]
     
     def _is_tag_ignored(self, tag_name: str, ignored_patterns: List[Dict]) -> bool:
         """Check if a tag matches any ignored pattern."""
@@ -439,7 +444,7 @@ Wenn nichts zusammengehört: {{"group_merges": [], "add_to_groups": []}}"""
             "analyzed_count": len(filtered_tags),
             "estimated_input_tokens": estimated_input_tokens,
             "token_limit": token_limit,
-            "model": self.llm.provider.model if self.llm.provider else "unknown"
+            "model": self.llm.model or "unknown"
         }
         
         if estimated_input_tokens > safe_limit:
@@ -528,7 +533,7 @@ Wenn nichts zusammengehört: {{"group_merges": [], "add_to_groups": []}}"""
             "correspondents_count": len(correspondents),
             "estimated_input_tokens": estimated_input_tokens,
             "token_limit": token_limit,
-            "model": self.llm.provider.model if self.llm.provider else "unknown"
+            "model": self.llm.model or "unknown"
         }
         
         if estimated_input_tokens > safe_limit:
@@ -621,7 +626,7 @@ Wenn nichts zusammengehört: {{"group_merges": [], "add_to_groups": []}}"""
             "doctypes_count": len(doc_types),
             "estimated_input_tokens": estimated_input_tokens,
             "token_limit": token_limit,
-            "model": self.llm.provider.model if self.llm.provider else "unknown"
+            "model": self.llm.model or "unknown"
         }
         
         if estimated_input_tokens > safe_limit:
@@ -690,10 +695,4 @@ Wenn nichts zusammengehört: {{"group_merges": [], "add_to_groups": []}}"""
             return {"doctype_tags": [], "error": str(e), "stats": stats}
 
 
-async def get_similarity_service(
-    paperless: PaperlessClient = Depends(get_paperless_client),
-    llm: LLMProviderService = Depends(get_llm_service),
-    db: AsyncSession = Depends(get_db)
-) -> SimilarityService:
-    """Dependency to get similarity service."""
-    return SimilarityService(paperless, llm, db)
+
