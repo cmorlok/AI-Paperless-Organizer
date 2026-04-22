@@ -1,0 +1,1 @@
+"""Merge service for consolidating Paperless entities."""
