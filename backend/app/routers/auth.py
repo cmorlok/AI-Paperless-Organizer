@@ -17,8 +17,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
 from app.models.auth_config import AuthConfig
-from app.services.auth_service import (
-    COOKIE_NAME,
+from app.services.auth.state import COOKIE_NAME
+from app.services.auth.service import (
     create_session,
     hash_password,
     is_auth_disabled,
