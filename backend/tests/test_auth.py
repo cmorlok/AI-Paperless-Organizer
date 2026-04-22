@@ -19,14 +19,16 @@ from sqlalchemy import select
 
 
 def test_hash_password_uses_scrypt_and_is_verifiable():
-    hashed = hash_password("hunter2")
-    assert verify_password("hunter2", hashed) is True
-    assert verify_password("wrong", hashed) is False
+    import asyncio
+    hashed = asyncio.run(hash_password("hunter2"))
+    assert asyncio.run(verify_password("hunter2", hashed)) is True
+    assert asyncio.run(verify_password("wrong", hashed)) is False
 
 
 def test_hash_password_produces_different_hashes_for_same_input():
-    hash1 = hash_password("hunter2")
-    hash2 = hash_password("hunter2")
+    import asyncio
+    hash1 = asyncio.run(hash_password("hunter2"))
+    hash2 = asyncio.run(hash_password("hunter2"))
     assert hash1 != hash2
 
 
@@ -159,7 +161,7 @@ def test_setup_creates_password_when_not_set(client):
             config = result.scalar_one_or_none()
             assert config is not None
             assert config.password_hash != ""
-            assert verify_password("new-pw", config.password_hash) is True
+            assert await verify_password("new-pw", config.password_hash) is True
     asyncio.run(check())
 
 
@@ -209,8 +211,8 @@ def test_change_password_success(client, seed_password):
             result = await session.execute(select(AuthConfig).where(AuthConfig.id == 1))
             config = result.scalar_one_or_none()
             assert config is not None
-            assert verify_password("hunter3", config.password_hash) is True
-            assert verify_password("hunter2", config.password_hash) is False
+            assert await verify_password("hunter3", config.password_hash) is True
+            assert await verify_password("hunter2", config.password_hash) is False
     asyncio.run(check())
 
 
