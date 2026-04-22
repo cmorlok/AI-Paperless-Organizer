@@ -73,7 +73,6 @@ export default function SettingsPanel() {
     sidebar_compact: false,
     classifier_provider: 'ollama',
   })
-  const [showChangeForm, setShowChangeForm] = useState(false)
   const [currentPw, setCurrentPw] = useState('')
   const [changeNewPw, setChangeNewPw] = useState('')
   const [changeConfirmPw, setChangeConfirmPw] = useState('')
@@ -251,7 +250,6 @@ export default function SettingsPanel() {
       setChangeNewPw('')
       setChangeConfirmPw('')
       setTimeout(() => {
-        setShowChangeForm(false)
         setChangeSuccess(false)
       }, 2000)
     } catch (e: any) {
@@ -726,90 +724,50 @@ export default function SettingsPanel() {
         </h2>
 
         <div className="space-y-6">
-          {/* Password Protection */}
+          {/* Password Change */}
           <div className="p-4 rounded-lg bg-surface-800/50 border border-surface-700">
-            <h3 className="font-medium text-surface-100 mb-3">Passwort-Schutz</h3>
-            <p className="text-sm text-surface-400 mb-4">
-              Schütze die gesamte Anwendung mit einem Passwort. Ohne Passwort ist kein Zugriff möglich!
-            </p>
+            <h3 className="font-medium text-surface-100 mb-4 flex items-center gap-2">
+              <Lock className="w-4 h-4 text-primary-400" />
+              Passwort ändern
+            </h3>
 
-            {appSettings.password_set ? (
-              <div className="space-y-4">
-                {!showChangeForm ? (
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-2 text-emerald-400">
-                      <Check className="w-4 h-4" />
-                      <span>Passwort ist gesetzt</span>
-                    </div>
-                    <button
-                      onClick={() => setShowChangeForm(true)}
-                      className="btn btn-primary btn-sm flex items-center gap-2"
-                    >
-                      <Lock className="w-4 h-4" />
-                      Passwort ändern
-                    </button>
-                  </div>
-                ) : (
-                  <div className="space-y-3">
-                    <input
-                      type="password"
-                      value={currentPw}
-                      onChange={(e) => setCurrentPw(e.target.value)}
-                      placeholder="Aktuelles Passwort"
-                      className="input w-full"
-                    />
-                    <input
-                      type="password"
-                      value={changeNewPw}
-                      onChange={(e) => setChangeNewPw(e.target.value)}
-                      placeholder="Neues Passwort"
-                      className="input w-full"
-                    />
-                    <input
-                      type="password"
-                      value={changeConfirmPw}
-                      onChange={(e) => setChangeConfirmPw(e.target.value)}
-                      placeholder="Passwort bestätigen"
-                      className="input w-full"
-                    />
-                    {changeError && (
-                      <p className="text-red-400 text-sm">{changeError}</p>
-                    )}
-                    {changeSuccess && (
-                      <p className="text-emerald-400 text-sm">Passwort geändert.</p>
-                    )}
-                    <div className="flex gap-3">
-                      <button
-                        onClick={handleChangePassword}
-                        disabled={changingPw || !currentPw || !changeNewPw || !changeConfirmPw}
-                        className="btn btn-primary flex items-center gap-2"
-                      >
-                        {changingPw ? <Loader2 className="w-4 h-4 animate-spin" /> : <Lock className="w-4 h-4" />}
-                        Speichern
-                      </button>
-                      <button
-                        onClick={() => {
-                          setShowChangeForm(false)
-                          setChangeError(null)
-                          setChangeSuccess(false)
-                          setCurrentPw('')
-                          setChangeNewPw('')
-                          setChangeConfirmPw('')
-                        }}
-                        className="btn btn-secondary"
-                      >
-                        Abbrechen
-                      </button>
-                    </div>
-                  </div>
-                )}
-              </div>
-            ) : (
-              <div className="flex items-center gap-2 text-amber-400">
-                <Ban className="w-4 h-4" />
-                <span>Kein Passwort eingerichtet. Richten Sie ein Passwort über die Einrichtungsseite ein.</span>
-              </div>
-            )}
+            <div className="space-y-3">
+              <input
+                type="password"
+                value={currentPw}
+                onChange={(e) => setCurrentPw(e.target.value)}
+                placeholder="Aktuelles Passwort"
+                className="input w-full"
+              />
+              <input
+                type="password"
+                value={changeNewPw}
+                onChange={(e) => setChangeNewPw(e.target.value)}
+                placeholder="Neues Passwort"
+                className="input w-full"
+              />
+              <input
+                type="password"
+                value={changeConfirmPw}
+                onChange={(e) => setChangeConfirmPw(e.target.value)}
+                placeholder="Passwort bestätigen"
+                className="input w-full"
+              />
+              {changeError && (
+                <p className="text-red-400 text-sm">{changeError}</p>
+              )}
+              {changeSuccess && (
+                <p className="text-emerald-400 text-sm">Passwort geändert.</p>
+              )}
+              <button
+                onClick={handleChangePassword}
+                disabled={changingPw || !currentPw || !changeNewPw || !changeConfirmPw}
+                className="btn btn-primary flex items-center gap-2"
+              >
+                {changingPw ? <Loader2 className="w-4 h-4 animate-spin" /> : <Lock className="w-4 h-4" />}
+                Speichern
+              </button>
+            </div>
           </div>
 
           {/* Debug Menu Toggle */}
