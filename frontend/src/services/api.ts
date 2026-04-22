@@ -224,13 +224,6 @@ export const changePassword = (currentPassword: string, newPassword: string) =>
     credentials: 'include',
   })
 
-// Deprecated stubs — prevent build breakage while Layout.tsx / SettingsPanel transition (Plan 04 removes these)
-export const verifyPassword = (_password: string): Promise<{ valid: boolean; password_required: boolean }> =>
-  Promise.reject(new Error('Veraltet — bitte login() verwenden'))
-
-export const removePassword = (): Promise<{ success: boolean }> =>
-  Promise.reject(new Error('Veraltet — bitte changePassword() verwenden'))
-
 // Correspondents
 export const getCorrespondents = () => fetchJson<any[]>('/correspondents/')
 
