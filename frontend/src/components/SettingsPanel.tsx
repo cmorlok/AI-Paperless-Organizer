@@ -68,15 +68,17 @@ export default function SettingsPanel() {
   
   // App Settings
   const [appSettings, setAppSettings] = useState({
-    password_enabled: false,
     password_set: false,
     show_debug_menu: false,
     sidebar_compact: false,
     classifier_provider: 'ollama',
   })
-  const [newPassword, setNewPassword] = useState('')
-  const [showNewPassword, setShowNewPassword] = useState(false)
-  const [savingAppSettings, setSavingAppSettings] = useState(false)
+  const [currentPw, setCurrentPw] = useState('')
+  const [changeNewPw, setChangeNewPw] = useState('')
+  const [changeConfirmPw, setChangeConfirmPw] = useState('')
+  const [changeError, setChangeError] = useState<string | null>(null)
+  const [changeSuccess, setChangeSuccess] = useState(false)
+  const [changingPw, setChangingPw] = useState(false)
   const [appSettingsSaved, setAppSettingsSaved] = useState(false)
   
   // Ignored Items
@@ -217,8 +219,7 @@ export default function SettingsPanel() {
     }
   }
 
-  const saveAppSettings = async (updates: Partial<typeof appSettings> & { password?: string }) => {
-    setSavingAppSettings(true)
+  const saveAppSettings = async (updates: Partial<typeof appSettings>) => {
     try {
       await api.updateAppSettings(updates)
       await reloadAppSettings()
@@ -230,21 +231,32 @@ export default function SettingsPanel() {
       }
     } catch (e) {
       console.error('Error saving app settings:', e)
-    } finally {
-      setSavingAppSettings(false)
     }
   }
 
-  const handleSetPassword = async () => {
-    if (!newPassword) return
-    await saveAppSettings({ password: newPassword, password_enabled: true })
-    setNewPassword('')
-  }
-
-  const handleRemovePassword = async () => {
-    await api.removePassword()
-    await reloadAppSettings()
-    localStorage.removeItem('app_authenticated')
+  const handleChangePassword = async () => {
+    if (!currentPw || !changeNewPw || !changeConfirmPw) return
+    if (changeNewPw !== changeConfirmPw) {
+      setChangeError('Die Passwörter stimmen nicht überein.')
+      return
+    }
+    setChangingPw(true)
+    setChangeError(null)
+    setChangeSuccess(false)
+    try {
+      await api.changePassword(currentPw, changeNewPw)
+      setChangeSuccess(true)
+      setCurrentPw('')
+      setChangeNewPw('')
+      setChangeConfirmPw('')
+      setTimeout(() => {
+        setChangeSuccess(false)
+      }, 2000)
+    } catch (e: any) {
+      setChangeError(e?.message || 'Fehler beim Ändern des Passworts.')
+    } finally {
+      setChangingPw(false)
+    }
   }
 
   const loadSettings = async () => {
@@ -712,55 +724,50 @@ export default function SettingsPanel() {
         </h2>
 
         <div className="space-y-6">
-          {/* Password Protection */}
+          {/* Password Change */}
           <div className="p-4 rounded-lg bg-surface-800/50 border border-surface-700">
-            <h3 className="font-medium text-surface-100 mb-3">Passwort-Schutz</h3>
-            <p className="text-sm text-surface-400 mb-4">
-              Schütze die gesamte Anwendung mit einem Passwort. Ohne Passwort ist kein Zugriff möglich!
-            </p>
-            
-            {appSettings.password_set ? (
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2 text-emerald-400">
-                  <Check className="w-4 h-4" />
-                  <span>Passwort ist gesetzt</span>
-                </div>
-                <button
-                  onClick={handleRemovePassword}
-                  className="btn btn-danger btn-sm flex items-center gap-2"
-                >
-                  <Trash2 className="w-4 h-4" />
-                  Entfernen
-                </button>
-              </div>
-            ) : (
-              <div className="flex gap-3">
-                <div className="flex-1 relative">
-                  <input
-                    type={showNewPassword ? 'text' : 'password'}
-                    value={newPassword}
-                    onChange={(e) => setNewPassword(e.target.value)}
-                    placeholder="Neues Passwort"
-                    className="input w-full pr-10"
-                  />
-                  <button
-                    type="button"
-                    onClick={() => setShowNewPassword(!showNewPassword)}
-                    className="absolute right-3 top-1/2 -translate-y-1/2 text-surface-400 hover:text-surface-200"
-                  >
-                    {showNewPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                  </button>
-                </div>
-                <button
-                  onClick={handleSetPassword}
-                  disabled={!newPassword || savingAppSettings}
-                  className="btn btn-primary flex items-center gap-2"
-                >
-                  <Lock className="w-4 h-4" />
-                  Setzen
-                </button>
-              </div>
-            )}
+            <h3 className="font-medium text-surface-100 mb-4 flex items-center gap-2">
+              <Lock className="w-4 h-4 text-primary-400" />
+              Passwort ändern
+            </h3>
+
+            <div className="space-y-3">
+              <input
+                type="password"
+                value={currentPw}
+                onChange={(e) => setCurrentPw(e.target.value)}
+                placeholder="Aktuelles Passwort"
+                className="input w-full"
+              />
+              <input
+                type="password"
+                value={changeNewPw}
+                onChange={(e) => setChangeNewPw(e.target.value)}
+                placeholder="Neues Passwort"
+                className="input w-full"
+              />
+              <input
+                type="password"
+                value={changeConfirmPw}
+                onChange={(e) => setChangeConfirmPw(e.target.value)}
+                placeholder="Passwort bestätigen"
+                className="input w-full"
+              />
+              {changeError && (
+                <p className="text-red-400 text-sm">{changeError}</p>
+              )}
+              {changeSuccess && (
+                <p className="text-emerald-400 text-sm">Passwort geändert.</p>
+              )}
+              <button
+                onClick={handleChangePassword}
+                disabled={changingPw || !currentPw || !changeNewPw || !changeConfirmPw}
+                className="btn btn-primary flex items-center gap-2"
+              >
+                {changingPw ? <Loader2 className="w-4 h-4 animate-spin" /> : <Lock className="w-4 h-4" />}
+                Speichern
+              </button>
+            </div>
           </div>
 
           {/* Debug Menu Toggle */}

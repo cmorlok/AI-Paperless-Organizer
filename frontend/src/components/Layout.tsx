@@ -12,7 +12,6 @@ import {
   CheckCircle2,
   XCircle,
   Bug,
-  Lock,
   ScanLine,
   AlertCircle,
   Sparkles,
@@ -85,10 +84,6 @@ export default function Layout({ children }: LayoutProps) {
   const [paperlessConnected, setPaperlessConnected] = useState<boolean | null>(null)
   const [llmConfigured, setLlmConfigured] = useState<boolean | null>(null)
   const [showDebugMenu, setShowDebugMenu] = useState(false)
-  const [isAuthenticated, setIsAuthenticated] = useState(true)
-  const [passwordRequired, setPasswordRequired] = useState(false)
-  const [passwordInput, setPasswordInput] = useState('')
-  const [passwordError, setPasswordError] = useState(false)
   const [ollamaConnected, setOllamaConnected] = useState<boolean | null>(null)
   const [ollamaModelAvailable, setOllamaModelAvailable] = useState<boolean | null>(null)
   const [ollamaModel, setOllamaModel] = useState<string | null>(null)
@@ -149,22 +144,11 @@ export default function Layout({ children }: LayoutProps) {
   }, [batchOcrStatus?.running, watchdogStatus?.running, autoClassifyStatus?.running])
 
   useEffect(() => {
-    // First check if password is required
+    // Load app settings and backend statuses
     api.getAppSettings()
       .then(appSettings => {
         setShowDebugMenu(appSettings.show_debug_menu)
 
-        // Check if password is required - this blocks EVERYTHING
-        if (appSettings.password_enabled && appSettings.password_set) {
-          const savedAuth = localStorage.getItem('app_authenticated')
-          if (savedAuth !== 'true') {
-            setPasswordRequired(true)
-            setIsAuthenticated(false)
-            return // Don't load anything else until authenticated!
-          }
-        }
-
-        // Only load status after authentication
         Promise.all([
           api.getPaperlessStatus().catch(() => ({ connected: false })),
           api.getLLMProvidersFromDB().catch(() => [])
@@ -209,73 +193,12 @@ export default function Layout({ children }: LayoutProps) {
     return () => clearInterval(interval)
   }, [])
 
-  const handlePasswordSubmit = async () => {
-    try {
-      const result = await api.verifyPassword(passwordInput)
-      if (result.valid) {
-        localStorage.setItem('app_authenticated', 'true')
-        setIsAuthenticated(true)
-        setPasswordRequired(false)
-        setPasswordError(false)
-        // Reload to load all data
-        window.location.reload()
-      } else {
-        setPasswordError(true)
-        setPasswordInput('')
-      }
-    } catch {
-      setPasswordError(true)
-    }
-  }
-
   const navigation = baseNavigation.filter(item =>
     item.alwaysShow || (item.requiresDebug && showDebugMenu)
   )
 
   const isChildActive = (item: NavItem) =>
     item.children?.some(c => c.href === location.pathname) ?? false
-
-  // Password login screen - BLOCKS EVERYTHING
-  if (passwordRequired && !isAuthenticated) {
-    return (
-      <div className="min-h-screen bg-gradient-to-br from-surface-900 via-surface-800 to-surface-900 flex items-center justify-center p-4">
-        <div className="card p-8 max-w-md w-full text-center border border-primary-500/30">
-          <div className="w-20 h-20 rounded-2xl bg-gradient-to-br from-primary-500 to-primary-700 
-                        flex items-center justify-center shadow-xl shadow-primary-600/40 mx-auto mb-6">
-            <Lock className="w-10 h-10 text-white" />
-          </div>
-          <h1 className="font-display text-2xl font-bold text-surface-100 mb-2">
-            AI Paperless Organizer
-          </h1>
-          <p className="text-surface-400 mb-6">
-            Diese Anwendung ist passwortgeschützt
-          </p>
-          <input
-            type="password"
-            value={passwordInput}
-            onChange={(e) => setPasswordInput(e.target.value)}
-            onKeyDown={(e) => e.key === 'Enter' && handlePasswordSubmit()}
-            placeholder="Passwort eingeben..."
-            className={clsx("input mb-4 text-center", passwordError && "border-red-500 animate-shake")}
-            autoFocus
-          />
-          {passwordError && (
-            <p className="text-red-400 text-sm mb-4">❌ Falsches Passwort</p>
-          )}
-          <button
-            onClick={handlePasswordSubmit}
-            className="btn btn-primary w-full flex items-center justify-center gap-2"
-          >
-            <Lock className="w-4 h-4" />
-            Entsperren
-          </button>
-          <p className="text-surface-500 text-xs mt-6">
-            Passwort vergessen? Lösche die Datei <code className="text-surface-400">data/app.db</code> im Backend.
-          </p>
-        </div>
-      </div>
-    )
-  }
 
   return (
     <div className="min-h-screen flex">
@@ -657,17 +580,13 @@ export default function Layout({ children }: LayoutProps) {
             AI Paperless Organizer v1.1
           </div>
 
-          {localStorage.getItem('app_authenticated') === 'true' && (
-            <button
-              onClick={() => {
-                localStorage.removeItem('app_authenticated')
-                window.location.reload()
-              }}
-              className="w-full text-xs text-surface-500 hover:text-red-400 transition-colors"
-            >
-              🔓 Abmelden
-            </button>
-          )}
+          <button
+            onClick={async () => {
+              try { await api.logout() } catch { /* ignore */ }
+              window.location.href = '/login'
+            }}
+            className="w-full text-xs text-surface-500 hover:text-red-400 transition-colors"
+          >Abmelden</button>
         </div>
       </aside>
 
