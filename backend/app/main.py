@@ -24,7 +24,7 @@ from app.services.ocr.state import watchdog_state
 from app.services.paperless.protocol import PaperlessClient
 from app.services.ocr.protocol import OcrService
 from app.services.rag.protocol import RAGService
-from app.services.auth_service import SessionAuthMiddleware
+from app.services.auth.middleware import SessionAuthMiddleware
 from app.database import async_session
 from app.container import container as di_container
 
