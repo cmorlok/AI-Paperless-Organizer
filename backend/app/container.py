@@ -6,18 +6,16 @@ from typing import AsyncIterator
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.database import async_session
-from app.services.protocols import (
-    LLMService,
-    PaperlessClient,
-    SimilarityService,
-    MergeService,
-    StatisticsService,
-    OcrService,
-    RAGService,
-    DocumentClassifierService,
-    DuplicateService,
-    CloudImportService,
-)
+from app.services.llm.protocol import LLMService
+from app.services.paperless.protocol import PaperlessClient
+from app.services.similarity.protocol import SimilarityService
+from app.services.merge.protocol import MergeService
+from app.services.statistics.protocol import StatisticsService
+from app.services.ocr.protocol import OcrService
+from app.services.rag.protocol import RAGService
+from app.services.classifier.protocol import DocumentClassifierService
+from app.services.duplicate.protocol import DuplicateService
+from app.services.cloud_import.protocol import CloudImportService
 # Implementation imports use aliases to avoid name collision with Protocols
 from app.services.llm.service import LitellmService
 from app.services.paperless.service import PaperlessClient as PaperlessClientImpl
