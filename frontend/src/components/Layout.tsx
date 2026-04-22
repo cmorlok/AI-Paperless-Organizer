@@ -155,7 +155,7 @@ export default function Layout({ children }: LayoutProps) {
         setShowDebugMenu(appSettings.show_debug_menu)
 
         // Check if password is required - this blocks EVERYTHING
-        if (appSettings.password_enabled && appSettings.password_set) {
+        if (appSettings.password_set) {
           const savedAuth = localStorage.getItem('app_authenticated')
           if (savedAuth !== 'true') {
             setPasswordRequired(true)

@@ -13,7 +13,6 @@ from app.models.settings_model import (
     LLM_KEY_OCR_MODEL,
 )
 from app.services.llm_service import list_llm_models, list_llm_providers, PROVIDER_DISPLAY_NAMES
-import hashlib
 from app.prompts.default_prompts import DEFAULT_PROMPTS
 
 router = APIRouter()
@@ -487,24 +486,13 @@ async def delete_ignored_tag(
     return {"success": True}
 
 
-# App Settings (Password, Debug Toggle, etc.)
+# App Settings (Debug Toggle, etc.)
 class AppSettingsSchema(BaseModel):
-    password_enabled: Optional[bool] = None
-    password: Optional[str] = None  # Plain password, will be hashed
     show_debug_menu: Optional[bool] = None
     sidebar_compact: Optional[bool] = None
     classifier_provider: Optional[str] = None
     classifier_model: Optional[str] = None  # Stored in key-value store (LLM-09)
     ocr_model: Optional[str] = None  # Stored in key-value store (LLM-09)
-
-
-class PasswordVerifySchema(BaseModel):
-    password: str
-
-
-def hash_password(password: str) -> str:
-    """Simple password hashing."""
-    return hashlib.sha256(password.encode()).hexdigest()
 
 
 @router.get("/app")
@@ -556,12 +544,6 @@ async def update_app_settings(
         settings = AppSettings(id=1)
         db.add(settings)
     
-    if data.password_enabled is not None:
-        settings.password_enabled = data.password_enabled
-    
-    if data.password is not None and data.password:
-        settings.password_hash = hash_password(data.password)
-    
     if data.show_debug_menu is not None:
         settings.show_debug_menu = data.show_debug_menu
     
@@ -582,39 +564,6 @@ async def update_app_settings(
         await set_setting(LLM_KEY_OCR_MODEL, data.ocr_model, "str", db)
     
     await db.commit()
-    
-    return {"success": True}
-
-
-@router.post("/app/verify-password")
-async def verify_password(
-    data: PasswordVerifySchema,
-    db: AsyncSession = Depends(get_db)
-):
-    """Verify the UI password."""
-    result = await db.execute(select(AppSettings).where(AppSettings.id == 1))
-    settings = result.scalar_one_or_none()
-    
-    if not settings or not settings.password_enabled:
-        return {"valid": True, "password_required": False}
-    
-    if not settings.password_hash:
-        return {"valid": True, "password_required": False}
-    
-    is_valid = settings.password_hash == hash_password(data.password)
-    return {"valid": is_valid, "password_required": True}
-
-
-@router.delete("/app/password")
-async def remove_password(db: AsyncSession = Depends(get_db)):
-    """Remove the UI password."""
-    result = await db.execute(select(AppSettings).where(AppSettings.id == 1))
-    settings = result.scalar_one_or_none()
-    
-    if settings:
-        settings.password_enabled = False
-        settings.password_hash = ""
-        await db.commit()
     
     return {"success": True}
 

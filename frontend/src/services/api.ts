@@ -166,7 +166,6 @@ export const deleteIgnoredTag = (id: number) =>
 
 // App Settings
 export interface AppSettingsResponse {
-  password_enabled: boolean
   password_set: boolean
   show_debug_menu: boolean
   sidebar_compact: boolean
@@ -177,8 +176,6 @@ export const getAppSettings = () =>
   fetchJson<AppSettingsResponse>('/settings/app')
 
 export const updateAppSettings = (data: {
-  password_enabled?: boolean
-  password?: string
   show_debug_menu?: boolean
   sidebar_compact?: boolean
   classifier_provider?: string
@@ -190,14 +187,49 @@ export const updateAppSettings = (data: {
     body: JSON.stringify(data)
   })
 
-export const verifyPassword = (password: string) =>
-  fetchJson<{ valid: boolean; password_required: boolean }>('/settings/app/verify-password', {
+// Authentication (Phase 03)
+export interface AuthStatus {
+  authenticated: boolean
+  requires_setup: boolean
+  auth_disabled: boolean
+}
+
+export const getAuthStatus = () =>
+  fetchJson<AuthStatus>('/auth/status')
+
+export const login = (password: string) =>
+  fetchJson<{ authenticated: boolean }>('/auth/login', {
     method: 'POST',
-    body: JSON.stringify({ password })
+    body: JSON.stringify({ password }),
+    credentials: 'include',
   })
 
-export const removePassword = () =>
-  fetchJson<{ success: boolean }>('/settings/app/password', { method: 'DELETE' })
+export const logout = () =>
+  fetchJson<{ success: boolean }>('/auth/logout', {
+    method: 'POST',
+    credentials: 'include',
+  })
+
+export const setupPassword = (password: string) =>
+  fetchJson<{ success: boolean }>('/auth/setup', {
+    method: 'POST',
+    body: JSON.stringify({ password }),
+    credentials: 'include',
+  })
+
+export const changePassword = (currentPassword: string, newPassword: string) =>
+  fetchJson<{ success: boolean }>('/auth/change-password', {
+    method: 'POST',
+    body: JSON.stringify({ current_password: currentPassword, new_password: newPassword }),
+    credentials: 'include',
+  })
+
+// Deprecated stubs — prevent build breakage while Layout.tsx / SettingsPanel transition (Plan 04 removes these)
+export const verifyPassword = (_password: string): Promise<{ valid: boolean; password_required: boolean }> =>
+  Promise.reject(new Error('Veraltet — bitte login() verwenden'))
+
+export const removePassword = (): Promise<{ success: boolean }> =>
+  Promise.reject(new Error('Veraltet — bitte changePassword() verwenden'))
 
 // Correspondents
 export const getCorrespondents = () => fetchJson<any[]>('/correspondents/')

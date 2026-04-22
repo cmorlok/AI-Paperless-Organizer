@@ -68,7 +68,6 @@ export default function SettingsPanel() {
   
   // App Settings
   const [appSettings, setAppSettings] = useState({
-    password_enabled: false,
     password_set: false,
     show_debug_menu: false,
     sidebar_compact: false,
@@ -237,7 +236,8 @@ export default function SettingsPanel() {
 
   const handleSetPassword = async () => {
     if (!newPassword) return
-    await saveAppSettings({ password: newPassword, password_enabled: true })
+    // Password setup moved to auth router — stub for build compatibility (Plan 04 removes this)
+    await api.setupPassword(newPassword)
     setNewPassword('')
   }
 
