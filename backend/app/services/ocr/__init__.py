@@ -1,1 +1,1 @@
-"""Minimal OCR package init. Imports are done directly from sub-modules."""
+"""OCR package init — no re-exports per D-22."""
