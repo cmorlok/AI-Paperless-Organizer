@@ -8,14 +8,14 @@ import pytest
 class TestDuplicateServiceDIGaps:
     def test_no_internal_get_paperless_client(self):
         """Verify _get_paperless_client is removed from DuplicateService."""
-        src = Path(__file__).parent.parent / "app" / "services" / "duplicate_service.py"
+        src = Path(__file__).parent.parent / "app" / "services" / "duplicate" / "service.py"
         text = src.read_text()
         assert "_get_paperless_client" not in text
         assert "PaperlessClient(base_url=" not in text
 
     def test_duplicate_service_accepts_paperless_client(self):
         """Verify DuplicateService.__init__ takes paperless_client."""
-        from app.services.duplicate_service import DuplicateService
+        from app.services.duplicate.service import DuplicateService
         sig = inspect.signature(DuplicateService.__init__)
         params = list(sig.parameters.keys())
         assert "paperless_client" in params
@@ -23,7 +23,7 @@ class TestDuplicateServiceDIGaps:
 
     def test_duplicate_service_stores_paperless_client(self):
         """Verify DuplicateService stores paperless_client on self."""
-        from app.services.duplicate_service import DuplicateService
+        from app.services.duplicate.service import DuplicateService
         src = inspect.getsource(DuplicateService)
         assert "self.paperless_client" in src
 

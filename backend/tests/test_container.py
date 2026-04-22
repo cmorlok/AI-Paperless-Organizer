@@ -5,7 +5,7 @@ from dishka import Provider, Scope, provide, make_async_container, AsyncContaine
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from app.container import AppProvider, container
-from app.services.protocols import LLMService
+from app.services.llm.protocol import LLMService
 
 
 class MockLLMService:
@@ -85,19 +85,17 @@ def test_container_can_resolve_session_factory():
 
 
 def test_all_protocols_importable():
-    """Test 8: All Protocols can be imported from app.services.protocols."""
-    from app.services.protocols import (
-        LLMService,
-        PaperlessClient,
-        SimilarityService,
-        MergeService,
-        StatisticsService,
-        OcrService,
-        RAGService,
-        DocumentClassifierService,
-        DuplicateService,
-        CloudImportService,
-    )
+    """Test 8: All Protocols can be imported from their respective sub-packages."""
+    from app.services.llm.protocol import LLMService
+    from app.services.paperless.protocol import PaperlessClient
+    from app.services.similarity.protocol import SimilarityService
+    from app.services.merge.protocol import MergeService
+    from app.services.statistics.protocol import StatisticsService
+    from app.services.ocr.protocol import OcrService
+    from app.services.rag.protocol import RAGService
+    from app.services.classifier.protocol import DocumentClassifierService
+    from app.services.duplicate.protocol import DuplicateService
+    from app.services.cloud_import.protocol import CloudImportService
 
     assert all(
         [
@@ -119,6 +117,6 @@ def test_protocols_are_runtime_checkable():
     """Test 9: Protocols define runtime_checkable interfaces."""
     from typing import Protocol
 
-    from app.services.protocols import PaperlessClient
+    from app.services.paperless.protocol import PaperlessClient
 
     assert "Protocol" in str(type(PaperlessClient))

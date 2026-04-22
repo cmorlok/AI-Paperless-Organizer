@@ -23,28 +23,28 @@ class TestDIFoundation:
         assert len(methods) >= 11  # 10 services + session_factory
 
     def test_no_llm_factory_function(self):
-        from app.services import llm_service
-        assert not hasattr(llm_service, 'get_llm_service'), "get_llm_service still exists"
+        from app.services.llm import service as llm_service_module
+        assert not hasattr(llm_service_module, 'get_llm_service'), "get_llm_service still exists"
 
     def test_no_paperless_client_factory(self):
-        from app.services import paperless_client
-        assert not hasattr(paperless_client, 'get_paperless_client'), "get_paperless_client still exists"
+        from app.services.paperless import service as paperless_service_module
+        assert not hasattr(paperless_service_module, 'get_paperless_client'), "get_paperless_client still exists"
 
     def test_no_similarity_factory(self):
-        from app.services import similarity
-        assert not hasattr(similarity, 'get_similarity_service'), "get_similarity_service still exists"
+        from app.services.similarity import service as similarity_service_module
+        assert not hasattr(similarity_service_module, 'get_similarity_service'), "get_similarity_service still exists"
 
     def test_no_merge_factory(self):
-        from app.services import merge
-        assert not hasattr(merge, 'get_merge_service'), "get_merge_service still exists"
+        from app.services.merge import service as merge_service_module
+        assert not hasattr(merge_service_module, 'get_merge_service'), "get_merge_service still exists"
 
     def test_no_statistics_factory(self):
-        from app.services import statistics
-        assert not hasattr(statistics, 'get_statistics_service'), "get_statistics_service still exists"
+        from app.services.statistics import service as statistics_service_module
+        assert not hasattr(statistics_service_module, 'get_statistics_service'), "get_statistics_service still exists"
 
     def test_no_cloud_import_factory(self):
-        from app.services import cloud_import_service
-        assert not hasattr(cloud_import_service, 'get_cloud_import_service'), "get_cloud_import_service still exists"
+        from app.services.cloud_import import service as cloud_import_service_module
+        assert not hasattr(cloud_import_service_module, 'get_cloud_import_service'), "get_cloud_import_service still exists"
 
     def test_all_routers_importable(self):
         from app.routers import paperless, correspondents, tags, document_types
@@ -58,9 +58,10 @@ class TestDIFoundation:
         ])
 
     def test_services_implement_protocols(self):
-        from app.services.protocols import LLMService, PaperlessClient
-        from app.services.llm_service import LitellmService
-        from app.services.paperless_client import PaperlessClient as PC
+        from app.services.llm.protocol import LLMService
+        from app.services.llm.service import LitellmService
+        from app.services.paperless.protocol import PaperlessClient
+        from app.services.paperless.service import PaperlessClient as PC
         assert hasattr(LitellmService, 'complete')
         assert hasattr(PC, 'test_connection')
 
