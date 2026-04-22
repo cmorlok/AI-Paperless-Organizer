@@ -21,7 +21,9 @@ logger = get_logger("app.main")
 from app.routers import paperless, correspondents, tags, document_types, settings, llm, debug, statistics, ignored_items, ocr, cleanup, classifier, rag, api_keys, cloud_import, duplicates, auth
 from app.routers.ocr import ocr_settings
 from app.services.ocr.service import watchdog_state
-from app.services.protocols import PaperlessClient, OcrService, RAGService
+from app.services.paperless.protocol import PaperlessClient
+from app.services.ocr.protocol import OcrService
+from app.services.rag.protocol import RAGService
 from app.services.auth_service import SessionAuthMiddleware
 from app.database import async_session
 from app.container import container as di_container

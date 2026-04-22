@@ -14,7 +14,8 @@ from dishka import FromDishka, AsyncContainer
 from app.container import container as di_container
 
 from app.database import get_db
-from app.services.protocols import PaperlessClient, DocumentClassifierService
+from app.services.paperless.protocol import PaperlessClient
+from app.services.classifier.protocol import DocumentClassifierService
 from app.models.classifier import (
     ClassifierConfig, StoragePathProfile, CustomFieldMapping, ClassificationHistory,
 )

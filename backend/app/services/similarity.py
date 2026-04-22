@@ -9,7 +9,8 @@ from typing import Dict, List, Optional, Any
 from sqlalchemy import select
 from app.database import async_session
 from app.models import CustomPrompt, IgnoredTag
-from app.services.protocols import PaperlessClient, LLMService
+from app.services.paperless.protocol import PaperlessClient
+from app.services.llm.protocol import LLMService
 from app.prompts.default_prompts import DEFAULT_PROMPTS
 
 

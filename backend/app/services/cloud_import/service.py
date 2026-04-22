@@ -12,7 +12,7 @@ from typing import Dict, List, Optional, Any
 import httpx
 
 from app.database import async_session
-from app.services.protocols import PaperlessClient
+from app.services.paperless.protocol import PaperlessClient
 
 logger = logging.getLogger(__name__)
 

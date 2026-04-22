@@ -15,7 +15,8 @@ from app.services.cloud_import.sync_loop import cloud_sync_loop
 from app.container import container as di_container
 from dishka.integrations.fastapi import inject
 from dishka import FromDishka
-from app.services.protocols import PaperlessClient, CloudImportService
+from app.services.paperless.protocol import PaperlessClient
+from app.services.cloud_import.protocol import CloudImportService
 
 router = APIRouter()
 logger = logging.getLogger(__name__)

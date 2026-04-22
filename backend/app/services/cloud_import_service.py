@@ -13,7 +13,7 @@ import httpx
 from dishka import AsyncContainer
 
 from app.database import async_session
-from app.services.protocols import PaperlessClient
+from app.services.paperless.protocol import PaperlessClient
 
 logger = logging.getLogger(__name__)
 

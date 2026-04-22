@@ -10,7 +10,7 @@ import logging
 import re
 from typing import Dict, Any, List, Set, Optional
 
-from app.services.protocols import PaperlessClient
+from app.services.paperless.protocol import PaperlessClient
 from app.models.classifier import StoragePathProfile, CustomFieldMapping
 
 logger = logging.getLogger(__name__)

@@ -12,7 +12,7 @@ from app.models.duplicates import DuplicateIgnore
 from app.services.duplicate.state import get_scan_state, _scan_state
 from dishka.integrations.fastapi import inject
 from dishka import FromDishka
-from app.services.protocols import DuplicateService
+from app.services.duplicate.protocol import DuplicateService
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
