@@ -22,7 +22,6 @@ from app.services.paperless.protocol import PaperlessClient
 from app.services.ocr.protocol import OcrService
 from app.services.llm.protocol import LLMService as LLMProviderService
 from app.services.ocr.service import batch_state, watchdog_state, single_ocr_running, ocr_page_progress, load_review_queue, save_review_queue, load_ocr_ignore_list, save_ocr_ignore_list, load_ocr_error_list, save_ocr_error_list, load_ocr_error_counts, save_ocr_error_counts, DEFAULT_OLLAMA_URL, DEFAULT_OCR_MODEL
-import app.services.ocr_service as ocr_service_module
 
 logger = logging.getLogger(__name__)
 
@@ -317,7 +316,7 @@ async def ocr_single_document(
 ):
     """Run OCR on a single document with page-level persistence and resume support."""
     try:
-        ocr_service_module.single_ocr_running["value"] = True
+        single_ocr_running["value"] = True
         result = await service.ocr_document(client, document_id, force=force, db_session=db)
         return result
     except ValueError as e:
@@ -330,8 +329,8 @@ async def ocr_single_document(
         logger.error(f"OCR single document error: {traceback.format_exc()}")
         raise HTTPException(status_code=500, detail=f"OCR Fehler: {str(e)}")
     finally:
-        ocr_service_module.single_ocr_running["value"] = False
-        ocr_service_module.ocr_page_progress.pop(document_id, None)
+        single_ocr_running["value"] = False
+        ocr_page_progress.pop(document_id, None)
 
 
 @router.get("/progress/{document_id}")
