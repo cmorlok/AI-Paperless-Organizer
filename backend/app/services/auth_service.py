@@ -21,9 +21,8 @@ from typing import Optional
 import anyio
 from cryptography.hazmat.primitives.kdf.scrypt import Scrypt
 from fastapi.responses import JSONResponse
-from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
-from starlette.types import ASGIApp
+from starlette.types import ASGIApp, Receive, Scope, Send
 
 logger = logging.getLogger(__name__)
 
@@ -109,35 +108,48 @@ def _cookie_secure_flag() -> bool:
     return os.getenv("COOKIE_SECURE", "").lower() == "true"
 
 
-class SessionAuthMiddleware(BaseHTTPMiddleware):
+class SessionAuthMiddleware:
     """Guard all /api/* paths except PUBLIC_PATHS.
 
     When DISABLE_LOGIN=true, all /api/* requests pass through immediately.
     Otherwise, a valid session cookie is required for all non-public /api/* paths.
     Performs ZERO database queries per request.
+
+    Implemented as pure ASGI middleware (not BaseHTTPMiddleware) to avoid
+    the Starlette double-body-read / exception-handling bug.
     """
 
     def __init__(self, app: ASGIApp):
-        super().__init__(app)
+        self.app = app
 
-    async def dispatch(self, request: Request, call_next):
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        request = Request(scope, receive)
         path = request.url.path
         method = request.method
 
         # Non-API paths pass through (Vite static assets, frontend routes)
         if not path.startswith("/api/"):
-            return await call_next(request)
+            await self.app(scope, receive, send)
+            return
 
         # Public routes
         if (method, path) in PUBLIC_PATHS:
-            return await call_next(request)
+            await self.app(scope, receive, send)
+            return
 
         # Check if auth is globally disabled
         if is_auth_disabled():
-            return await call_next(request)
+            await self.app(scope, receive, send)
+            return
 
         token = request.cookies.get(COOKIE_NAME)
         if not is_session_valid(token):
-            return JSONResponse({"detail": "Nicht authentifiziert"}, status_code=401)
+            response = JSONResponse({"detail": "Nicht authentifiziert"}, status_code=401)
+            await response(scope, receive, send)
+            return
 
-        return await call_next(request)
+        await self.app(scope, receive, send)
