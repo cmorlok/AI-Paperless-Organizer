@@ -1,6 +1,6 @@
 """Protocol for RAG service."""
 
-from typing import Protocol, runtime_checkable, Optional, List, Dict, Any, AsyncIterator
+from typing import Protocol, runtime_checkable, Any, Optional, Dict, List, AsyncIterator
 
 
 @runtime_checkable

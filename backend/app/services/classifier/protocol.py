@@ -1,6 +1,6 @@
 """Protocol for document classifier service."""
 
-from typing import Protocol, runtime_checkable, Optional, List, Dict, Any
+from typing import Protocol, runtime_checkable, Any, Dict, List
 
 
 @runtime_checkable
