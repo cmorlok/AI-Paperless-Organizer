@@ -990,7 +990,7 @@ _auto_classify_state: Dict[str, Any] = {
 async def _auto_classify_loop(container: AsyncContainer):
     """Background loop that classifies unprocessed documents."""
     import time
-    from app.services.ollama_lock import acquire as ollama_acquire, release as ollama_release, is_locked as ollama_is_locked, current_holder as ollama_holder
+    from app.services.llm.lock import acquire as ollama_acquire, release as ollama_release, is_locked as ollama_is_locked, current_holder as ollama_holder
 
     async with container() as ctx:
         client = await ctx.get(PaperlessClient)
@@ -1162,7 +1162,7 @@ async def stop_auto_classify(db: AsyncSession = Depends(get_db)):
 @router.get("/auto-classify/status")
 async def get_auto_classify_status():
     """Get current status of the auto-classification job."""
-    from app.services.ollama_lock import is_locked as ollama_is_locked, current_holder as ollama_holder
+    from app.services.llm.lock import is_locked as ollama_is_locked, current_holder as ollama_holder
     return {
         "enabled": _auto_classify_state["enabled"],
         "running": _auto_classify_state["running"],

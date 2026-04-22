@@ -19,16 +19,16 @@ from app.services.protocols import (
     CloudImportService,
 )
 # Implementation imports use aliases to avoid name collision with Protocols
-from app.services.llm_service import LitellmService
-from app.services.paperless_client import PaperlessClient as PaperlessClientImpl
-from app.services.similarity import SimilarityService as SimilarityServiceImpl
-from app.services.merge import MergeService as MergeServiceImpl
-from app.services.statistics import StatisticsService as StatisticsServiceImpl
-from app.services.ocr_service import OcrService as OcrServiceImpl
+from app.services.llm.service import LitellmService
+from app.services.paperless.service import PaperlessClient as PaperlessClientImpl
+from app.services.similarity.service import SimilarityService as SimilarityServiceImpl
+from app.services.merge.service import MergeService as MergeServiceImpl
+from app.services.statistics.service import StatisticsService as StatisticsServiceImpl
+from app.services.ocr.service import OcrService as OcrServiceImpl
 from app.services.rag.service import RAGService as RAGServiceImpl
 from app.services.classifier.service import DocumentClassifierService as DocumentClassifierServiceImpl
-from app.services.duplicate_service import DuplicateService as DuplicateServiceImpl
-from app.services.cloud_import_service import CloudImportService as CloudImportServiceImpl
+from app.services.duplicate.service import DuplicateService as DuplicateServiceImpl
+from app.services.cloud_import.service import CloudImportService as CloudImportServiceImpl
 
 
 class AppProvider(Provider):

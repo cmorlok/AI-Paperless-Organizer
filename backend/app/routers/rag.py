@@ -192,7 +192,7 @@ async def rag_health(service: FromDishka[RAGService] = None):
 
 
 async def _probe_embedding(config: dict) -> dict:
-    from app.services.llm_service import llm_embedding
+    from app.services.llm.service import llm_embedding
     provider = config["embedding_provider"]
     model = config["embedding_model"]
     try:

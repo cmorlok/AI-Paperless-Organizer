@@ -10,11 +10,8 @@ from sqlalchemy import select, desc
 
 from app.database import get_db
 from app.models.cloud_import import CloudSource, CloudImportLog
-from app.services.cloud_import_service import (
-    get_cloud_sync_state,
-    cloud_sync_loop,
-    _cloud_sync_state,
-)
+from app.services.cloud_import.state import get_cloud_sync_state, _cloud_sync_state
+from app.services.cloud_import.sync_loop import cloud_sync_loop
 from app.container import container as di_container
 from dishka.integrations.fastapi import inject
 from dishka import FromDishka

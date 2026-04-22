@@ -281,7 +281,7 @@ class DocumentClassifierService:
         if provider_name == "ollama":
             return LitellmOllamaProvider(model=model, tool_executor=tool_executor)
 
-        from app.services.llm_service import PROVIDER_DISPLAY_NAMES
+        from app.services.llm.service import PROVIDER_DISPLAY_NAMES
         label = PROVIDER_DISPLAY_NAMES.get(provider_name, provider_name.replace("_", " ").title())
         return LitellmToolCallingProvider(model=model, provider=provider_name, tool_executor=tool_executor, provider_label=label)
 

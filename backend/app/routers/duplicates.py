@@ -9,7 +9,7 @@ from sqlalchemy import select, delete, and_
 
 from app.database import get_db
 from app.models.duplicates import DuplicateIgnore
-from app.services.duplicate_service import get_scan_state, _scan_state
+from app.services.duplicate.state import get_scan_state, _scan_state
 from dishka.integrations.fastapi import inject
 from dishka import FromDishka
 from app.services.protocols import DuplicateService

@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Optional, Dict, List, Any
 from PIL import Image
 from pdf2image import convert_from_bytes
-from app.services.llm_service import llm_completion
+from app.services.llm.service import llm_completion
 
 # Raise PIL pixel limit for large PDF pages rendered at high DPI
 Image.MAX_IMAGE_PIXELS = 500_000_000  # 500 megapixels (default is ~178MP)
@@ -1207,7 +1207,7 @@ class OcrService:
             "mode": mode
         })
 
-        from app.services.ollama_lock import acquire as ollama_acquire, release as ollama_release, is_locked as ollama_is_locked, current_holder as ollama_holder
+        from app.services.llm.lock import acquire as ollama_acquire, release as ollama_release, is_locked as ollama_is_locked, current_holder as ollama_holder
         lock_acquired = False
         try:
             if ollama_is_locked():
@@ -1595,7 +1595,7 @@ class OcrService:
             try:
                 watchdog_state["running"] = True
 
-                from app.services.ollama_lock import is_locked as ollama_is_locked, current_holder as ollama_holder
+                from app.services.llm.lock import is_locked as ollama_is_locked, current_holder as ollama_holder
                 if batch_state["running"] or single_ocr_running["value"] or ollama_is_locked():
                     reason = "Batch" if batch_state["running"] else "Single-OCR" if single_ocr_running["value"] else f"Ollama belegt ({ollama_holder()})"
                     logger.info(f"Watchdog: {reason} aktiv, ueberspringe diesen Zyklus")

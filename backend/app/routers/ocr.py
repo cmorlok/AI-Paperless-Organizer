@@ -19,7 +19,7 @@ from dishka.integrations.fastapi import inject
 from dishka import FromDishka
 
 from app.services.protocols import PaperlessClient, OcrService, LLMService as LLMProviderService
-from app.services.ocr_service import batch_state, watchdog_state, single_ocr_running, ocr_page_progress, load_review_queue, save_review_queue, load_ocr_ignore_list, save_ocr_ignore_list, load_ocr_error_list, save_ocr_error_list, load_ocr_error_counts, save_ocr_error_counts, DEFAULT_OLLAMA_URL, DEFAULT_OCR_MODEL
+from app.services.ocr.service import batch_state, watchdog_state, single_ocr_running, ocr_page_progress, load_review_queue, save_review_queue, load_ocr_ignore_list, save_ocr_ignore_list, load_ocr_error_list, save_ocr_error_list, load_ocr_error_counts, save_ocr_error_counts, DEFAULT_OLLAMA_URL, DEFAULT_OCR_MODEL
 import app.services.ocr_service as ocr_service_module
 
 logger = logging.getLogger(__name__)
@@ -430,7 +430,7 @@ async def get_batch_status():
             "pages": pp.get("pages", []),
         }
 
-    from app.services.ollama_lock import is_locked as ollama_is_locked, current_holder as ollama_holder
+    from app.services.llm.lock import is_locked as ollama_is_locked, current_holder as ollama_holder
     waiting = ollama_holder() if ollama_is_locked() and not batch_state["running"] else None
 
     return {
@@ -531,7 +531,7 @@ async def reset_all_review_items(
 
     # Get ocrpruefen tag ID
     try:
-        from app.services.ocr_service import TAG_OCR_REVIEW
+        from app.services.ocr.service import TAG_OCR_REVIEW
         ocrpruefen_tag = await client.get_or_create_tag(TAG_OCR_REVIEW)
         ocrpruefen_id = ocrpruefen_tag.get("id")
     except Exception as e:
@@ -567,7 +567,7 @@ async def keep_all_originals(
         return {"kept": 0, "errors": []}
 
     try:
-        from app.services.ocr_service import TAG_OCR_FINISH, TAG_OCR_REVIEW
+        from app.services.ocr.service import TAG_OCR_FINISH, TAG_OCR_REVIEW
         ocrfinish_tag = await client.get_or_create_tag(TAG_OCR_FINISH)
         ocrfinish_id = ocrfinish_tag.get("id")
         ocrpruefen_tag = await client.get_or_create_tag(TAG_OCR_REVIEW)
@@ -705,7 +705,7 @@ async def remove_from_ocr_error_list(
     
     # Remove ocrfehler tag from Paperless
     try:
-        from app.services.ocr_service import TAG_OCR_ERROR
+        from app.services.ocr.service import TAG_OCR_ERROR
         tag = await client.get_or_create_tag(TAG_OCR_ERROR)
         tag_id = tag.get("id")
         if tag_id:

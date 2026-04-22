@@ -74,7 +74,7 @@ async def get_tags(
 ):
     """Get all tags - in-memory cache → DB cache → Paperless (fallback only)."""
     from app.services.cache import get_cache
-    from app.services.paperless_client import CACHE_TTL
+    from app.services.paperless.service import CACHE_TTL
     cache = get_cache()
     cache_key = f"paperless:tags:{client.base_url}"
 

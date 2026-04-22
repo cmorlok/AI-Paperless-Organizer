@@ -30,7 +30,7 @@ async def ocr_auto_trigger_loop(
         TAG_OCR_REVIEW,
         TAG_OCR_ERROR,
     )
-    from app.services.ollama_lock import is_locked as ollama_is_locked, current_holder as ollama_holder
+    from app.services.llm.lock import is_locked as ollama_is_locked, current_holder as ollama_holder
 
     logger.info("Watchdog started")
     print("[OCR] Watchdog started")

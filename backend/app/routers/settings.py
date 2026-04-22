@@ -12,7 +12,7 @@ from app.models.settings_model import (
     LLM_KEY_OCR_PROVIDER,
     LLM_KEY_OCR_MODEL,
 )
-from app.services.llm_service import list_llm_models, list_llm_providers, PROVIDER_DISPLAY_NAMES
+from app.services.llm.service import list_llm_models, list_llm_providers, PROVIDER_DISPLAY_NAMES
 from app.prompts.default_prompts import DEFAULT_PROMPTS
 
 router = APIRouter()

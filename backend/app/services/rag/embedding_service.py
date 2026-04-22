@@ -2,7 +2,7 @@ import asyncio
 import logging
 from typing import List
 
-from app.services.llm_service import llm_embedding
+from app.services.llm.service import llm_embedding
 
 logger = logging.getLogger(__name__)
 

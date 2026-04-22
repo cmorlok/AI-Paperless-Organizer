@@ -21,8 +21,8 @@ from sqlalchemy import select as sa_select, text
 from app.database import async_session
 from app.models.duplicates import DuplicateInvoiceCache
 from app.models.rag import RagConfig
-from app.services.ollama_lock import acquire as ollama_acquire, release as ollama_release
-from app.services.llm_service import llm_completion
+from app.services.llm.lock import acquire as ollama_acquire, release as ollama_release
+from app.services.llm.service import llm_completion
 
 logger = logging.getLogger(__name__)
 
