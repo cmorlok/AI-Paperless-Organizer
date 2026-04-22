@@ -51,7 +51,7 @@ class TestPhase1Smoke:
         print("PASS: LitellmService importable with core methods")
 
     def test_all_6_consumers_updated(self):
-        """LLM-01 / DI-01: All 6 consumer files must import LLM types from protocols."""
+        """LLM-01 / DI-01: All 6 consumer files must import LLM types from llm.protocol."""
         consumer_files = [
             "app/routers/llm.py",
             "app/routers/tags.py",
@@ -66,10 +66,11 @@ class TestPhase1Smoke:
         for rel_path in consumer_files:
             file_path = backend_root / rel_path
             content = file_path.read_text()
-            assert "from app.services.protocols import" in content and "LLMService" in content, \
-                f"{rel_path} does not import LLMService from protocols"
-            assert "from app.services.llm_provider import" not in content, \
-                f"{rel_path} still imports from llm_provider"
+            # After Phase 04-07, imports should be from llm.protocol (distributed)
+            assert "from app.services.llm.protocol import" in content and "LLMService" in content, \
+                f"{rel_path} does not import LLMService from app.services.llm.protocol"
+            assert "from app.services.llm_service import" not in content, \
+                f"{rel_path} still imports from llm_service"
 
         print(f"PASS: All {len(consumer_files)} consumer files updated")
 

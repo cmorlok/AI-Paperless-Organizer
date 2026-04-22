@@ -1,11 +1,5 @@
 #!/usr/bin/env python3
-"""
-Pass 3: Special cases
-- Auth middleware: SessionAuthMiddleware from auth.service → auth.middleware
-- State accessors: get_cloud_sync_state, get_scan_state, ocr state dicts
-- Loop renames: _auto_classify_loop → auto_classify_loop, cloud_sync_loop
-- OCR file ops: load_review_queue, save_review_queue, etc.
-"""
+"""Special case imports: auth middleware, state accessors, loop renames."""
 import os
 import re
 
