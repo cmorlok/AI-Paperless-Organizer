@@ -8,6 +8,7 @@ export default function LoginPage() {
   const [password, setPassword] = useState('')
   const [error, setError] = useState(false)
   const [loading, setLoading] = useState(false)
+  const [showForgotHint, setShowForgotHint] = useState(false)
   const navigate = useNavigate()
   const location = useLocation()
 
@@ -65,9 +66,18 @@ export default function LoginPage() {
           {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Lock className="w-4 h-4" />}
           Anmelden
         </button>
-        <p className="text-surface-500 text-xs mt-6">
-          Passwort vergessen? Setzen Sie die Umgebungsvariable RESET_PASSWORD=true und starten Sie die Anwendung neu.
-        </p>
+        <button
+          type="button"
+          onClick={() => setShowForgotHint((v) => !v)}
+          className="text-surface-500 text-xs mt-6 hover:text-primary-400 transition-colors"
+        >
+          Passwort vergessen?
+        </button>
+        {showForgotHint && (
+          <p className="text-surface-400 text-xs mt-2 animate-fade-in">
+            Setzen Sie die Umgebungsvariable RESET_PASSWORD=true und starten Sie die Anwendung neu.
+          </p>
+        )}
       </div>
     </div>
   )
