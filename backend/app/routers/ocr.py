@@ -315,7 +315,7 @@ async def ocr_single_document(
 ):
     """Run OCR on a single document with page-level persistence and resume support."""
     try:
-        ocr_service_module.single_ocr_running = True
+        ocr_service_module.single_ocr_running["value"] = True
         result = await service.ocr_document(client, document_id, force=force, db_session=db)
         return result
     except ValueError as e:
@@ -328,7 +328,7 @@ async def ocr_single_document(
         logger.error(f"OCR single document error: {traceback.format_exc()}")
         raise HTTPException(status_code=500, detail=f"OCR Fehler: {str(e)}")
     finally:
-        ocr_service_module.single_ocr_running = False
+        ocr_service_module.single_ocr_running["value"] = False
         ocr_service_module.ocr_page_progress.pop(document_id, None)
 
 

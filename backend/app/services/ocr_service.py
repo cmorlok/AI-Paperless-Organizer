@@ -44,7 +44,7 @@ batch_state = {
 }
 
 # Track single OCR to prevent watchdog conflicts
-single_ocr_running = False
+single_ocr_running = {"value": False}
 
 # Live page-level progress for frontend polling
 ocr_page_progress: Dict[int, Dict[str, Any]] = {}
@@ -1596,8 +1596,8 @@ class OcrService:
                 watchdog_state["running"] = True
 
                 from app.services.ollama_lock import is_locked as ollama_is_locked, current_holder as ollama_holder
-                if batch_state["running"] or single_ocr_running or ollama_is_locked():
-                    reason = "Batch" if batch_state["running"] else "Single-OCR" if single_ocr_running else f"Ollama belegt ({ollama_holder()})"
+                if batch_state["running"] or single_ocr_running["value"] or ollama_is_locked():
+                    reason = "Batch" if batch_state["running"] else "Single-OCR" if single_ocr_running["value"] else f"Ollama belegt ({ollama_holder()})"
                     logger.info(f"Watchdog: {reason} aktiv, ueberspringe diesen Zyklus")
                 else:
                     logger.info("Watchdog checking for new documents...")
