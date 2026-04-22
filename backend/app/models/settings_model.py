@@ -82,11 +82,13 @@ class AppSettings(Base):
     """Application-wide settings.
 
     Uses split schema:
-    - id=1, key=NULL → scalar UI settings (password_enabled, password_hash, etc.)
+    - id=1, key=NULL → scalar UI settings (show_debug_menu, sidebar_compact, etc.)
     - id=NULL, key=<string> → KV entries for LLM job routing (classifier_provider, etc.)
 
     The scalar row (id=1, key=NULL) holds UI settings. KV entries (id=NULL, key=<key>)
     store per-job provider/model routing (LLM-08).
+
+    Auth settings (password_hash) have moved to the AuthConfig model.
     """
     __tablename__ = "app_settings"
 
@@ -95,9 +97,6 @@ class AppSettings(Base):
     key = Column(String(100), nullable=True, unique=True)  # NULL for scalar rows, string for KV entries
     value = Column(String(500), nullable=True)
     value_type = Column(String(20), default="str")  # str, int, bool, json
-    # UI Password Protection
-    password_enabled = Column(Boolean, default=False)
-    password_hash = Column(String(500), default="")  # Hashed password
     # UI Options
     show_debug_menu = Column(Boolean, default=False)
     sidebar_compact = Column(Boolean, default=False)
