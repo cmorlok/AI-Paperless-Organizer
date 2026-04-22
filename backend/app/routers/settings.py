@@ -5,6 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from app.database import get_db
 from app.models import PaperlessSettings, LLMProvider, CustomPrompt, IgnoredTag, AppSettings
+from app.models.auth_config import AuthConfig
 from app.models.settings_model import (
     LLM_KEY_CLASSIFIER_PROVIDER,
     LLM_KEY_CLASSIFIER_MODEL,
@@ -526,10 +527,14 @@ async def get_app_settings(db: AsyncSession = Depends(get_db)):
     # Get key-value settings for model fields (LLM-09)
     kv_classifier_model = await get_setting(LLM_KEY_CLASSIFIER_MODEL, db)
     kv_ocr_model = await get_setting(LLM_KEY_OCR_MODEL, db)
+
+    # AuthConfig is the source of truth for password_set (D-07 clean break)
+    auth_result = await db.execute(select(AuthConfig).where(AuthConfig.id == 1))
+    auth_config = auth_result.scalar_one_or_none()
+    password_set = bool(auth_config and auth_config.password_hash)
     
     return {
-        "password_enabled": settings.password_enabled,
-        "password_set": bool(settings.password_hash),
+        "password_set": password_set,
         "show_debug_menu": settings.show_debug_menu,
         "sidebar_compact": settings.sidebar_compact,
         "classifier_provider": classifier_provider,

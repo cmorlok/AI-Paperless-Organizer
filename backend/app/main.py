@@ -1,5 +1,6 @@
 import json
 import logging
+import os
 import sys
 import time
 import traceback
@@ -17,17 +18,36 @@ from app.database import run_migrations
 init_logging()
 logger = get_logger("app.main")
 
-from app.routers import paperless, correspondents, tags, document_types, settings, llm, debug, statistics, ignored_items, ocr, cleanup, classifier, rag, api_keys, cloud_import, duplicates
+from app.routers import paperless, correspondents, tags, document_types, settings, llm, debug, statistics, ignored_items, ocr, cleanup, classifier, rag, api_keys, cloud_import, duplicates, auth
 from app.routers.ocr import ocr_settings
 from app.services.ocr_service import watchdog_state
 from app.services.protocols import PaperlessClient, OcrService, RAGService
+from app.services.auth_service import SessionAuthMiddleware
+from app.database import async_session
 from app.container import container as di_container
+
+
+async def reset_password_if_requested() -> None:
+    """Per CONTEXT.md D-14: RESET_PASSWORD=true clears AuthConfig password_hash."""
+    import os
+    if os.getenv("RESET_PASSWORD", "").lower() != "true":
+        return
+    from sqlalchemy import select as sa_select
+    from app.models.auth_config import AuthConfig
+    async with async_session() as db:
+        result = await db.execute(sa_select(AuthConfig).where(AuthConfig.id == 1))
+        row = result.scalar_one_or_none()
+        if row is not None:
+            row.password_hash = ""
+            await db.commit()
+            logger.warning("RESET_PASSWORD=true: Password cleared. Remove env var and restart for normal operation.")
+        else:
+            logger.warning("RESET_PASSWORD=true: No AuthConfig row to clear.")
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     import asyncio
-    from app.database import async_session
     from app.models.settings_model import PaperlessSettings
     from sqlalchemy import select as sa_select
 
@@ -39,6 +59,7 @@ async def lifespan(app: FastAPI):
     # Re-apply our logging config after Alembic's fileConfig reset the root logger.
     ensure_logging()
     logger.info("Logging active — worker process ready")
+    await reset_password_if_requested()
 
     # Auto-start watchdog if it was enabled before shutdown
     if ocr_settings.get("watchdog_enabled"):
@@ -244,13 +265,16 @@ async def log_requests(request: Request, call_next):
 
 
 # CORS configuration
+_allowed_origins_raw = os.getenv("ALLOWED_ORIGINS", "http://localhost:3000,http://localhost:8088")
+_allowed_origins = [o.strip() for o in _allowed_origins_raw.split(",") if o.strip()]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=_allowed_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+app.add_middleware(SessionAuthMiddleware)
 
 
 @app.exception_handler(HTTPException)
@@ -283,6 +307,7 @@ async def global_exception_handler(request: Request, exc: Exception):
     )
 
 # Include routers
+app.include_router(auth.router, prefix="/api/auth", tags=["Auth"])
 app.include_router(paperless.router, prefix="/api/paperless", tags=["Paperless"])
 app.include_router(correspondents.router, prefix="/api/correspondents", tags=["Correspondents"])
 app.include_router(tags.router, prefix="/api/tags", tags=["Tags"])
