@@ -20,7 +20,7 @@ logger = get_logger("app.main")
 
 from app.routers import paperless, correspondents, tags, document_types, settings, llm, debug, statistics, ignored_items, ocr, cleanup, classifier, rag, api_keys, cloud_import, duplicates, auth
 from app.routers.ocr import ocr_settings
-from app.services.ocr.service import watchdog_state
+from app.services.ocr.state import watchdog_state
 from app.services.paperless.protocol import PaperlessClient
 from app.services.ocr.protocol import OcrService
 from app.services.rag.protocol import RAGService
@@ -146,7 +146,8 @@ async def lifespan(app: FastAPI):
     # Auto-start cloud sync daemon if any sources are enabled
     try:
         from app.models.cloud_import import CloudSource
-        from app.services.cloud_import.service import _cloud_sync_state, cloud_sync_loop
+        from app.services.cloud_import.state import _cloud_sync_state
+        from app.services.cloud_import.sync_loop import cloud_sync_loop
         async with async_session() as db_sess:
             src_q = await db_sess.execute(
                 sa_select(CloudSource).where(CloudSource.enabled == True)
@@ -171,7 +172,7 @@ async def lifespan(app: FastAPI):
         pass
 
     try:
-        from app.services.cloud_import.service import _cloud_sync_state as _css
+        from app.services.cloud_import.state import _cloud_sync_state as _css
         _css["enabled"] = False
         task = _css.get("task")
         if task and not task.done():
