@@ -202,66 +202,94 @@ def _log(level: str, msg: str, *args):
     logger.log(log_level, formatted)
 
 
-@app.middleware("http")
-async def log_requests(request: Request, call_next):
-    """Logs every HTTP request at INFO level and request/response bodies at DEBUG level."""
-    method = request.method
-    path = request.url.path
-    query = request.url.query
-    start = time.monotonic()
+class LoggingMiddleware:
+    """Pure ASGI middleware that logs every request/response without BaseHTTPMiddleware bugs."""
 
-    # Read and log request body at DEBUG level
-    req_body = ""
-    if method in ("POST", "PUT", "PATCH"):
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        method = scope["method"]
+        path = scope.get("path", "")
+        query = scope.get("query_string", b"").decode("utf-8")
+        start = time.monotonic()
+
+        # Buffer request body for logging and replay
+        body_bytes = b""
+        more_body = True
+        while more_body:
+            message = await receive()
+            if message["type"] == "http.request":
+                body_bytes += message.get("body", b"")
+                more_body = message.get("more_body", False)
+            elif message["type"] == "http.disconnect":
+                await self.app(scope, receive, send)
+                return
+
+        req_body = ""
+        if method in ("POST", "PUT", "PATCH") and body_bytes:
+            req_body = body_bytes.decode(errors="replace")
+            if len(req_body) > 2000:
+                req_body = req_body[:2000] + "...(truncated)"
+            _log("DEBUG", "REQUEST BODY %s %s%s: %s", method, path,
+                  f"?{query}" if query else "", req_body)
+
+        if not req_body:
+            _log("INFO", "REQUEST %s %s%s", method, path, f"?{query}" if query else "")
+
+        # Synthetic receive that replays the buffered body
+        request_messages = [{"type": "http.request", "body": body_bytes, "more_body": False}]
+        message_index = 0
+
+        async def receive_replay():
+            nonlocal message_index
+            if message_index < len(request_messages):
+                msg = request_messages[message_index]
+                message_index += 1
+                return msg
+            # After replay, forward disconnects only
+            msg = await receive()
+            return msg
+
+        # Buffer response messages so we can inspect status/body
+        response_messages = []
+        status_code = 200
+
+        async def send_capture(message):
+            nonlocal status_code
+            if message["type"] == "http.response.start":
+                status_code = message.get("status", 200)
+            response_messages.append(message)
+
         try:
-            body_bytes = await request.body()
-            if body_bytes:
-                req_body = body_bytes.decode(errors="replace")
-                if len(req_body) > 2000:
-                    req_body = req_body[:2000] + "...(truncated)"
-                _log("DEBUG", "REQUEST BODY %s %s%s: %s", method, path,
-                      f"?{query}" if query else "", req_body)
-                async def receive():
-                    return {"type": "http.request", "body": body_bytes, "more_body": False}
-                request._receive = receive
-        except Exception:
-            pass
+            await self.app(scope, receive_replay, send_capture)
+        except Exception as exc:
+            elapsed = time.monotonic() - start
+            tb = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
+            _log("ERROR", "EXCEPTION %s %s after %.2fs: %s\n%s", method, path, elapsed, exc, tb)
+            raise
 
-    if not req_body:
-        _log("INFO", "REQUEST %s %s%s", method, path, f"?{query}" if query else "")
-
-    try:
-        response = await call_next(request)
-    except Exception as exc:
         elapsed = time.monotonic() - start
-        tb = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
-        _log("ERROR", "EXCEPTION %s %s after %.2fs: %s\n%s", method, path, elapsed, exc, tb)
-        raise
+        _log("INFO", "RESPONSE %s %s -> %s (%.2fs)", method, path, status_code, elapsed)
 
-    elapsed = time.monotonic() - start
-    _log("INFO", "RESPONSE %s %s -> %s (%.2fs)", method, path, response.status_code, elapsed)
+        if status_code >= 400:
+            try:
+                resp_body = b""
+                for msg in response_messages:
+                    if msg["type"] == "http.response.body":
+                        resp_body += msg.get("body", b"")
+                resp_text = resp_body.decode(errors="replace")[:2000]
+                _log("ERROR", "ERROR RESPONSE %s %s -> %s | %s", method, path, status_code, resp_text)
+            except Exception:
+                pass
 
-    if response.status_code >= 400:
-        try:
-            body_parts = []
-            async for chunk in response.body_iterator:
-                body_parts.append(chunk)
-            resp_body = b"".join(body_parts).decode(errors="replace")[:2000]
-            _log("ERROR", "ERROR RESPONSE %s %s -> %s | %s", method, path, response.status_code, resp_body)
-            from starlette.responses import StreamingResponse
-            async def iter_body():
-                for part in body_parts:
-                    yield part
-            response = StreamingResponse(
-                content=iter_body(),
-                status_code=response.status_code,
-                headers=dict(response.headers),
-                media_type=response.media_type,
-            )
-        except Exception:
-            pass
-
-    return response
+        # Replay captured response messages to the real send
+        for msg in response_messages:
+            await send(msg)
 
 
 # CORS configuration
@@ -275,6 +303,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 app.add_middleware(SessionAuthMiddleware)
+app.add_middleware(LoggingMiddleware)
 
 
 @app.exception_handler(HTTPException)
