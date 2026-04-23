@@ -15,6 +15,7 @@ from app.services.ocr.protocol import OcrService
 from app.services.ocr.state import OcrState
 from app.services.rag.protocol import RAGService
 from app.services.classifier.protocol import DocumentClassifierService
+from app.services.classifier.state import AutoClassifyState
 from app.services.duplicate.protocol import DuplicateService
 from app.services.cloud_import.protocol import CloudImportService
 # Implementation imports use aliases to avoid name collision with Protocols
@@ -40,6 +41,10 @@ class AppProvider(Provider):
     @provide(scope=Scope.APP)
     def ocr_state(self) -> OcrState:
         return OcrState()
+
+    @provide(scope=Scope.APP)
+    def auto_classify_state(self) -> AutoClassifyState:
+        return AutoClassifyState()
 
     @provide(scope=Scope.APP)
     def session_factory(self) -> async_sessionmaker:

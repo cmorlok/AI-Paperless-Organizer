@@ -21,6 +21,8 @@ logger = get_logger("app.main")
 from app.routers import paperless, correspondents, tags, document_types, settings, llm, debug, statistics, ignored_items, ocr, cleanup, classifier, rag, api_keys, cloud_import, duplicates, auth
 from app.routers.ocr import ocr_settings
 from app.services.ocr.state import OcrState
+from app.services.classifier.state import AutoClassifyState
+from app.services.classifier.auto_classify_loop import auto_classify_loop
 from app.services.paperless.protocol import PaperlessClient
 from app.services.ocr.protocol import OcrService
 from app.services.rag.protocol import RAGService
@@ -29,6 +31,7 @@ from app.database import async_session
 from app.container import container as di_container
 
 _ocr_state: OcrState | None = None
+_auto_classify_state: AutoClassifyState | None = None
 
 
 async def reset_password_if_requested() -> None:
@@ -90,9 +93,12 @@ async def lifespan(app: FastAPI):
             q = await db_sess.execute(sa_select(ClassifierConfig).where(ClassifierConfig.id == 1))
             cls_config = q.scalars().first()
             if cls_config and getattr(cls_config, "auto_classify_enabled", False):
-                from app.routers.classifier import _auto_classify_state, _auto_classify_loop
-                _auto_classify_state["enabled"] = True
-                asyncio.get_running_loop().create_task(_auto_classify_loop(di_container))
+                global _auto_classify_state
+                async with di_container() as ctx:
+                    ac_state: AutoClassifyState = await ctx.get(AutoClassifyState)
+                    ac_state.enabled = True
+                    _auto_classify_state = ac_state
+                asyncio.get_running_loop().create_task(auto_classify_loop(di_container))
                 logging.getLogger(__name__).info("Auto-classify auto-started")
     except Exception as e:
         logging.getLogger(__name__).error(f"Auto-classify auto-start failed: {e}")
@@ -166,14 +172,11 @@ async def lifespan(app: FastAPI):
 
     yield
     # Shutdown: stop auto-classify + watchdog + cloud sync gracefully
-    try:
-        from app.routers.classifier import _auto_classify_state
-        _auto_classify_state["enabled"] = False
-        task = _auto_classify_state.get("task")
+    if _auto_classify_state:
+        _auto_classify_state.enabled = False
+        task = _auto_classify_state._task
         if task and not task.done():
             task.cancel()
-    except Exception:
-        pass
 
     try:
         from app.services.cloud_import.state import _cloud_sync_state as _css
