@@ -27,6 +27,7 @@ from app.services.classifier.litellm_provider import (
     LitellmOllamaProvider,
 )
 from app.services.classifier.tool_executor import ToolExecutor
+from app.services.classifier.state import AutoClassifyState
 
 logger = logging.getLogger(__name__)
 
@@ -112,9 +113,15 @@ def _clean_title(title: str, created_date: str = None) -> str:
 class DocumentClassifierService:
     """Orchestrates document classification using the configured provider."""
 
-    def __init__(self, paperless: Optional[PaperlessClient] = None, session_factory: Optional[Any] = None):
+    def __init__(
+        self,
+        paperless: Optional[PaperlessClient] = None,
+        session_factory: Optional[Any] = None,
+        state: Optional[AutoClassifyState] = None,
+    ):
         self.paperless = paperless
         self.session_factory = session_factory
+        self.state = state
 
     async def get_config(self) -> ClassifierConfig:
         if self.session_factory is None:

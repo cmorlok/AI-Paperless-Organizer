@@ -105,8 +105,9 @@ class AppProvider(Provider):
     def ocr_service(
         self,
         session_factory: async_sessionmaker,
+        state: OcrState,
     ) -> OcrService:
-        return OcrServiceImpl(session_factory=session_factory)
+        return OcrServiceImpl(session_factory=session_factory, state=state)
 
     @provide(scope=Scope.APP)
     def rag_service(
@@ -124,10 +125,12 @@ class AppProvider(Provider):
         self,
         paperless_client: PaperlessClient,
         session_factory: async_sessionmaker,
+        state: AutoClassifyState,
     ) -> DocumentClassifierService:
         return DocumentClassifierServiceImpl(
             paperless=paperless_client,
             session_factory=session_factory,
+            state=state,
         )
 
     @provide(scope=Scope.APP)
@@ -135,10 +138,12 @@ class AppProvider(Provider):
         self,
         session_factory: async_sessionmaker,
         paperless_client: PaperlessClient,
+        state: DuplicateScanState,
     ) -> DuplicateService:
         return DuplicateServiceImpl(
             session_factory=session_factory,
             paperless_client=paperless_client,
+            state=state,
         )
 
     @provide(scope=Scope.APP)
