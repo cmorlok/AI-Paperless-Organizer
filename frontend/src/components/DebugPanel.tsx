@@ -8,9 +8,11 @@ import {
   Loader2, 
   Play,
   RefreshCw,
-  Terminal
+  Terminal,
+  Activity
 } from 'lucide-react'
 import clsx from 'clsx'
+import { getServiceStatuses, type ServiceStatus } from '../api/debug'
 
 interface TestResult {
   test: string
@@ -29,6 +31,11 @@ export default function DebugPanel() {
   const [networkInfo, setNetworkInfo] = useState<NetworkInfo | null>(null)
   const [commonTests, setCommonTests] = useState<TestResult[]>([])
   const [loading, setLoading] = useState(false)
+  
+  // Service statuses state (STATE-08)
+  const [serviceStatuses, setServiceStatuses] = useState<ServiceStatus[]>([])
+  const [servicesLoading, setServicesLoading] = useState(true)
+  const [servicesError, setServicesError] = useState<string | null>(null)
   
   // Custom test states
   const [dnsHost, setDnsHost] = useState('')
@@ -51,6 +58,25 @@ export default function DebugPanel() {
   useEffect(() => {
     loadNetworkInfo()
     runCommonTests()
+  }, [])
+
+  // Poll service statuses every 3 seconds (STATE-08)
+  useEffect(() => {
+    const loadServices = async () => {
+      try {
+        const data = await getServiceStatuses()
+        setServiceStatuses(data.services || [])
+        setServicesError(null)
+      } catch (e) {
+        setServicesError(String(e))
+      } finally {
+        setServicesLoading(false)
+      }
+    }
+
+    loadServices()
+    const interval = setInterval(loadServices, 3000)
+    return () => clearInterval(interval)
   }, [])
 
   const loadNetworkInfo = async () => {
@@ -150,6 +176,69 @@ export default function DebugPanel() {
 
   return (
     <div className="space-y-6">
+      {/* Service Statuses Panel (STATE-08) */}
+      <div className="card p-6">
+        <div className="flex items-center gap-3 mb-4">
+          <Activity className="w-5 h-5 text-primary-400" />
+          <h3 className="font-semibold text-surface-100">Hintergrunddienste</h3>
+          {servicesLoading && <Loader2 className="w-4 h-4 animate-spin text-surface-400" />}
+        </div>
+        
+        {servicesError && (
+          <div className="text-sm text-red-400 mb-3">
+            Fehler beim Laden der Dienst-Status: {servicesError}
+          </div>
+        )}
+        
+        {!servicesLoading && serviceStatuses.length > 0 && (
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            {serviceStatuses.map((service) => (
+              <div 
+                key={service.name}
+                className={clsx(
+                  "p-4 rounded-lg border",
+                  service.running 
+                    ? "bg-emerald-900/20 border-emerald-700/50" 
+                    : service.enabled
+                      ? "bg-yellow-900/20 border-yellow-700/50"
+                      : "bg-surface-700/30 border-surface-600/30"
+                )}
+              >
+                <div className="flex items-center justify-between mb-2">
+                  <span className="font-medium text-surface-100">{service.label}</span>
+                  <span className={clsx(
+                    "text-xs px-2 py-0.5 rounded",
+                    service.running 
+                      ? "bg-emerald-900/50 text-emerald-400" 
+                      : service.enabled
+                        ? "bg-yellow-900/50 text-yellow-400"
+                        : "bg-surface-600/50 text-surface-400"
+                  )}>
+                    {service.running ? "aktiv" : service.enabled ? "aktiviert" : "inaktiv"}
+                  </span>
+                </div>
+                {service.current_op && (
+                  <div className="text-sm text-surface-300 mt-2">
+                    <span className="text-surface-500">Aktivität:</span> {service.current_op}
+                  </div>
+                )}
+                {service.enabled && !service.running && (
+                  <div className="text-xs text-surface-500 mt-1">
+                    Bereitschaft aktiviert, wartet auf Start
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+        
+        {!servicesLoading && serviceStatuses.length === 0 && !servicesError && (
+          <div className="text-sm text-surface-400">
+            Keine Dienste gefunden
+          </div>
+        )}
+      </div>
+
       {/* Header */}
       <div>
         <h2 className="font-display text-2xl font-bold text-surface-100">
