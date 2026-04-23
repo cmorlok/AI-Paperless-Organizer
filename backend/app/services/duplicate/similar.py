@@ -14,21 +14,17 @@ DATA_DIR = os.path.join(os.path.dirname(__file__), "..", "..", "..", "data")
 async def scan_similar(
     paperless_client,
     session_factory,
-    scan_state: Dict,
+    scan_state,
     similarity_threshold: float = 0.92,
 ) -> List[Dict]:
     """Find similar documents via ChromaDB embeddings (cosine similarity).
 
-    Updates scan_state["phase"], scan_state["progress"], scan_state["total"].
+    Updates scan_state.progress/total.
     """
-    global _is_cancelled
     logger.info(f"Starting similar document scan (threshold={similarity_threshold})")
 
     # Distance threshold: cosine distance = 1 - similarity
     distance_threshold = 1.0 - similarity_threshold
-
-    # Import _is_cancelled from state module to avoid circular import at runtime
-    from app.services.duplicate.state import _is_cancelled
 
     persist_path = os.path.join(DATA_DIR, "chromadb")
     if not os.path.exists(persist_path):
@@ -57,7 +53,7 @@ async def scan_similar(
         logger.info("No embeddings found in ChromaDB for similar scan")
         return []
 
-    scan_state["total"] = len(ids)
+    scan_state.total = len(ids)
     logger.info(f"Querying {len(ids)} document embeddings for similarity")
 
     # Find similar pairs
@@ -83,7 +79,7 @@ async def scan_similar(
         batch_embeddings = list(embeddings[batch_start:batch_end])
         batch_metadatas_slice = metadatas[batch_start:batch_end]
 
-        scan_state["progress"] = batch_end
+        scan_state.progress = batch_end
 
         results = collection.query(
             query_embeddings=batch_embeddings,
@@ -124,7 +120,7 @@ async def scan_similar(
 
         # Yield control + check cancellation between batches
         await asyncio.sleep(0)
-        if _is_cancelled():
+        if scan_state.is_cancelled():
             logger.info("Similar scan cancelled by user")
             break
 

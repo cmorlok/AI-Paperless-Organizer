@@ -10,11 +10,11 @@ logger = logging.getLogger(__name__)
 async def scan_exact(
     paperless_client,
     session_factory,
-    scan_state: Dict,
+    scan_state,
 ) -> List[Dict]:
     """Group documents by SHA256 checksum. Groups with >1 doc are exact duplicates.
 
-    Updates scan_state["phase"], scan_state["progress"], scan_state["total"].
+    Updates scan_state.progress/total.
     """
     logger.info("Starting exact duplicate scan (checksum)")
 
@@ -27,18 +27,18 @@ async def scan_exact(
             break
         if page == 1:
             total_count = result.get("count", 0)
-            scan_state["total"] = total_count
+            scan_state.total = total_count
             logger.info(f"Loading {total_count} documents for checksum scan...")
         docs = result.get("results", [])
         if not docs:
             break
         documents.extend(docs)
-        scan_state["progress"] = len(documents)
+        scan_state.progress = len(documents)
         if not result.get("next"):
             break
         page += 1
 
-    scan_state["total"] = len(documents)
+    scan_state.total = len(documents)
     logger.info(f"Loaded {len(documents)} documents for checksum scan")
 
     # Build lookup maps for correspondent names
@@ -47,7 +47,7 @@ async def scan_exact(
     # Group by checksum
     checksum_groups: Dict[str, List[Dict]] = defaultdict(list)
     for i, doc in enumerate(documents):
-        scan_state["progress"] = i + 1
+        scan_state.progress = i + 1
         checksum = doc.get("checksum") or doc.get("archive_checksum") or ""
         if not checksum:
             continue
