@@ -21,13 +21,11 @@ logger = get_logger("app.main")
 
 from app.routers import paperless, correspondents, tags, document_types, settings, llm, debug, statistics, ignored_items, ocr, cleanup, classifier, rag, api_keys, cloud_import, duplicates, auth
 from app.routers.ocr import ocr_settings
-from app.services.ocr.state import OcrState
-from app.services.classifier.state import AutoClassifyState
-from app.services.classifier.auto_classify_loop import auto_classify_loop
-from app.services.paperless.protocol import PaperlessClient
-from app.services.ocr.protocol import OcrService
-from app.services.rag.protocol import RAGService
-from app.services.auth.middleware import SessionAuthMiddleware
+from app.services.ocr import OcrState, OcrService
+from app.services.classifier import AutoClassifyState, auto_classify_loop
+from app.services.paperless import PaperlessClient
+from app.services.rag import RAGService
+from app.services.auth import SessionAuthMiddleware
 from app.database import async_session
 from app.container import container as di_container
 
@@ -181,8 +179,7 @@ async def lifespan(app: FastAPI):
 
     if kv_cloud_sync_enabled:
         try:
-            from app.services.cloud_import.state import CloudSyncState
-            from app.services.cloud_import.sync_loop import cloud_sync_loop
+            from app.services.cloud_import import CloudSyncState, cloud_sync_loop
             async with di_container() as ctx:
                 css: CloudSyncState = await ctx.get(CloudSyncState)
                 css.reset()

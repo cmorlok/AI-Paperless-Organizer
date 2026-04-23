@@ -15,8 +15,13 @@ from typing import Optional, Dict, List, Any
 from PIL import Image
 from pdf2image import convert_from_bytes
 
-from app.services.llm.service import llm_completion
-from app.services.llm.lock import acquire as ollama_acquire, release as ollama_release, is_locked as ollama_is_locked, current_holder as ollama_holder
+from app.services.llm import (
+    llm_completion,
+    acquire as ollama_acquire,
+    release as ollama_release,
+    is_locked as ollama_is_locked,
+    current_holder as ollama_holder,
+)
 
 from .state import (
     DEFAULT_OLLAMA_URL,

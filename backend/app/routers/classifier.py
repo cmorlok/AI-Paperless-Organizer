@@ -15,10 +15,8 @@ from dishka import FromDishka, AsyncContainer
 from app.container import container as di_container
 
 from app.database import get_db
-from app.services.paperless.protocol import PaperlessClient
-from app.services.classifier.protocol import DocumentClassifierService
-from app.services.classifier.state import AutoClassifyState
-from app.services.classifier.auto_classify_loop import auto_classify_loop
+from app.services.paperless import PaperlessClient
+from app.services.classifier import DocumentClassifierService, AutoClassifyState, auto_classify_loop
 from app.models.classifier import (
     ClassifierConfig, StoragePathProfile, CustomFieldMapping, ClassificationHistory,
 )
@@ -1042,7 +1040,7 @@ async def stop_auto_classify(
 @inject
 async def get_auto_classify_status(state: FromDishka[AutoClassifyState] = None):
     """Get current status of the auto-classification job."""
-    from app.services.llm.lock import is_locked as ollama_is_locked, current_holder as ollama_holder
+    from app.services.llm import is_locked as ollama_is_locked, current_holder as ollama_holder
     return {
         "enabled": state.enabled,
         "running": state.running,

@@ -2,8 +2,8 @@
 
 from typing import Protocol, runtime_checkable, Any, List, Dict, Optional
 
-# Import PaperlessClient from old path during Wave 1 (Plan 07 handles final path alignment)
-from app.services.paperless.protocol import PaperlessClient
+# Import PaperlessClient — cross-service, use package-level
+from app.services.paperless import PaperlessClient
 
 
 @runtime_checkable

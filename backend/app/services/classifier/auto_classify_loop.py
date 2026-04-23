@@ -8,15 +8,17 @@ from sqlalchemy import select
 from app.core.logging import get_logger
 from app.database import async_session
 from app.models.classifier import ClassificationHistory
+# Internal imports from same package — keep deep to avoid circular imports
 from app.services.classifier.protocol import DocumentClassifierService
 from app.services.classifier.state import AutoClassifyState
-from app.services.llm.lock import (
+# Cross-service imports — use package-level
+from app.services.llm import (
     acquire as ollama_acquire,
     current_holder as ollama_holder,
     is_locked as ollama_is_locked,
     release as ollama_release,
 )
-from app.services.paperless.protocol import PaperlessClient
+from app.services.paperless import PaperlessClient
 
 logger = get_logger(__name__)
 

@@ -6,18 +6,17 @@ from typing import AsyncIterator
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.database import async_session
-from app.services.llm.protocol import LLMService
-from app.services.paperless.protocol import PaperlessClient
-from app.services.similarity.protocol import SimilarityService
-from app.services.merge.protocol import MergeService
-from app.services.statistics.protocol import StatisticsService
-from app.services.ocr.protocol import OcrService
-from app.services.ocr.state import OcrState
-from app.services.rag.protocol import RAGService
-from app.services.classifier.protocol import DocumentClassifierService
-from app.services.classifier.state import AutoClassifyState
-from app.services.duplicate.protocol import DuplicateService
-from app.services.cloud_import.protocol import CloudImportService
+# Protocol/state imports — use package-level
+from app.services.llm import LLMService
+from app.services.paperless import PaperlessClient
+from app.services.similarity import SimilarityService
+from app.services.merge import MergeService
+from app.services.statistics import StatisticsService
+from app.services.ocr import OcrService, OcrState
+from app.services.rag import RAGService
+from app.services.classifier import DocumentClassifierService, AutoClassifyState
+from app.services.duplicate import DuplicateService, DuplicateScanState
+from app.services.cloud_import import CloudImportService, CloudSyncState
 # Implementation imports use aliases to avoid name collision with Protocols
 from app.services.llm.service import LitellmService
 from app.services.paperless.service import PaperlessClient as PaperlessClientImpl
@@ -28,9 +27,7 @@ from app.services.ocr.service import OcrService as OcrServiceImpl
 from app.services.rag.service import RAGService as RAGServiceImpl
 from app.services.classifier.service import DocumentClassifierService as DocumentClassifierServiceImpl
 from app.services.duplicate.service import DuplicateService as DuplicateServiceImpl
-from app.services.duplicate.state import DuplicateScanState
 from app.services.cloud_import.service import CloudImportService as CloudImportServiceImpl
-from app.services.cloud_import.state import CloudSyncState
 
 
 class AppProvider(Provider):

@@ -10,8 +10,7 @@ from sqlalchemy import select as sa_select, text
 
 from app.models.duplicates import DuplicateInvoiceCache
 from app.models.rag import RagConfig
-from app.services.llm.lock import acquire as ollama_acquire, release as ollama_release
-from app.services.llm.service import llm_completion
+from app.services.llm import acquire as ollama_acquire, release as ollama_release, llm_completion
 
 logger = logging.getLogger(__name__)
 
@@ -19,14 +18,12 @@ logger = logging.getLogger(__name__)
 async def scan_invoices(
     paperless_client,
     session_factory,
-    scan_state: Dict,
+    scan_state,
 ) -> List[Dict]:
     """Find duplicate invoices by extracting invoice number + amount via LLM.
 
-    Updates scan_state["phase"], scan_state["progress"], scan_state["total"].
+    Updates scan_state.progress/total.
     """
-    from app.services.duplicate.state import _is_cancelled
-
     logger.info("Starting invoice duplicate scan")
 
     # Load all documents
@@ -48,7 +45,7 @@ async def scan_invoices(
         logger.info("No invoice documents found, skipping invoice scan")
         return []
 
-    scan_state["total"] = len(invoice_docs)
+    scan_state.total = len(invoice_docs)
     logger.info(f"Found {len(invoice_docs)} invoice documents to analyze")
 
     # Build correspondent map
@@ -73,11 +70,11 @@ async def scan_invoices(
     extractions: Dict[int, Dict] = {}  # doc_id -> {invoice_number, amount}
 
     for i, doc in enumerate(invoice_docs):
-        if _is_cancelled():
+        if scan_state.is_cancelled():
             logger.info("Invoice scan cancelled by user")
             break
 
-        scan_state["progress"] = i + 1
+        scan_state.progress = i + 1
         doc_id = doc["id"]
 
         # Use cache if available

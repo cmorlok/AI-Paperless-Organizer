@@ -18,7 +18,7 @@ from app.models.settings_model import (
     LLM_KEY_CLASSIFIER_MODEL,
 )
 from app.routers.settings import get_setting
-from app.services.paperless.protocol import PaperlessClient
+from app.services.paperless import PaperlessClient
 from app.services.classifier.base_provider import (
     BaseClassifierProvider, ClassificationResult, DocumentContext,
 )

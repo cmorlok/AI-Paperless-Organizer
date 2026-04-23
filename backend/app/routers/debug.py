@@ -10,10 +10,10 @@ from urllib.parse import urlparse
 from dishka.integrations.fastapi import inject
 from dishka import FromDishka
 
-from app.services.ocr.state import OcrState
-from app.services.classifier.state import AutoClassifyState
-from app.services.cloud_import.state import CloudSyncState
-from app.services.duplicate.state import DuplicateScanState
+from app.services.ocr import OcrState
+from app.services.classifier import AutoClassifyState
+from app.services.cloud_import import CloudSyncState
+from app.services.duplicate import DuplicateScanState
 
 router = APIRouter()
 

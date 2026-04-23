@@ -12,15 +12,23 @@ from typing import Dict, List, Optional, Any
 import httpx
 
 from app.database import async_session
-from app.services.paperless.protocol import PaperlessClient
+from app.services.paperless import PaperlessClient
 
 logger = logging.getLogger(__name__)
 
 
 class CloudImportService:
 
-    def __init__(self, session_factory: Optional[Any] = None):
+    def __init__(self, session_factory: Optional[Any] = None, state: Optional[Any] = None):
         self.session_factory = session_factory or async_session
+        self._state = state
+
+    @property
+    def _sync_state(self):
+        if self._state is not None:
+            return self._state
+        from app.services.cloud_import.state import CloudSyncState
+        return CloudSyncState()
 
     # ── WebDAV ──────────────────────────────────────────────────────────────
 
@@ -320,8 +328,6 @@ class CloudImportService:
     # ── Sync one source ──────────────────────────────────────────────────────
 
     async def sync_source(self, source, pl_client, db) -> Dict:
-        from app.services.cloud_import.state import _cloud_sync_state
-
         stats = {"imported": 0, "skipped": 0, "errors": 0}
 
         if source.source_type == "webdav":
@@ -340,12 +346,12 @@ class CloudImportService:
             pass
 
         for file_info in files:
-            if not _cloud_sync_state["enabled"]:
+            if not self._sync_state.enabled:
                 break
 
             file_path = file_info["path"]
             file_name = file_info["name"]
-            _cloud_sync_state["current_file"] = file_name
+            self._sync_state.current_file = file_name
 
             if await self.is_already_imported(db, source.id, file_path):
                 stats["skipped"] += 1
@@ -380,7 +386,7 @@ class CloudImportService:
                 await self._log(db, source, file_path, file_name, None, "success", "")
                 stats["imported"] += 1
                 source.files_imported = (source.files_imported or 0) + 1
-                _cloud_sync_state["files_imported_session"] += 1
+                self._sync_state.files_imported_session += 1
 
                 # Post-import action
                 if source.after_import_action == "delete":
@@ -398,7 +404,7 @@ class CloudImportService:
                 logger.error(f"Cloud import: Paperless-Upload fehlgeschlagen für {file_name}: {e}")
                 await self._log(db, source, file_path, file_name, None, "error", str(e))
                 stats["errors"] += 1
-                _cloud_sync_state["errors_session"] += 1
+                self._sync_state.errors_session += 1
 
         return stats
 
