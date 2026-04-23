@@ -28,7 +28,9 @@ from app.services.ocr.service import OcrService as OcrServiceImpl
 from app.services.rag.service import RAGService as RAGServiceImpl
 from app.services.classifier.service import DocumentClassifierService as DocumentClassifierServiceImpl
 from app.services.duplicate.service import DuplicateService as DuplicateServiceImpl
+from app.services.duplicate.state import DuplicateScanState
 from app.services.cloud_import.service import CloudImportService as CloudImportServiceImpl
+from app.services.cloud_import.state import CloudSyncState
 
 
 class AppProvider(Provider):
@@ -45,6 +47,14 @@ class AppProvider(Provider):
     @provide(scope=Scope.APP)
     def auto_classify_state(self) -> AutoClassifyState:
         return AutoClassifyState()
+
+    @provide(scope=Scope.APP)
+    def cloud_sync_state(self) -> CloudSyncState:
+        return CloudSyncState()
+
+    @provide(scope=Scope.APP)
+    def duplicate_scan_state(self) -> DuplicateScanState:
+        return DuplicateScanState()
 
     @provide(scope=Scope.APP)
     def session_factory(self) -> async_sessionmaker:
@@ -138,8 +148,9 @@ class AppProvider(Provider):
     def cloud_import_service(
         self,
         session_factory: async_sessionmaker,
+        state: CloudSyncState,
     ) -> CloudImportService:
-        return CloudImportServiceImpl(session_factory=session_factory)
+        return CloudImportServiceImpl(session_factory=session_factory, state=state)
 
 
 # Module-level container singleton

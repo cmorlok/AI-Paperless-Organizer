@@ -31,7 +31,6 @@ from app.database import async_session
 from app.container import container as di_container
 
 _ocr_state: OcrState | None = None
-_auto_classify_state: AutoClassifyState | None = None
 
 
 async def reset_password_if_requested() -> None:
@@ -93,11 +92,9 @@ async def lifespan(app: FastAPI):
             q = await db_sess.execute(sa_select(ClassifierConfig).where(ClassifierConfig.id == 1))
             cls_config = q.scalars().first()
             if cls_config and getattr(cls_config, "auto_classify_enabled", False):
-                global _auto_classify_state
                 async with di_container() as ctx:
                     ac_state: AutoClassifyState = await ctx.get(AutoClassifyState)
                     ac_state.enabled = True
-                    _auto_classify_state = ac_state
                 asyncio.get_running_loop().create_task(auto_classify_loop(di_container))
                 logging.getLogger(__name__).info("Auto-classify auto-started")
     except Exception as e:
@@ -156,7 +153,7 @@ async def lifespan(app: FastAPI):
     # Auto-start cloud sync daemon if any sources are enabled
     try:
         from app.models.cloud_import import CloudSource
-        from app.services.cloud_import.state import _cloud_sync_state
+        from app.services.cloud_import.state import CloudSyncState
         from app.services.cloud_import.sync_loop import cloud_sync_loop
         async with async_session() as db_sess:
             src_q = await db_sess.execute(
@@ -164,7 +161,10 @@ async def lifespan(app: FastAPI):
             )
             has_sources = src_q.scalars().first() is not None
         if has_sources:
-            _cloud_sync_state["enabled"] = True
+            async with di_container() as ctx:
+                css: CloudSyncState = await ctx.get(CloudSyncState)
+                css.reset()
+                css.enabled = True
             asyncio.get_running_loop().create_task(cloud_sync_loop(di_container))
             logging.getLogger(__name__).info("Cloud sync daemon auto-started")
     except Exception as e:
@@ -172,18 +172,26 @@ async def lifespan(app: FastAPI):
 
     yield
     # Shutdown: stop auto-classify + watchdog + cloud sync gracefully
-    if _auto_classify_state:
-        _auto_classify_state.enabled = False
-        task = _auto_classify_state._task
-        if task and not task.done():
-            task.cancel()
 
+    # Auto-classify shutdown - resolve from container
     try:
-        from app.services.cloud_import.state import _cloud_sync_state as _css
-        _css["enabled"] = False
-        task = _css.get("task")
-        if task and not task.done():
-            task.cancel()
+        async with di_container() as ctx:
+            ac_state: AutoClassifyState = await ctx.get(AutoClassifyState)
+            ac_state.enabled = False
+            task = ac_state._task
+            if task and not task.done():
+                task.cancel()
+    except Exception:
+        pass
+
+    # Cloud sync shutdown - resolve from container
+    try:
+        async with di_container() as ctx:
+            css: CloudSyncState = await ctx.get(CloudSyncState)
+            css.enabled = False
+            task = css.task
+            if task and not task.done():
+                task.cancel()
     except Exception:
         pass
 
