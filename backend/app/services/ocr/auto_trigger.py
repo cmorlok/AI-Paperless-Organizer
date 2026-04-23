@@ -60,8 +60,8 @@ async def ocr_auto_trigger_loop(
         try:
             watchdog_state["running"] = True
 
-            if batch_state["running"] or single_ocr_running["value"] or ollama_is_locked():
-                reason = "Batch" if batch_state["running"] else "Single-OCR" if single_ocr_running["value"] else f"Ollama belegt ({ollama_holder()})"
+            if batch_state["running"] or single_ocr_running["running"] or ollama_is_locked():
+                reason = "Batch" if batch_state["running"] else "Single-OCR" if single_ocr_running["running"] else f"Ollama belegt ({ollama_holder()})"
                 logger.info(f"Watchdog: {reason} aktiv, ueberspringe diesen Zyklus")
             else:
                 logger.info("Watchdog checking for new documents...")

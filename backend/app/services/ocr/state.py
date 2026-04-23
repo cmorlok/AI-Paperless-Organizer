@@ -55,6 +55,15 @@ class OcrBatchProgress(BaseModel):
     mode: str | None = None
     paused: bool = False
 
+    def __getitem__(self, key: str):
+        return getattr(self, key)
+
+    def __setitem__(self, key: str, value) -> None:
+        setattr(self, key, value)
+
+    def get(self, key: str, default=None):
+        return getattr(self, key, default)
+
 
 class OcrWatchdogProgress(BaseModel):
     enabled: bool = False
@@ -62,6 +71,15 @@ class OcrWatchdogProgress(BaseModel):
     interval_minutes: int = Field(ge=1, default=5)
     last_run: str | None = None
     task: Any = Field(default=None, exclude=True)
+
+    def __getitem__(self, key: str):
+        return getattr(self, key)
+
+    def __setitem__(self, key: str, value) -> None:
+        setattr(self, key, value)
+
+    def get(self, key: str, default=None):
+        return getattr(self, key, default)
 
 
 class OcrState(BaseState, CancelMixin):
@@ -79,6 +97,11 @@ class OcrState(BaseState, CancelMixin):
         self.lock_holder = None
         self.clear_cancel()
 
+    def cancel(self) -> None:
+        """Cancel the OCR operation and signal batch should stop."""
+        self.request_cancel()
+        self.batch.should_stop = True
+
     def acquire_lock(self, holder: str) -> bool:
         if self.lock_holder is not None:
             return False
@@ -94,27 +117,64 @@ class OcrState(BaseState, CancelMixin):
     def current_lock_holder(self) -> str | None:
         return self.lock_holder
 
-    def cancel(self) -> None:
-        self.request_cancel()
-        self.batch.should_stop = True
+
+def _get_ocr_state_instance() -> OcrState:
+    if not hasattr(_get_ocr_state_instance, "_instance"):
+        _get_ocr_state_instance._instance = OcrState()
+    return _get_ocr_state_instance._instance
 
 
-__all__ = [
-    "OcrState",
-    "PageProgress",
-    "OcrDocumentProgress",
-    "OcrBatchProgress",
-    "OcrWatchdogProgress",
-    "DEFAULT_OLLAMA_URL",
-    "DEFAULT_OCR_MODEL",
-    "TAG_RUN_OCR",
-    "TAG_OCR_FINISH",
-    "TAG_OCR_REVIEW",
-    "TAG_OCR_ERROR",
-    "REVIEW_QUEUE_FILE",
-    "OCR_IGNORE_FILE",
-    "OCR_ERROR_COUNT_FILE",
-    "OCR_ERROR_FILE",
-    "QUALITY_THRESHOLD",
-    "MAX_ERROR_COUNT",
-]
+class _DictProxy:
+    def __init__(self, attr: str):
+        self._attr = attr
+
+    @property
+    def _state(self):
+        return _get_ocr_state_instance()
+
+    def __getitem__(self, key: str):
+        return getattr(getattr(self._state, self._attr), key)
+
+    def __setitem__(self, key: str, value) -> None:
+        setattr(getattr(self._state, self._attr), key, value)
+
+    def get(self, key: str, default=None):
+        return getattr(getattr(self._state, self._attr), key, default)
+
+
+class _ModuleLevelProxy:
+    def __getitem__(self, key: str):
+        state = _get_ocr_state_instance()
+        if key == "running":
+            return state.batch.running
+        if key == "enabled":
+            return state.watchdog.enabled
+        if key == "interval_minutes":
+            return state.watchdog.interval_minutes
+        if key == "last_run":
+            return state.watchdog.last_run
+        return getattr(state, key)
+
+    def __setitem__(self, key: str, value) -> None:
+        state = _get_ocr_state_instance()
+        if key == "running":
+            state.batch.running = value
+        elif key == "enabled":
+            state.watchdog.enabled = value
+        elif key == "interval_minutes":
+            state.watchdog.interval_minutes = value
+        elif key == "last_run":
+            state.watchdog.last_run = value
+        else:
+            setattr(state, key, value)
+
+    def get(self, key: str, default=None):
+        try:
+            return self[key]
+        except (AttributeError, KeyError):
+            return default
+
+
+batch_state = _ModuleLevelProxy()
+watchdog_state = _ModuleLevelProxy()
+single_ocr_running = _DictProxy("batch")
