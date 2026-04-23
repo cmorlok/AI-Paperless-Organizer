@@ -29,9 +29,6 @@ from app.services.auth import SessionAuthMiddleware
 from app.database import async_session
 from app.container import container as di_container
 
-_ocr_state: OcrState | None = None
-
-
 async def reset_password_if_requested() -> None:
     """Per CONTEXT.md D-14: RESET_PASSWORD=true clears AuthConfig password_hash."""
     import os
@@ -89,7 +86,6 @@ async def lifespan(app: FastAPI):
                 client = await ctx.get(PaperlessClient)
                 service = await ctx.get(OcrService)
                 ocr_state = await ctx.get(OcrState)
-                _ocr_state = ocr_state
                 ocr_state.reset()
                 ocr_state.watchdog.enabled = True
                 ocr_state.watchdog.interval_minutes = ocr_settings.get("watchdog_interval", 5)
@@ -219,11 +215,17 @@ async def lifespan(app: FastAPI):
     except Exception:
         pass
 
-    if _ocr_state and _ocr_state.watchdog.enabled:
-        _ocr_state.watchdog.enabled = False
-        task = _ocr_state.watchdog.task
-        if task and not task.done():
-            task.cancel()
+    # OCR shutdown - resolve from container
+    try:
+        async with di_container() as ctx:
+            ocr_state = await ctx.get(OcrState)
+            if ocr_state.watchdog.enabled:
+                ocr_state.watchdog.enabled = False
+                task = ocr_state.watchdog.task
+                if task and not task.done():
+                    task.cancel()
+    except Exception:
+        pass
 
 
 app = FastAPI(
