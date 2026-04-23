@@ -6,7 +6,7 @@ import asyncio
 from pathlib import Path
 from typing import Any
 
-from pydantic import BaseModel, Field, PrivateAttr
+from pydantic import BaseModel, ConfigDict, Field, PrivateAttr
 
 from app.services.base_state import BaseState, CancelMixin
 
@@ -80,6 +80,46 @@ class OcrWatchdogProgress(BaseModel):
 
     def get(self, key: str, default=None):
         return getattr(self, key, default)
+
+
+class OcrCompareState(BaseModel):
+    """State for the OCR compare (Vergleich) feature."""
+    running: bool = False
+    phase: str = ""
+    current_model: str = ""
+    current_model_index: int = 0
+    total_models: int = 0
+    current_page: int = 0
+    total_pages: int = 0
+    compared_page: int = 0
+    title: str = ""
+    old_content: str = ""
+    results: list = Field(default_factory=list)
+    elapsed_seconds: float = 0.0
+    job_start: float = Field(default=0.0, alias="_job_start")
+    models: list = Field(default_factory=list)
+    document_id: int = 0
+    error: str | None = None
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    def reset(self) -> None:
+        self.running = False
+        self.phase = ""
+        self.current_model = ""
+        self.current_model_index = 0
+        self.total_models = 0
+        self.current_page = 0
+        self.total_pages = 0
+        self.compared_page = 0
+        self.title = ""
+        self.old_content = ""
+        self.results = []
+        self.elapsed_seconds = 0.0
+        self.job_start = 0.0
+        self.models = []
+        self.document_id = 0
+        self.error = None
 
 
 class OcrState(BaseState, CancelMixin):

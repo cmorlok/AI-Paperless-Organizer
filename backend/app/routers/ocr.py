@@ -37,6 +37,7 @@ from app.services.ocr import (
     TAG_OCR_ERROR,
 )
 from app.services.llm import LLMService as LLMProviderService
+from app.services.ocr.state import OcrCompareState
 
 logger = logging.getLogger(__name__)
 
@@ -852,45 +853,6 @@ async def get_ollama_models():
     }
 
 
-# --- Compare State (in-memory, single job) ---
-compare_state = {
-    "running": False,
-    "phase": "",  # "download", "convert", "model_loading", "ocr_page", "unloading", "done", "error"
-    "current_model": "",
-    "current_model_index": 0,
-    "total_models": 0,
-    "current_page": 0,
-    "total_pages": 0,
-    "models": [],
-    "document_id": 0,
-    "title": "",
-    "old_content": "",
-    "compared_page": 0,
-    "results": [],
-    "error": None,
-    "elapsed_seconds": 0,
-}
-
-def reset_compare_state():
-    compare_state.update({
-        "running": False,
-        "phase": "",
-        "current_model": "",
-        "current_model_index": 0,
-        "total_models": 0,
-        "current_page": 0,
-        "total_pages": 0,
-        "models": [],
-        "document_id": 0,
-        "title": "",
-        "old_content": "",
-        "compared_page": 0,
-        "results": [],
-        "error": None,
-        "elapsed_seconds": 0,
-    })
-
-
 async def _unload_model_from_vram(model: str):
     """Send keep_alive=0 to Ollama to immediately unload model from VRAM."""
     urls = ocr_settings.get("ollama_urls", [ocr_settings.get("ollama_url", DEFAULT_OLLAMA_URL)])
@@ -928,8 +890,8 @@ async def _wait_for_ollama_ready(max_wait: int = 60) -> bool:
                 pass
         
         print(f"[Compare] Ollama nicht erreichbar, warte {interval}s... ({waited}/{max_wait}s)")
-        compare_state["phase"] = "waiting_ollama"
-        compare_state["elapsed_seconds"] = round(time.time() - compare_state.get("_job_start", time.time()), 1)
+        compare_state.phase = "waiting_ollama"
+        compare_state.elapsed_seconds = round(time.time() - (compare_state.job_start or time.time()), 1)
         await asyncio.sleep(interval)
         waited += interval
     
@@ -937,14 +899,14 @@ async def _wait_for_ollama_ready(max_wait: int = 60) -> bool:
     return False
 
 
-async def _run_compare_job(ocr_service: OcrService, paperless_client, document_id: int, models: list, target_page: int):
+async def _run_compare_job(ocr_service: OcrService, paperless_client, document_id: int, models: list, target_page: int, compare_state: OcrCompareState):
     """Background task that runs the actual model comparison."""
     import io
     from PIL import Image
     from pdf2image import convert_from_bytes
 
     job_start = time.time()
-    compare_state["_job_start"] = job_start
+    compare_state.job_start = job_start
 
     # Save original service settings to restore after job
     original_model = ocr_service.model
@@ -952,19 +914,19 @@ async def _run_compare_job(ocr_service: OcrService, paperless_client, document_i
 
     try:
         # Phase: Download
-        compare_state["phase"] = "download"
+        compare_state.phase = "download"
         doc = await paperless_client.get_document(document_id)
         if not doc:
             raise ValueError(f"Dokument {document_id} nicht gefunden")
 
-        compare_state["title"] = doc.get("title", f"Dokument {document_id}")
-        compare_state["old_content"] = doc.get("content", "") or ""
+        compare_state.title = doc.get("title", f"Dokument {document_id}")
+        compare_state.old_content = doc.get("content", "") or ""
 
         file_bytes = await paperless_client.download_document_file(document_id)
         print(f"[Compare] Downloaded doc {document_id}: {len(file_bytes)} bytes")
 
         # Phase: Initial convert (for page count detection)
-        compare_state["phase"] = "convert"
+        compare_state.phase = "convert"
         is_pdf = True
         try:
             loop = asyncio.get_running_loop()
@@ -982,34 +944,34 @@ async def _run_compare_job(ocr_service: OcrService, paperless_client, document_i
         if total_pages == 0:
             raise ValueError("Keine Seiten extrahiert")
 
-        compare_state["total_pages"] = total_pages
+        compare_state.total_pages = total_pages
 
         # Select page indices
         if target_page > 0 and target_page <= total_pages:
             page_indices = [target_page - 1]
-            compare_state["compared_page"] = target_page
+            compare_state.compared_page = target_page
         else:
             page_indices = list(range(total_pages))
-            compare_state["compared_page"] = 0
+            compare_state.compared_page = 0
 
         # Cache for DPI-specific image conversions (avoid re-rendering same DPI)
         dpi_image_cache = {}
 
         # Run each model with model-specific image preparation
         for model_idx, model_name in enumerate(models):
-            compare_state["current_model"] = model_name
-            compare_state["current_model_index"] = model_idx
-            compare_state["current_page"] = 0
-            compare_state["elapsed_seconds"] = round(time.time() - job_start, 1)
+            compare_state.current_model = model_name
+            compare_state.current_model_index = model_idx
+            compare_state.current_page = 0
+            compare_state.elapsed_seconds = round(time.time() - job_start, 1)
 
             # Health check: wait for Ollama to be ready before starting each model
-            compare_state["phase"] = "health_check"
+            compare_state.phase = "health_check"
             print(f"[Compare] Checking Ollama health before model: {model_name}")
             ollama_ok = await _wait_for_ollama_ready(max_wait=60)
             if not ollama_ok:
                 error_msg = f"Ollama nicht erreichbar - überspringe {model_name}"
                 print(f"[Compare] {model_name} SKIPPED: Ollama not reachable")
-                compare_state["results"].append({
+                compare_state.results.append({
                     "model": model_name,
                     "text": "",
                     "chars": 0,
@@ -1024,7 +986,7 @@ async def _run_compare_job(ocr_service: OcrService, paperless_client, document_i
             optimal_image_size = model_params["max_image_size"]
             render_dpi = model_params.get("render_dpi", 200)
 
-            compare_state["phase"] = "model_loading"
+            compare_state.phase = "model_loading"
             print(f"[Compare] Testing model: {model_name} (image: {optimal_image_size}px, DPI: {render_dpi}, ctx: {model_params['num_ctx']}, repeat_pen: {model_params['repeat_penalty']})")
 
             # Temporarily configure service for this model
@@ -1033,7 +995,7 @@ async def _run_compare_job(ocr_service: OcrService, paperless_client, document_i
 
             # Convert PDF at the right DPI for this model (cached)
             if is_pdf and render_dpi not in dpi_image_cache:
-                compare_state["phase"] = "convert"
+                compare_state.phase = "convert"
                 print(f"[Compare] Rendering PDF at {render_dpi} DPI for {model_name}")
                 dpi_images = await asyncio.get_running_loop().run_in_executor(
                     None, lambda dpi=render_dpi: convert_from_bytes(file_bytes, dpi=dpi)
@@ -1061,9 +1023,9 @@ async def _run_compare_job(ocr_service: OcrService, paperless_client, document_i
 
             try:
                 for page_idx, prepared_bytes in prepared_pages:
-                    compare_state["phase"] = "ocr_page"
-                    compare_state["current_page"] = page_idx + 1
-                    compare_state["elapsed_seconds"] = round(time.time() - job_start, 1)
+                    compare_state.phase = "ocr_page"
+                    compare_state.current_page = page_idx + 1
+                    compare_state.elapsed_seconds = round(time.time() - job_start, 1)
 
                     page_text = await ocr_service._ocr_single_image(
                         prepared_bytes,
@@ -1084,7 +1046,7 @@ async def _run_compare_job(ocr_service: OcrService, paperless_client, document_i
             model_duration = time.time() - model_start
             full_text = "\n\n".join(page_texts) if page_texts else ""
 
-            compare_state["results"].append({
+            compare_state.results.append({
                 "model": model_name,
                 "text": full_text,
                 "chars": len(full_text),
@@ -1096,8 +1058,8 @@ async def _run_compare_job(ocr_service: OcrService, paperless_client, document_i
             print(f"[Compare] {model_name}: {len(full_text)} chars in {model_duration:.1f}s")
 
             # Unload model from VRAM before loading the next
-            compare_state["phase"] = "unloading"
-            compare_state["elapsed_seconds"] = round(time.time() - job_start, 1)
+            compare_state.phase = "unloading"
+            compare_state.elapsed_seconds = round(time.time() - job_start, 1)
             await _unload_model_from_vram(model_name)
 
             # If model had an error, wait for Ollama to recover before next model
@@ -1105,17 +1067,17 @@ async def _run_compare_job(ocr_service: OcrService, paperless_client, document_i
                 print(f"[Compare] Modell hatte Fehler, warte 5s auf Ollama-Recovery...")
                 await asyncio.sleep(5)
 
-        compare_state["phase"] = "done"
-        compare_state["elapsed_seconds"] = round(time.time() - job_start, 1)
-        print(f"[Compare] All {len(models)} models done in {compare_state['elapsed_seconds']}s")
+        compare_state.phase = "done"
+        compare_state.elapsed_seconds = round(time.time() - job_start, 1)
+        print(f"[Compare] All {len(models)} models done in {compare_state.elapsed_seconds}s")
 
     except Exception as e:
-        compare_state["phase"] = "error"
-        compare_state["error"] = str(e)
-        compare_state["elapsed_seconds"] = round(time.time() - job_start, 1)
+        compare_state.phase = "error"
+        compare_state.error = str(e)
+        compare_state.elapsed_seconds = round(time.time() - job_start, 1)
         logger.error(f"[Compare] Job failed: {e}")
     finally:
-        compare_state["running"] = False
+        compare_state.running = False
         # Restore original service settings
         ocr_service.model = original_model
         ocr_service.max_image_size = original_max_image_size
@@ -1127,9 +1089,10 @@ async def start_compare(
     request: OcrCompareRequest,
     client: FromDishka[PaperlessClient] = None,
     service: FromDishka[OcrService] = None,
+    compare_state: FromDishka[OcrCompareState] = None,
 ):
     """Start OCR model comparison as background task."""
-    if compare_state["running"]:
+    if compare_state.running:
         raise HTTPException(status_code=409, detail="Ein Vergleich läuft bereits")
 
     models = request.models
@@ -1138,37 +1101,40 @@ async def start_compare(
     if len(models) > 5:
         raise HTTPException(status_code=400, detail="Maximal 5 Modelle gleichzeitig")
 
-    reset_compare_state()
-    compare_state["running"] = True
-    compare_state["document_id"] = request.document_id
-    compare_state["models"] = models
-    compare_state["total_models"] = len(models)
-    compare_state["phase"] = "starting"
+    compare_state.reset()
+    compare_state.running = True
+    compare_state.document_id = request.document_id
+    compare_state.models = models
+    compare_state.total_models = len(models)
+    compare_state.phase = "starting"
 
-    asyncio.create_task(_run_compare_job(service, client, request.document_id, models, request.page))
+    asyncio.create_task(_run_compare_job(service, client, request.document_id, models, request.page, compare_state))
 
     return {"started": True, "models": len(models)}
 
 
 @router.get("/compare/status")
-async def get_compare_status():
+@inject
+async def get_compare_status(
+    compare_state: FromDishka[OcrCompareState] = None,
+):
     """Get current compare job status (for polling)."""
     return {
-        "running": compare_state["running"],
-        "phase": compare_state["phase"],
-        "current_model": compare_state["current_model"],
-        "current_model_index": compare_state["current_model_index"],
-        "total_models": compare_state["total_models"],
-        "current_page": compare_state["current_page"],
-        "total_pages": compare_state["total_pages"],
-        "models": compare_state["models"],
-        "document_id": compare_state["document_id"],
-        "title": compare_state["title"],
-        "old_content": compare_state["old_content"],
-        "compared_page": compare_state["compared_page"],
-        "results": compare_state["results"],
-        "error": compare_state["error"],
-        "elapsed_seconds": compare_state["elapsed_seconds"],
+        "running": compare_state.running,
+        "phase": compare_state.phase,
+        "current_model": compare_state.current_model,
+        "current_model_index": compare_state.current_model_index,
+        "total_models": compare_state.total_models,
+        "current_page": compare_state.current_page,
+        "total_pages": compare_state.total_pages,
+        "models": compare_state.models,
+        "document_id": compare_state.document_id,
+        "title": compare_state.title,
+        "old_content": compare_state.old_content,
+        "compared_page": compare_state.compared_page,
+        "results": compare_state.results,
+        "error": compare_state.error,
+        "elapsed_seconds": compare_state.elapsed_seconds,
     }
 
 

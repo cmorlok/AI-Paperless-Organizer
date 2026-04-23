@@ -12,7 +12,7 @@ from app.services.paperless import PaperlessClient
 from app.services.similarity import SimilarityService
 from app.services.merge import MergeService
 from app.services.statistics import StatisticsService
-from app.services.ocr import OcrService, OcrState
+from app.services.ocr import OcrService, OcrState, OcrCompareState
 from app.services.rag import RAGService
 from app.services.classifier import DocumentClassifierService, AutoClassifyState
 from app.services.duplicate import DuplicateService, DuplicateScanState
@@ -40,6 +40,10 @@ class AppProvider(Provider):
     @provide(scope=Scope.APP)
     def ocr_state(self) -> OcrState:
         return OcrState()
+
+    @provide(scope=Scope.APP)
+    def ocr_compare_state(self) -> OcrCompareState:
+        return OcrCompareState()
 
     @provide(scope=Scope.APP)
     def auto_classify_state(self) -> AutoClassifyState:
