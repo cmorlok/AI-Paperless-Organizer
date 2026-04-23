@@ -165,6 +165,19 @@ async def save_ocr_settings_endpoint(request: OcrSettingsRequest, client: FromDi
 
 # --- Watchdog Endpoints ---
 
+# Persist enabled flag to AppSettings KV store (STATE-08)
+
+async def _persist_ocr_watchdog_enabled(enabled: bool, db: AsyncSession) -> None:
+    """Persist ocr_watchdog_enabled flag to AppSettings."""
+    from app.routers.settings import set_setting
+    await set_setting(
+        "ocr_watchdog_enabled",
+        "true" if enabled else "false",
+        "bool",
+        db
+    )
+
+
 class WatchdogSettingsRequest(BaseModel):
     enabled: bool
     interval_minutes: int = 5
@@ -185,6 +198,7 @@ async def get_watchdog_status(state: FromDishka[OcrState] = None):
 async def set_watchdog_settings(
     request: WatchdogSettingsRequest,
     background_tasks: BackgroundTasks,
+    db: AsyncSession = Depends(get_db),
     client: FromDishka[PaperlessClient] = None,
     service: FromDishka[OcrService] = None,
     state: FromDishka[OcrState] = None,
@@ -192,10 +206,16 @@ async def set_watchdog_settings(
     """Enable/Disable watchdog and set interval."""
     state.watchdog.interval_minutes = max(1, request.interval_minutes)
     
-    # Update persistence
+    # Update persistence to file (backward compatibility)
     ocr_settings["watchdog_enabled"] = request.enabled
     ocr_settings["watchdog_interval"] = request.interval_minutes
     save_ocr_settings_to_file(ocr_settings)
+    
+    # Persist to AppSettings KV store (STATE-08)
+    try:
+        await _persist_ocr_watchdog_enabled(request.enabled, db)
+    except Exception as e:
+        logger.warning(f"Could not persist ocr_watchdog_enabled to KV: {e}")
     
     if request.enabled and not state.watchdog.enabled:
         # Start watchdog

@@ -1,5 +1,6 @@
 """API Router for the KI-Klassifizierer feature."""
 
+import asyncio
 import httpx
 import logging
 from fastapi import APIRouter, Depends, HTTPException
@@ -182,7 +183,17 @@ async def get_prompt_defaults():
     return FIELD_DEFAULTS
 
 
-# --- Statistics ---
+# Persist enabled flag to AppSettings KV store (STATE-08)
+
+async def _persist_auto_classify_enabled(enabled: bool, db: AsyncSession) -> None:
+    """Persist auto_classify_enabled flag to AppSettings."""
+    from app.routers.settings import set_setting
+    await set_setting(
+        "auto_classify_enabled",
+        "true" if enabled else "false",
+        "bool",
+        db
+    )
 
 @router.get("/stats")
 @inject
@@ -994,15 +1005,11 @@ async def start_auto_classify(
     state._task = asyncio.create_task(auto_classify_loop(di_container))
     logger.info("Auto-classify started")
 
-    # Persist to DB so it auto-starts after restart
+    # Persist to AppSettings KV store (STATE-08)
     try:
-        q = await db.execute(select(ClassifierConfig).where(ClassifierConfig.id == 1))
-        config = q.scalars().first()
-        if config:
-            config.auto_classify_enabled = True
-            await db.commit()
+        await _persist_auto_classify_enabled(True, db)
     except Exception as e:
-        logger.warning(f"Could not persist auto-classify enabled: {e}")
+        logger.warning(f"Could not persist auto-classify enabled to KV: {e}")
 
     return {"status": "started"}
 
@@ -1022,15 +1029,11 @@ async def stop_auto_classify(
     state.current_doc = None
     logger.info("Auto-classify stopped")
 
-    # Persist to DB
+    # Persist to AppSettings KV store (STATE-08)
     try:
-        q = await db.execute(select(ClassifierConfig).where(ClassifierConfig.id == 1))
-        config = q.scalars().first()
-        if config:
-            config.auto_classify_enabled = False
-            await db.commit()
+        await _persist_auto_classify_enabled(False, db)
     except Exception as e:
-        logger.warning(f"Could not persist auto-classify disabled: {e}")
+        logger.warning(f"Could not persist auto-classify disabled to KV: {e}")
 
     return {"status": "stopped"}
 
