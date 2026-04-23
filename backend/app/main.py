@@ -20,13 +20,15 @@ logger = get_logger("app.main")
 
 from app.routers import paperless, correspondents, tags, document_types, settings, llm, debug, statistics, ignored_items, ocr, cleanup, classifier, rag, api_keys, cloud_import, duplicates, auth
 from app.routers.ocr import ocr_settings
-from app.services.ocr.state import watchdog_state
+from app.services.ocr.state import OcrState
 from app.services.paperless.protocol import PaperlessClient
 from app.services.ocr.protocol import OcrService
 from app.services.rag.protocol import RAGService
 from app.services.auth.middleware import SessionAuthMiddleware
 from app.database import async_session
 from app.container import container as di_container
+
+_ocr_state: OcrState | None = None
 
 
 async def reset_password_if_requested() -> None:
@@ -69,12 +71,14 @@ async def lifespan(app: FastAPI):
             async with di_container() as ctx:
                 client = await ctx.get(PaperlessClient)
                 service = await ctx.get(OcrService)
-                watchdog_state["enabled"] = True
-                watchdog_state["interval_minutes"] = ocr_settings.get("watchdog_interval", 5)
+                ocr_state = await ctx.get(OcrState)
+                _ocr_state = ocr_state
+                ocr_state.watchdog.enabled = True
+                ocr_state.watchdog.interval_minutes = ocr_settings.get("watchdog_interval", 5)
                 loop = asyncio.get_running_loop()
-                watchdog_state["task"] = loop.create_task(service.watchdog_loop(client))
+                ocr_state.watchdog.task = loop.create_task(service.watchdog_loop(client))
                 logging.getLogger(__name__).info(
-                    f"Watchdog auto-started (interval: {watchdog_state['interval_minutes']} min)"
+                    f"Watchdog auto-started (interval: {ocr_state.watchdog.interval_minutes} min)"
                 )
         except Exception as e:
             logging.getLogger(__name__).error(f"Watchdog auto-start failed: {e}")
@@ -180,9 +184,9 @@ async def lifespan(app: FastAPI):
     except Exception:
         pass
 
-    if watchdog_state.get("enabled"):
-        watchdog_state["enabled"] = False
-        task = watchdog_state.get("task")
+    if _ocr_state and _ocr_state.watchdog.enabled:
+        _ocr_state.watchdog.enabled = False
+        task = _ocr_state.watchdog.task
         if task and not task.done():
             task.cancel()
 

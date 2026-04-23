@@ -21,7 +21,8 @@ from dishka import FromDishka
 from app.services.paperless.protocol import PaperlessClient
 from app.services.ocr.protocol import OcrService
 from app.services.llm.protocol import LLMService as LLMProviderService
-from app.services.ocr.service import batch_state, watchdog_state, single_ocr_running, ocr_page_progress, load_review_queue, save_review_queue, load_ocr_ignore_list, save_ocr_ignore_list, load_ocr_error_list, save_ocr_error_list, load_ocr_error_counts, save_ocr_error_counts, DEFAULT_OLLAMA_URL, DEFAULT_OCR_MODEL
+from app.services.ocr.service import load_review_queue, save_review_queue, load_ocr_ignore_list, save_ocr_ignore_list, load_ocr_error_list, save_ocr_error_list, load_ocr_error_counts, save_ocr_error_counts, DEFAULT_OLLAMA_URL, DEFAULT_OCR_MODEL
+from app.services.ocr.state import OcrState
 
 logger = logging.getLogger(__name__)
 
@@ -133,12 +134,12 @@ class OcrEvaluateRequest(BaseModel):
 # --- Settings Endpoints ---
 
 @router.get("/settings")
-async def get_ocr_settings():
+@inject
+async def get_ocr_settings(state: FromDishka[OcrState] = None):
     """Get current OCR settings."""
-    # Merge global settings with memory state
     settings = ocr_settings.copy()
-    settings["watchdog_enabled"] = watchdog_state["enabled"]
-    settings["watchdog_interval"] = watchdog_state["interval_minutes"]
+    settings["watchdog_enabled"] = state.watchdog.enabled
+    settings["watchdog_interval"] = state.watchdog.interval_minutes
     return settings
 
 
@@ -169,13 +170,14 @@ class WatchdogSettingsRequest(BaseModel):
     interval_minutes: int = 5
 
 @router.get("/watchdog/status")
-async def get_watchdog_status():
+@inject
+async def get_watchdog_status(state: FromDishka[OcrState] = None):
     """Get watchdog status."""
     return {
-        "enabled": watchdog_state["enabled"],
-        "running": watchdog_state["running"],
-        "interval_minutes": watchdog_state["interval_minutes"],
-        "last_run": watchdog_state["last_run"]
+        "enabled": state.watchdog.enabled,
+        "running": state.watchdog.running,
+        "interval_minutes": state.watchdog.interval_minutes,
+        "last_run": state.watchdog.last_run
     }
 
 @router.post("/watchdog/settings")
@@ -185,18 +187,19 @@ async def set_watchdog_settings(
     background_tasks: BackgroundTasks,
     client: FromDishka[PaperlessClient] = None,
     service: FromDishka[OcrService] = None,
+    state: FromDishka[OcrState] = None,
 ):
     """Enable/Disable watchdog and set interval."""
-    watchdog_state["interval_minutes"] = max(1, request.interval_minutes)
+    state.watchdog.interval_minutes = max(1, request.interval_minutes)
     
     # Update persistence
     ocr_settings["watchdog_enabled"] = request.enabled
     ocr_settings["watchdog_interval"] = request.interval_minutes
     save_ocr_settings_to_file(ocr_settings)
     
-    if request.enabled and not watchdog_state["enabled"]:
+    if request.enabled and not state.watchdog.enabled:
         # Start watchdog
-        watchdog_state["enabled"] = True
+        state.watchdog.enabled = True
         # We need to run this as a long-running background task
         # background_tasks is for one-off. For permanent loop, we need asyncio.create_task?
         # But we don't have the loop handy easily here? 
@@ -204,11 +207,11 @@ async def set_watchdog_settings(
         
         # We attach it to the event loop
         loop = asyncio.get_running_loop()
-        watchdog_state["task"] = loop.create_task(service.watchdog_loop(client))
+        state.watchdog.task = loop.create_task(service.watchdog_loop(client))
         
-    elif not request.enabled and watchdog_state["enabled"]:
+    elif not request.enabled and state.watchdog.enabled:
         # Stop watchdog
-        watchdog_state["enabled"] = False
+        state.watchdog.enabled = False
         # Task will exit on next loop
         
     return get_watchdog_status()
@@ -217,21 +220,23 @@ async def set_watchdog_settings(
 # --- Batch Control Endpoints ---
 
 @router.post("/batch/pause")
-async def pause_batch_ocr():
+@inject
+async def pause_batch_ocr(state: FromDishka[OcrState] = None):
     """Pause the running batch OCR job."""
-    if not batch_state["running"]:
+    if not state.batch.running:
         return {"success": False, "message": "Kein Batch-Job aktiv"}
     
-    batch_state["paused"] = True
+    state.batch.paused = True
     return {"success": True, "message": "Batch-Job pausiert", "paused": True}
 
 @router.post("/batch/resume")
-async def resume_batch_ocr():
+@inject
+async def resume_batch_ocr(state: FromDishka[OcrState] = None):
     """Resume the paused batch OCR job."""
-    if not batch_state["running"]:
+    if not state.batch.running:
         return {"success": False, "message": "Kein Batch-Job aktiv"}
     
-    batch_state["paused"] = False
+    state.batch.paused = False
     return {"success": True, "message": "Batch-Job fortgesetzt", "paused": False}
 
 # ... (Watchdog auto-start is handled in main.py lifespan)
@@ -313,10 +318,11 @@ async def ocr_single_document(
     client: FromDishka[PaperlessClient] = None,
     db: AsyncSession = Depends(get_db),
     service: FromDishka[OcrService] = None,
+    state: FromDishka[OcrState] = None,
 ):
     """Run OCR on a single document with page-level persistence and resume support."""
     try:
-        single_ocr_running["value"] = True
+        state.acquire_lock("single")
         result = await service.ocr_document(client, document_id, force=force, db_session=db)
         return result
     except ValueError as e:
@@ -329,14 +335,15 @@ async def ocr_single_document(
         logger.error(f"OCR single document error: {traceback.format_exc()}")
         raise HTTPException(status_code=500, detail=f"OCR Fehler: {str(e)}")
     finally:
-        single_ocr_running["value"] = False
-        ocr_page_progress.pop(document_id, None)
+        state.release_lock()
+        state.page_progress.pop(document_id, None)
 
 
 @router.get("/progress/{document_id}")
-async def get_ocr_progress(document_id: int):
+@inject
+async def get_ocr_progress(document_id: int, state: FromDishka[OcrState] = None):
     """Get live page-level progress for an ongoing OCR job."""
-    progress = ocr_page_progress.get(document_id)
+    progress = state.page_progress.get(document_id)
     if not progress:
         return {"active": False, "document_id": document_id}
     elapsed = time.time() - progress.get("started_at", time.time())
@@ -393,9 +400,10 @@ async def start_batch_ocr(
     background_tasks: BackgroundTasks,
     client: FromDishka[PaperlessClient] = None,
     service: FromDishka[OcrService] = None,
+    state: FromDishka[OcrState] = None,
 ):
     """Start batch OCR processing in the background."""
-    if batch_state["running"]:
+    if state.batch.running:
         raise HTTPException(status_code=409, detail="Ein Batch-OCR-Job läuft bereits")
 
     # Run batch OCR as background task
@@ -412,15 +420,16 @@ async def start_batch_ocr(
 
 
 @router.get("/batch/status")
-async def get_batch_status():
+@inject
+async def get_batch_status(state: FromDishka[OcrState] = None):
     """Get current batch OCR job status, including page-level progress for current document."""
-    current_doc = batch_state["current_document"]
+    current_doc = state.batch.current_document
     current_doc_id = current_doc.get("id") if isinstance(current_doc, dict) else None
 
     # Include live page progress for the currently processing document
     page_progress = None
-    if current_doc_id and current_doc_id in ocr_page_progress:
-        pp = ocr_page_progress[current_doc_id]
+    if current_doc_id and current_doc_id in state.page_progress:
+        pp = state.page_progress[current_doc_id]
         page_progress = {
             "document_id": current_doc_id,
             "total_pages": pp.get("total_pages", 0),
@@ -432,29 +441,30 @@ async def get_batch_status():
         }
 
     from app.services.llm.lock import is_locked as ollama_is_locked, current_holder as ollama_holder
-    waiting = ollama_holder() if ollama_is_locked() and not batch_state["running"] else None
+    waiting = ollama_holder() if ollama_is_locked() and not state.batch.running else None
 
     return {
-        "running": batch_state["running"],
-        "total": batch_state["total"],
-        "processed": batch_state["processed"],
+        "running": state.batch.running,
+        "total": state.batch.total,
+        "processed": state.batch.processed,
         "current_document": current_doc,
         "current_page_progress": page_progress,
-        "errors_count": len(batch_state["errors"]),
-        "log": batch_state["log"][-50:],
-        "mode": batch_state["mode"],
-        "paused": batch_state.get("paused", False),
+        "errors_count": len(state.batch.errors),
+        "log": state.batch.log[-50:],
+        "mode": state.batch.mode,
+        "paused": state.batch.paused,
         "waiting_for": waiting,
     }
 
 
 @router.post("/batch/stop")
-async def stop_batch_ocr():
+@inject
+async def stop_batch_ocr(state: FromDishka[OcrState] = None):
     """Stop the running batch OCR job."""
-    if not batch_state["running"]:
+    if not state.batch.running:
         return {"stopped": False, "message": "Kein Batch-Job aktiv"}
     
-    batch_state["should_stop"] = True
+    state.batch.should_stop = True
     return {"stopped": True, "message": "Batch-Job wird gestoppt..."}
 
 

@@ -18,10 +18,12 @@ from pdf2image import convert_from_bytes
 from app.services.llm.service import llm_completion
 from app.services.llm.lock import acquire as ollama_acquire, release as ollama_release, is_locked as ollama_is_locked, current_holder as ollama_holder
 
-# Import state dicts and constants from local state module
 from .state import (
     DEFAULT_OLLAMA_URL,
     DEFAULT_OCR_MODEL,
+    OcrState,
+    OcrDocumentProgress,
+    PageProgress,
     TAG_RUN_OCR,
     TAG_OCR_FINISH,
     TAG_OCR_REVIEW,
@@ -32,10 +34,6 @@ from .state import (
     OCR_IGNORE_FILE,
     OCR_ERROR_COUNT_FILE,
     OCR_ERROR_FILE,
-    batch_state,
-    single_ocr_running,
-    ocr_page_progress,
-    watchdog_state,
 )
 
 # Import file operations from local modules
@@ -65,6 +63,7 @@ class OcrService:
         ollama_url: str = DEFAULT_OLLAMA_URL,
         model: str = DEFAULT_OCR_MODEL,
         max_image_size: int = 2048,
+        state: OcrState | None = None,
     ):
         self.ollama_urls: List[str] = [s.strip() for s in ollama_url.split(",")]
         self.url_index: int = 0
@@ -72,6 +71,7 @@ class OcrService:
         self.max_image_size = max_image_size
         self._config_lock = asyncio.Lock()
         self._configured = False
+        self.state: OcrState = state or OcrState()
 
     def get_current_url(self) -> str:
         return self.ollama_urls[self.url_index % len(self.ollama_urls)]
@@ -574,20 +574,19 @@ class OcrService:
 
     async def ocr_document(self, paperless_client, document_id: int, force: bool = False, db_session=None) -> Dict[str, Any]:
         """OCR a document with page-level persistence. Supports resume after failures."""
-        global ocr_page_progress
         await self._ensure_config()
         start_time = time.time()
         print(f"[OCR] Starting OCR for document {document_id}")
 
-        ocr_page_progress[document_id] = {
-            "total_pages": 0, "done": 0, "errors": 0,
-            "current_page": 0, "status": "downloading",
-            "pages": [], "started_at": time.time(),
-        }
+        self.state.page_progress[document_id] = OcrDocumentProgress(
+            total_pages=0, done=0, errors=0,
+            current_page=0, status="downloading",
+            pages=[], started_at=time.time(),
+        )
 
         doc = await paperless_client.get_document(document_id)
         if not doc:
-            ocr_page_progress.pop(document_id, None)
+            self.state.page_progress.pop(document_id, None)
             raise ValueError(f"Dokument {document_id} nicht gefunden")
 
         old_content = doc.get("content", "") or ""
@@ -601,7 +600,7 @@ class OcrService:
             print(f"[OCR] Downloaded {len(file_bytes)} bytes ({file_mb:.1f} MB)")
 
             if file_mb > MAX_FILE_SIZE_MB:
-                ocr_page_progress.pop(document_id, None)
+                self.state.page_progress.pop(document_id, None)
                 error_msg = (
                     f"Dokument zu groß für OCR ({file_mb:.1f} MB > {MAX_FILE_SIZE_MB} MB). "
                     "Wird zur Ignore-Liste hinzugefügt."
@@ -617,7 +616,7 @@ class OcrService:
         except ValueError:
             raise
         except Exception as e:
-            ocr_page_progress.pop(document_id, None)
+            self.state.page_progress.pop(document_id, None)
             if "404" in str(e):
                 error_msg = "Originaldatei fehlt (404 Not Found)."
                 ignore_list = load_ocr_ignore_list()
@@ -635,7 +634,7 @@ class OcrService:
             if native_text and len(native_text) > 50:
                 logger.info(f"Found native text in PDF ({len(native_text)} chars). Skipping OCR.")
                 print(f"[OCR] Native text found ({len(native_text)} chars). Skipping vision OCR.")
-                ocr_page_progress.pop(document_id, None)
+                self.state.page_progress.pop(document_id, None)
                 duration = time.time() - start_time
                 return {
                     "document_id": document_id, "title": title,
@@ -644,17 +643,16 @@ class OcrService:
                     "ocr_duration": duration, "ocr_pages": 0, "source": "native_pdf",
                 }
 
-        ocr_page_progress[document_id]["status"] = "converting"
+        self.state.page_progress[document_id].status = "converting"
         images = await self._convert_to_images(file_bytes, doc, document_id, title)
         if not images:
-            ocr_page_progress.pop(document_id, None)
+            self.state.page_progress.pop(document_id, None)
             raise ValueError("Keine Seiten aus dem Dokument extrahiert")
 
         total_pages = len(images)
-        ocr_page_progress[document_id].update({
-            "total_pages": total_pages, "status": "processing",
-            "pages": [{"page": i + 1, "status": "pending", "chars": 0} for i in range(total_pages)],
-        })
+        self.state.page_progress[document_id].total_pages = total_pages
+        self.state.page_progress[document_id].status = "processing"
+        self.state.page_progress[document_id].pages = [PageProgress(page=i + 1) for i in range(total_pages)]
 
         completed_pages = {}
         if db_session:
@@ -667,11 +665,11 @@ class OcrService:
                     print(f"[OCR] Resume: found {len(completed_pages)} completed pages in DB")
                     for pg_num, pg_text in completed_pages.items():
                         idx = pg_num - 1
-                        if idx < len(ocr_page_progress[document_id]["pages"]):
-                            ocr_page_progress[document_id]["pages"][idx] = {
-                                "page": pg_num, "status": "done", "chars": len(pg_text)
-                            }
-                    ocr_page_progress[document_id]["done"] = len(completed_pages)
+                        if idx < len(self.state.page_progress[document_id].pages):
+                            self.state.page_progress[document_id].pages[idx] = PageProgress(
+                                page=pg_num, status="done", chars=len(pg_text)
+                            )
+                    self.state.page_progress[document_id].done = len(completed_pages)
 
         MAX_PAGE_RETRIES = 3
         full_text_parts = {}
@@ -685,8 +683,8 @@ class OcrService:
                 print(f"[OCR] Page {page_num}/{total_pages}: resumed from DB ({len(completed_pages[page_num])} chars)")
                 continue
 
-            ocr_page_progress[document_id]["current_page"] = page_num
-            ocr_page_progress[document_id]["pages"][i]["status"] = "processing"
+            self.state.page_progress[document_id].current_page = page_num
+            self.state.page_progress[document_id].pages[i].status = "processing"
 
             model_params = self.get_model_params(self.model)
             optimal_size = max(self.max_image_size, model_params["max_image_size"])
@@ -718,10 +716,10 @@ class OcrService:
                         )
 
                     full_text_parts[page_num] = page_text
-                    ocr_page_progress[document_id]["pages"][i] = {
-                        "page": page_num, "status": "done", "chars": len(page_text)
-                    }
-                    ocr_page_progress[document_id]["done"] += 1
+                    self.state.page_progress[document_id].pages[i] = PageProgress(
+                        page=page_num, status="done", chars=len(page_text)
+                    )
+                    self.state.page_progress[document_id].done += 1
                     print(f"[OCR] Page {page_num}: OK ({len(page_text)} chars, {page_duration:.1f}s)")
                     break
 
@@ -739,15 +737,15 @@ class OcrService:
                         db_session, document_id, page_num, total_pages,
                         None, "error", MAX_PAGE_RETRIES, 0, last_error
                     )
-                ocr_page_progress[document_id]["pages"][i] = {
-                    "page": page_num, "status": "error", "chars": 0, "error": last_error
-                }
-                ocr_page_progress[document_id]["errors"] += 1
+                    self.state.page_progress[document_id].pages[i] = PageProgress(
+                        page=page_num, status="error", chars=0, error=last_error
+                    )
+                    self.state.page_progress[document_id].errors += 1
                 failed_pages.append(page_num)
                 print(f"[OCR] Page {page_num}: FAILED after {MAX_PAGE_RETRIES} attempts")
 
         if failed_pages:
-            ocr_page_progress[document_id]["status"] = "partial"
+            self.state.page_progress[document_id].status = "partial"
             raise ValueError(
                 f"OCR fehlgeschlagen auf Seite(n) {failed_pages} von {total_pages}. "
                 f"{len(full_text_parts)}/{total_pages} Seiten gespeichert -- "
@@ -757,7 +755,7 @@ class OcrService:
         new_content = "\n\n".join(full_text_parts[p] for p in sorted(full_text_parts.keys()))
         duration = time.time() - start_time
 
-        ocr_page_progress[document_id]["status"] = "complete"
+        self.state.page_progress[document_id].status = "complete"
 
         if db_session:
             await self._cleanup_page_results(db_session, document_id)
@@ -913,7 +911,6 @@ class OcrService:
         set_finish_tag: bool = True
     ) -> Dict[str, Any]:
         """Apply OCR result to document and optionally set ocrfinish tag."""
-        global batch_state
         start_time = time.time()
 
         await paperless_client.update_document(document_id, {"content": new_content})
@@ -954,30 +951,27 @@ class OcrService:
         set_finish_tag: bool = True,
         remove_runocr_tag: bool = True
     ) -> None:
-        """Run batch OCR. Updates batch_state in-place for progress tracking."""
-        global batch_state
-
-        batch_state.update({
-            "running": True,
-            "should_stop": False,
-            "total": 0,
-            "processed": 0,
-            "current_document": None,
-            "errors": [],
-            "log": [],
-            "mode": mode
-        })
+        """Run batch OCR. Updates self.state.batch in-place for progress tracking."""
+        self.state.batch.running = True
+        self.state.batch.should_stop = False
+        self.state.batch.total = 0
+        self.state.batch.processed = 0
+        self.state.batch.current_document = None
+        self.state.batch.errors = []
+        self.state.batch.log = []
+        self.state.batch.mode = mode
+        self.state.batch.paused = False
 
         lock_acquired = False
         try:
             if ollama_is_locked():
                 holder = ollama_holder()
-                batch_state["log"].append(f"⏳ Warte auf {holder} (Ollama belegt)...")
+                self.state.batch.log.append(f"⏳ Warte auf {holder} (Ollama belegt)...")
                 logger.info(f"[OCR-Batch] Ollama belegt durch {holder}, warte...")
             lock_acquired = await ollama_acquire("ocr-batch", timeout=600)
             if not lock_acquired:
-                batch_state["log"].append("❌ Ollama-Lock nicht erhalten nach 10 Min – Abbruch.")
-                batch_state["running"] = False
+                self.state.batch.log.append("❌ Ollama-Lock nicht erhalten nach 10 Min – Abbruch.")
+                self.state.batch.running = False
                 return
 
             ocrfinish_tag = await paperless_client.get_or_create_tag(TAG_OCR_FINISH)
@@ -997,14 +991,14 @@ class OcrService:
 
             documents = []
 
-            batch_state["log"].append("🔎 Prüfe verfügbare Ollama-Server...")
+            self.state.batch.log.append("🔎 Prüfe verfügbare Ollama-Server...")
             if await self.find_best_server():
-                batch_state["log"].append(f"🚀 Verbunden mit: {self.get_current_url()}")
+                self.state.batch.log.append(f"🚀 Verbunden mit: {self.get_current_url()}")
             else:
-                batch_state["log"].append(f"⚠️ Warnung: Kein Server antwortet schnell. Nutze {self.get_current_url()}")
+                self.state.batch.log.append(f"⚠️ Warnung: Kein Server antwortet schnell. Nutze {self.get_current_url()}")
 
             if mode == "all":
-                batch_state["log"].append("⏳ Lade Dokumentenliste von Paperless (das kann dauern)...")
+                self.state.batch.log.append("⏳ Lade Dokumentenliste von Paperless (das kann dauern)...")
                 all_docs = None
                 for _attempt in range(3):
                     try:
@@ -1013,14 +1007,14 @@ class OcrService:
                     except Exception as fetch_err:
                         if _attempt < 2:
                             wait_sec = 30 * (_attempt + 1)
-                            batch_state["log"].append(
+                            self.state.batch.log.append(
                                 f"⚠️ Paperless nicht erreichbar (Versuch {_attempt + 1}/3): {fetch_err} – "
                                 f"Retry in {wait_sec}s..."
                             )
                             logger.warning(f"batch_ocr: get_documents failed (attempt {_attempt+1}): {fetch_err}")
                             await asyncio.sleep(wait_sec)
                         else:
-                            batch_state["log"].append(
+                            self.state.batch.log.append(
                                 f"❌ Paperless nach 3 Versuchen nicht erreichbar – Batch abgebrochen."
                             )
                             logger.error(f"batch_ocr: get_documents failed after 3 attempts: {fetch_err}")
@@ -1032,7 +1026,7 @@ class OcrService:
                     and ocrreview_tag_id not in d.get("tags", [])
                     and ocrerror_tag_id not in d.get("tags", [])
                 ]
-                batch_state["log"].append(
+                self.state.batch.log.append(
                     f"📋 Modus: Alle Dokumente ({len(documents)} ohne ocrfinish/ocrpruefen/ocrfehler Tag)"
                 )
 
@@ -1045,7 +1039,7 @@ class OcrService:
                         and ocrreview_tag_id not in d.get("tags", [])
                         and ocrerror_tag_id not in d.get("tags", [])
                     ]
-                batch_state["log"].append(
+                self.state.batch.log.append(
                     f"🏷️ Modus: Nur mit Tag 'runocr' ({len(documents)} Dokumente)"
                 )
 
@@ -1056,8 +1050,8 @@ class OcrService:
                         if doc and ocrfinish_tag_id not in doc.get("tags", []):
                             documents.append(doc)
                     except Exception:
-                        batch_state["errors"].append(f"Dokument {doc_id} nicht gefunden")
-                batch_state["log"].append(
+                        self.state.batch.errors.append(f"Dokument {doc_id} nicht gefunden")
+                self.state.batch.log.append(
                     f"✏️ Modus: Manuell ({len(documents)} Dokumente)"
                 )
 
@@ -1067,36 +1061,36 @@ class OcrService:
                 documents = [d for d in documents if d.get("id") not in ignored_ids]
                 skipped = before_count - len(documents)
                 if skipped > 0:
-                    batch_state["log"].append(f"🚫 {skipped} Dokument(e) übersprungen (OCR Ignore-Liste)")
+                    self.state.batch.log.append(f"🚫 {skipped} Dokument(e) übersprungen (OCR Ignore-Liste)")
                     print(f"[OCR] Skipped {skipped} ignored documents")
 
-            batch_state["total"] = len(documents)
+            self.state.batch.total = len(documents)
 
             if not documents:
-                batch_state["log"].append("⚠️ Keine Dokumente zum Verarbeiten gefunden.")
+                self.state.batch.log.append("⚠️ Keine Dokumente zum Verarbeiten gefunden.")
                 return
 
             for i, doc in enumerate(documents):
-                if batch_state["should_stop"]:
-                    batch_state["log"].append("🛑 Batch-OCR wurde gestoppt.")
+                if self.state.batch.should_stop:
+                    self.state.batch.log.append("🛑 Batch-OCR wurde gestoppt.")
                     break
 
-                if batch_state["paused"]:
-                    batch_state["log"].append("⏸️ Batch-OCR pausiert...")
-                    while batch_state["paused"]:
-                        if batch_state["should_stop"]:
+                if self.state.batch.paused:
+                    self.state.batch.log.append("⏸️ Batch-OCR pausiert...")
+                    while self.state.batch.paused:
+                        if self.state.batch.should_stop:
                             break
                         await asyncio.sleep(1)
-                    if not batch_state["should_stop"]:
-                        batch_state["log"].append("▶️ Batch-OCR fortgesetzt.")
+                    if not self.state.batch.should_stop:
+                        self.state.batch.log.append("▶️ Batch-OCR fortgesetzt.")
 
-                if batch_state["should_stop"]:
+                if self.state.batch.should_stop:
                     break
 
                 doc_id = doc.get("id")
                 doc_title = doc.get("title", f"Dokument {doc_id}")
-                batch_state["current_document"] = {"id": doc_id, "title": doc_title}
-                batch_state["log"].append(f"🔄 [{i+1}/{len(documents)}] Verarbeite: {doc_title} (ID: {doc_id})")
+                self.state.batch.current_document = {"id": doc_id, "title": doc_title}
+                self.state.batch.log.append(f"🔄 [{i+1}/{len(documents)}] Verarbeite: {doc_title} (ID: {doc_id})")
 
                 try:
                     from app.database import async_session
@@ -1113,7 +1107,7 @@ class OcrService:
                         needs_review = False
                         if old_len > 100 and new_len < old_len * QUALITY_THRESHOLD:
                             ratio = round(new_len / old_len * 100) if old_len > 0 else 0
-                            batch_state["log"].append(
+                            self.state.batch.log.append(
                                 f"🔁 {doc_title}: Qualitätscheck fehlgeschlagen ({ratio}% des Originals) → Automatischer Retry..."
                             )
                             print(f"[OCR] Quality check failed for {doc_id} ({ratio}%), retrying OCR...")
@@ -1130,7 +1124,7 @@ class OcrService:
                                     new_content = retry_content
                                     new_len = retry_len
                                     ocr_duration += retry_result.get("ocr_duration", 0)
-                                    batch_state["log"].append(
+                                    self.state.batch.log.append(
                                         f"🔁 {doc_title}: Retry lieferte besseres Ergebnis ({retry_len} vs {new_len - (retry_len - new_len)} Zeichen)"
                                     )
                                     print(f"[OCR] Retry improved: {retry_len} chars (was {new_len - (retry_len - new_len)})")
@@ -1139,12 +1133,12 @@ class OcrService:
                                         new_content = retry_content
                                         new_len = retry_len
                                     ocr_duration += retry_result.get("ocr_duration", 0)
-                                    batch_state["log"].append(
+                                    self.state.batch.log.append(
                                         f"🔁 {doc_title}: Retry ähnliches Ergebnis ({retry_len} Zeichen)"
                                     )
                                     print(f"[OCR] Retry similar: {retry_len} chars")
                             except Exception as retry_err:
-                                batch_state["log"].append(
+                                self.state.batch.log.append(
                                     f"🔁 {doc_title}: Retry fehlgeschlagen - {str(retry_err)}"
                                 )
                                 print(f"[OCR] Retry failed for {doc_id}: {retry_err}")
@@ -1154,7 +1148,7 @@ class OcrService:
                                 needs_review = True
                                 ratio = round(new_len / old_len * 100) if old_len > 0 else 0
                                 suggest_keep_original = old_len > 500 and ratio < 25
-                                batch_state["log"].append(
+                                self.state.batch.log.append(
                                     f"⚠️ {doc_title}: Auch nach Retry nur {ratio}% des Originals "
                                     f"({new_len} vs {old_len} Zeichen) → In Prüfliste"
                                 )
@@ -1181,11 +1175,11 @@ class OcrService:
                                             add_tags=add_t if add_t else None,
                                             remove_tags=rem_t if rem_t else None
                                         )
-                                        batch_state["log"].append(f"🏷️ Tag 'ocrpruefen' an {doc_title} gehängt.")
+                                        self.state.batch.log.append(f"🏷️ Tag 'ocrpruefen' an {doc_title} gehängt.")
                                 except Exception as tag_err:
                                     logger.error(f"Failed to set ocrpruefen tag for {doc_id}: {tag_err}")
                             else:
-                                batch_state["log"].append(
+                                self.state.batch.log.append(
                                     f"✅ {doc_title}: Retry erfolgreich! Qualität jetzt OK ({new_len} Zeichen)"
                                 )
                                 print(f"[OCR] Retry fixed quality for {doc_id}: {new_len} chars now passes threshold")
@@ -1221,7 +1215,7 @@ class OcrService:
                                             await asyncio.sleep(2)
                                         else:
                                             logger.error(f"Tag update for doc {doc_id} failed after retry: {e}")
-                                            batch_state["log"].append(f"⚠️ {doc_title}: Tag-Update 2x fehlgeschlagen: {e}")
+                                            self.state.batch.log.append(f"⚠️ {doc_title}: Tag-Update 2x fehlgeschlagen: {e}")
 
                             try:
                                 self.save_stats(doc_id, ocr_duration, ocr_pages, new_len, success=tag_success)
@@ -1229,12 +1223,12 @@ class OcrService:
                                 pass
 
                             if not tag_success:
-                                batch_state["log"].append(f"⚠️ {doc_title}: Content OK, aber ocrfinish-Tag fehlt! ({new_len} Zeichen)")
+                                self.state.batch.log.append(f"⚠️ {doc_title}: Content OK, aber ocrfinish-Tag fehlt! ({new_len} Zeichen)")
                             else:
-                                batch_state["log"].append(f"✅ {doc_title}: OCR erfolgreich ({new_len} Zeichen)")
+                                self.state.batch.log.append(f"✅ {doc_title}: OCR erfolgreich ({new_len} Zeichen)")
                     else:
-                        batch_state["log"].append(f"⚠️ {doc_title}: Kein Text erkannt")
-                        batch_state["errors"].append(f"{doc_title}: Kein Text erkannt")
+                        self.state.batch.log.append(f"⚠️ {doc_title}: Kein Text erkannt")
+                        self.state.batch.errors.append(f"{doc_title}: Kein Text erkannt")
 
                 except Exception as e:
                     try:
@@ -1242,8 +1236,8 @@ class OcrService:
                     except:
                         pass
                     error_msg = f"❌ {doc_title}: Fehler - {str(e)}"
-                    batch_state["log"].append(error_msg)
-                    batch_state["errors"].append(error_msg)
+                    self.state.batch.log.append(error_msg)
+                    self.state.batch.errors.append(error_msg)
                     logger.error(f"OCR error for document {doc_id}: {e}")
 
                     err_count = increment_ocr_error(doc_id, doc_title, str(e))
@@ -1267,41 +1261,40 @@ class OcrService:
                                     "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S")
                                 })
                                 save_ocr_error_list(error_list)
-                            batch_state["log"].append(
+                            self.state.batch.log.append(
                                 f"🚫 {doc_title}: {err_count}x fehlgeschlagen → Tag 'ocrfehler' gesetzt, wird nicht mehr verarbeitet"
                             )
                             print(f"[OCR] Doc {doc_id} permanently marked as failed ({err_count} failures)")
                         except Exception as tag_err:
                             logger.error(f"Failed to set ocrfehler tag for {doc_id}: {tag_err}")
                     else:
-                        batch_state["log"].append(
+                        self.state.batch.log.append(
                             f"⚠️ {doc_title}: Fehler {err_count}/{MAX_ERROR_COUNT} - wird beim nächsten Lauf erneut versucht"
                         )
 
-                batch_state["processed"] = i + 1
+                self.state.batch.processed = i + 1
 
                 await asyncio.sleep(5)
 
-            batch_state["log"].append(
-                f"🏁 Fertig! {batch_state['processed']}/{batch_state['total']} Dokumente verarbeitet, "
-                f"{len(batch_state['errors'])} Fehler."
+            self.state.batch.log.append(
+                f"🏁 Fertig! {self.state.batch.processed}/{self.state.batch.total} Dokumente verarbeitet, "
+                f"{len(self.state.batch.errors)} Fehler."
             )
 
         except Exception as e:
             import traceback
             error_details = traceback.format_exc()
-            batch_state["log"].append(f"💥 Kritischer Fehler: {str(e)}")
-            batch_state["log"].append(f"Traceback: {error_details}")
+            self.state.batch.log.append(f"💥 Kritischer Fehler: {str(e)}")
+            self.state.batch.log.append(f"Traceback: {error_details}")
             logger.error(f"Batch OCR critical error: {e}\n{error_details}")
         finally:
             if lock_acquired:
                 ollama_release("ocr-batch")
-            batch_state["running"] = False
-            batch_state["current_document"] = None
+            self.state.batch.running = False
+            self.state.batch.current_document = None
 
     async def watchdog_loop(self, paperless_client):
         """Continuous background loop to check for new documents."""
-        global watchdog_state, batch_state
         from datetime import datetime
 
         logger.info("Watchdog started")
@@ -1327,12 +1320,12 @@ class OcrService:
             except Exception:
                 return []
 
-        while watchdog_state["enabled"]:
+        while self.state.watchdog.enabled:
             try:
-                watchdog_state["running"] = True
+                self.state.watchdog.running = True
 
-                if batch_state["running"] or single_ocr_running["value"] or ollama_is_locked():
-                    reason = "Batch" if batch_state["running"] else "Single-OCR" if single_ocr_running["value"] else f"Ollama belegt ({ollama_holder()})"
+                if self.state.batch.running or self.state.is_locked() or ollama_is_locked():
+                    reason = "Batch" if self.state.batch.running else "Single-OCR" if self.state.is_locked() else f"Ollama belegt ({ollama_holder()})"
                     logger.info(f"Watchdog: {reason} aktiv, ueberspringe diesen Zyklus")
                 else:
                     logger.info("Watchdog checking for new documents...")
@@ -1361,19 +1354,19 @@ class OcrService:
                             remove_runocr_tag=True
                         )
 
-                watchdog_state["last_run"] = datetime.now().isoformat()
+                self.state.watchdog.last_run = datetime.now().isoformat()
 
             except Exception as e:
                 logger.error(f"Watchdog error: {e}")
                 print(f"[OCR] Watchdog error: {e}")
 
-            watchdog_state["running"] = False
-            interval_min = watchdog_state.get("interval_minutes", 1)
+            self.state.watchdog.running = False
+            interval_min = self.state.watchdog.get("interval_minutes", 1)
             for _ in range(interval_min * 60):
-                if not watchdog_state["enabled"]:
+                if not self.state.watchdog.enabled:
                     break
                 await asyncio.sleep(1)
 
-        watchdog_state["running"] = False
+        self.state.watchdog.running = False
         logger.info("Watchdog stopped")
         print("[OCR] Watchdog stopped")

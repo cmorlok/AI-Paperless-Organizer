@@ -12,6 +12,7 @@ from app.services.similarity.protocol import SimilarityService
 from app.services.merge.protocol import MergeService
 from app.services.statistics.protocol import StatisticsService
 from app.services.ocr.protocol import OcrService
+from app.services.ocr.state import OcrState
 from app.services.rag.protocol import RAGService
 from app.services.classifier.protocol import DocumentClassifierService
 from app.services.duplicate.protocol import DuplicateService
@@ -35,6 +36,10 @@ class AppProvider(Provider):
     #   Plan 02: OcrState provider
     #   Plan 03: AutoClassifyState provider
     #   Plan 04: CloudSyncState and DuplicateScanState providers
+
+    @provide(scope=Scope.APP)
+    def ocr_state(self) -> OcrState:
+        return OcrState()
 
     @provide(scope=Scope.APP)
     def session_factory(self) -> async_sessionmaker:
