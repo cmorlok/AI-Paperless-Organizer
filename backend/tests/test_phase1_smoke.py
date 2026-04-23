@@ -110,8 +110,8 @@ class TestPhase1Smoke:
 
     def test_ocr_service_importable(self):
         """OCR service must import without error (uses litellm)."""
-        from app.services.ocr.state import batch_state
-        assert batch_state is not None
+        from app.services.ocr.state import OcrState
+        assert OcrState is not None
         print("PASS: OCR service importable")
 
     def test_app_main_loads(self):
