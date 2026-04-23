@@ -30,6 +30,12 @@ from app.services.cloud_import.service import CloudImportService as CloudImportS
 
 
 class AppProvider(Provider):
+    # State classes — APP-scoped singletons (Phase 05)
+    # Each service plan adds its own state provider here:
+    #   Plan 02: OcrState provider
+    #   Plan 03: AutoClassifyState provider
+    #   Plan 04: CloudSyncState and DuplicateScanState providers
+
     @provide(scope=Scope.APP)
     def session_factory(self) -> async_sessionmaker:
         return async_session
