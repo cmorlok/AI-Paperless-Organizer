@@ -90,6 +90,7 @@ async def lifespan(app: FastAPI):
                 service = await ctx.get(OcrService)
                 ocr_state = await ctx.get(OcrState)
                 _ocr_state = ocr_state
+                ocr_state.reset()
                 ocr_state.watchdog.enabled = True
                 ocr_state.watchdog.interval_minutes = ocr_settings.get("watchdog_interval", 5)
                 loop = asyncio.get_running_loop()
@@ -107,6 +108,7 @@ async def lifespan(app: FastAPI):
         try:
             async with di_container() as ctx:
                 ac_state: AutoClassifyState = await ctx.get(AutoClassifyState)
+                ac_state.reset()
                 ac_state.enabled = True
             asyncio.get_running_loop().create_task(auto_classify_loop(di_container))
             logging.getLogger(__name__).info("Auto-classify auto-started from KV store")
