@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, Query, HTTPException
 from fastapi.responses import Response
 from typing import List, Dict, Any
-from app.services.paperless import PaperlessClient
+from app.services.paperless.protocol import PaperlessClient
 from pydantic import BaseModel
 import logging
 from dishka.integrations.fastapi import inject

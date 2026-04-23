@@ -18,10 +18,10 @@ from app.database import get_db
 from dishka.integrations.fastapi import inject
 from dishka import FromDishka
 
-from app.services.paperless import PaperlessClient
-from app.services.ocr import (
-    OcrService,
-    OcrState,
+from app.services.paperless.protocol import PaperlessClient
+from app.services.ocr.protocol import OcrService
+from app.services.ocr.state import OcrState
+from app.services.ocr.service import (
     load_review_queue,
     save_review_queue,
     load_ocr_ignore_list,
@@ -36,7 +36,7 @@ from app.services.ocr import (
     TAG_OCR_FINISH,
     TAG_OCR_ERROR,
 )
-from app.services.llm import LLMService as LLMProviderService
+from app.services.llm.protocol import LLMService as LLMProviderService
 from app.services.ocr.state import OcrCompareState
 
 logger = logging.getLogger(__name__)

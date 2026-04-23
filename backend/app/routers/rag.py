@@ -8,7 +8,7 @@ from starlette.requests import Request
 from dishka.integrations.fastapi import inject
 from dishka import FromDishka
 
-from app.services.rag import RAGService
+from app.services.rag.protocol import RAGService
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
