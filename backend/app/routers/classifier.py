@@ -418,11 +418,11 @@ async def get_document_types_from_paperless(
     return types
 
 
-# --- Ollama ---
+# --- Local Models ---
 
 THINKING_MODEL_PREFIXES = ("qwen3", "deepseek-r1", "qwq")
 
-OLLAMA_RECOMMENDED_MODELS = {
+LOCAL_RECOMMENDED_MODELS = {
     "qwen2.5:3b": {
         "text": "★ TOP-EMPFEHLUNG -- Schnell (~5-10s), praezises JSON, ideal fuer Klassifizierung",
         "category": "standard",
