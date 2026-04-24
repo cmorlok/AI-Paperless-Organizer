@@ -511,25 +511,6 @@ async def stop_batch_ocr(state: FromDishka[OcrState] = None):
     return {"stopped": True, "message": "Batch-Job wird gestoppt..."}
 
 
-# --- Tag Management ---
-
-@router.get("/tags/ensure")
-@inject
-async def ensure_ocr_tags(
-    client: FromDishka[PaperlessClient] = None
-):
-    """Ensure runocr and ocrfinish tags exist in Paperless."""
-    try:
-        runocr_tag = await client.get_or_create_tag("runocr")
-        ocrfinish_tag = await client.get_or_create_tag("ocrfinish")
-        return {
-            "runocr": {"id": runocr_tag.get("id"), "name": "runocr"},
-            "ocrfinish": {"id": ocrfinish_tag.get("id"), "name": "ocrfinish"}
-        }
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Tag-Fehler: {str(e)}")
-
-
 # --- Review Queue ---
 
 @router.get("/review/queue")
@@ -898,8 +879,6 @@ async def _wait_for_ollama_ready(max_wait: int = 60) -> bool:
                 pass
         
         print(f"[Compare] Ollama nicht erreichbar, warte {interval}s... ({waited}/{max_wait}s)")
-        compare_state.phase = "waiting_ollama"
-        compare_state.elapsed_seconds = round(time.time() - (compare_state.job_start or time.time()), 1)
         await asyncio.sleep(interval)
         waited += interval
     
@@ -1072,7 +1051,7 @@ async def _run_compare_job(ocr_service: OcrService, paperless_client, document_i
 
             # If model had an error, wait for Ollama to recover before next model
             if error_msg:
-                print(f"[Compare] Modell hatte Fehler, warte 5s auf Ollama-Recovery...")
+                print("[Compare] Modell hatte Fehler, warte 5s auf Ollama-Recovery...")
                 await asyncio.sleep(5)
 
         compare_state.phase = "done"
@@ -1281,7 +1260,7 @@ WICHTIG:
         cleaned = raw_response.strip()
         if cleaned.startswith("```"):
             lines = cleaned.split("\n")
-            lines = [l for l in lines if not l.strip().startswith("```")]
+            lines = [line for line in lines if not line.strip().startswith("```")]
             cleaned = "\n".join(lines)
         
         try:
