@@ -7,6 +7,14 @@ import asyncio
 import logging
 from typing import Optional, List, Dict
 
+from .exceptions import (
+    PaperlessError,
+    PaperlessNotFoundError,
+    PaperlessAuthError,
+    PaperlessServerError,
+    PaperlessConnectionError,
+)
+
 logger = logging.getLogger(__name__)
 from sqlalchemy import select  # noqa: E402
 from app.models import PaperlessSettings  # noqa: E402
@@ -46,6 +54,29 @@ class PaperlessClient:
                 } if self.api_token else {}
         self._config_loaded = True
 
+    def _handle_response_errors(self, response: httpx.Response) -> None:
+        """
+        Raise appropriate PaperlessError for failed HTTP responses.
+
+        Args:
+            response: The httpx Response object
+
+        Raises:
+            PaperlessNotFoundError: HTTP 404
+            PaperlessAuthError: HTTP 401 or 403
+            PaperlessServerError: HTTP 500+ or unmapped 4xx (including 422)
+        """
+        if response.status_code == 404:
+            raise PaperlessNotFoundError(f"Resource not found: {response.url}")
+        elif response.status_code in (401, 403):
+            raise PaperlessAuthError(f"Paperless auth error: {response.status_code}")
+        elif response.status_code >= 400:
+            # Catch ALL 4xx codes including 422 Unprocessable Entity
+            # Review feedback: 422 was falling through to raise_for_status which raises httpx.HTTPStatusError
+            # Now it raises PaperlessServerError consistently
+            raise PaperlessServerError(f"Paperless error: {response.status_code} {response.reason_phrase}")
+        response.raise_for_status()
+
     async def _request(
         self,
         method: str,
@@ -57,34 +88,46 @@ class PaperlessClient:
         await self._ensure_config()
         if not self.base_url:
             raise ValueError("Paperless URL not configured")
-        
+
         url = f"{self.base_url}/api{endpoint}"
-        
-        async with httpx.AsyncClient(timeout=120.0, follow_redirects=True, verify=False) as client:
-            response = await client.request(
-                method=method,
-                url=url,
-                headers=self.headers,
-                params=params,
-                json=json
-            )
-            if not response.is_success:
-                # Log the full Paperless error response for debugging
-                try:
-                    err_body = response.json()
-                except Exception:
-                    err_body = response.text[:500]
-                import logging as _log
-                _log.getLogger(__name__).error(
-                    f"Paperless API error {response.status_code} for {method} {endpoint}: {err_body}"
+
+        # Step 1: Do the HTTP request (connection errors here, no Paperless errors yet)
+        try:
+            async with httpx.AsyncClient(timeout=120.0, follow_redirects=True, verify=False) as client:
+                response = await client.request(
+                    method=method,
+                    url=url,
+                    headers=self.headers,
+                    params=params,
+                    json=json
                 )
-                response.raise_for_status()
+        except httpx.TimeoutException as e:
+            raise PaperlessConnectionError(f"Paperless request timed out: {e}")
+        except httpx.ConnectError as e:
+            raise PaperlessConnectionError(f"Paperless connection failed: {e}")
+        except httpx.HTTPError as e:
+            # Catch other httpx HTTP errors (shouldn't happen given the above)
+            raise PaperlessConnectionError(f"Paperless HTTP error: {e}")
 
-            # DELETE requests often return 204 No Content
-            if response.status_code == 204 or not response.content:
-                return None
+        # Step 2: Handle HTTP response errors (called AFTER async with block exits cleanly)
+        try:
+            self._handle_response_errors(response)
+        except PaperlessError:
+            # Log the full Paperless error response for debugging before re-raising
+            try:
+                err_body = response.json()
+            except Exception:
+                err_body = response.text[:500]
+            logger.error(
+                f"Paperless API error {response.status_code} for {method} {endpoint}: {err_body}"
+            )
+            raise  # Re-raise PaperlessError as-is
 
-            return response.json()
+        # DELETE requests often return 204 No Content
+        if response.status_code == 204 or not response.content:
+            return None
+
+        return response.json()
     
     async def test_connection(self) -> bool:
         """Test if connection to Paperless is working."""
