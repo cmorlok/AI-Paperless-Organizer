@@ -10,12 +10,6 @@ from app.services.paperless import PaperlessClient
 class OcrService(Protocol):
     """Protocol for OCR service."""
 
-    @property
-    def model(self) -> str: ...
-
-    @property
-    def max_image_size(self) -> int: ...
-
     @staticmethod
     def get_model_params(model_name: str) -> dict: ...
 
@@ -50,13 +44,13 @@ class OcrService(Protocol):
 
     def get_stats(self) -> List[Dict[str, Any]]: ...
 
-    def get_current_url(self) -> str: ...
-
-    def _prepare_image_for_ollama(self, img: Any, max_size: int = None) -> bytes: ...
+    def _prepare_image(self, img: Any, max_size: int = None) -> bytes: ...
 
     async def _ocr_single_image(
         self,
         image_bytes: bytes,
+        model: str,
+        api_base: str,
         page_num: int = 0,
         total_pages: int = 0,
         timeout: float = 300.0,

@@ -108,11 +108,13 @@ class AppProvider(Provider):
     def ocr_service(
         self,
         state: OcrState,
+        llm_service: LLMService,
+        session_factory: async_sessionmaker,
     ) -> OcrService:
         return OcrServiceImpl(
-            ollama_url="http://localhost:11434",
-            model="qwen2.5vl:7b",
             state=state,
+            llm_service=llm_service,
+            session_factory=session_factory,
         )
 
     @provide(scope=Scope.APP)

@@ -20,15 +20,10 @@ from dishka import FromDishka
 
 from app.services.paperless.protocol import PaperlessClient
 from app.services.ocr.protocol import OcrService
-from app.services.ocr.state import OcrState
+from app.services.ocr.state import OcrState, DEFAULT_OCR_MODEL, TAG_OCR_REVIEW, TAG_OCR_FINISH, TAG_OCR_ERROR
 from app.services.ocr.service import (
     load_review_queue,
     save_review_queue,
-    DEFAULT_OLLAMA_URL,
-    DEFAULT_OCR_MODEL,
-    TAG_OCR_REVIEW,
-    TAG_OCR_FINISH,
-    TAG_OCR_ERROR,
 )
 from app.services.ocr.ignore import (
     load_ocr_ignore_list,
@@ -53,28 +48,22 @@ SETTINGS_FILE = Path("/app/data/ocr_settings.json")
 
 def load_ocr_settings() -> dict:
     """Load OCR settings from file + key-value store (LLM-08), or return defaults."""
+    # OCR provider/model now come from KV store at runtime; file kept only for backward compat
     defaults = {
-        "ollama_url": DEFAULT_OLLAMA_URL, 
-        "ollama_urls": [DEFAULT_OLLAMA_URL],
         "model": DEFAULT_OCR_MODEL,
         "max_image_size": 1344,
         "smart_skip_enabled": True
     }
     
-    # Load from file
+    # Load from file (legacy, for migration only)
     file_settings = {}
     if SETTINGS_FILE.exists():
         try:
             with open(SETTINGS_FILE, "r") as f:
                 file_settings = json.load(f)
-                if "ollama_urls" not in file_settings:
-                    file_settings["ollama_urls"] = [file_settings.get("ollama_url", DEFAULT_OLLAMA_URL)]
         except Exception:
             pass
     
-    # Merge: file settings as base
-    # Note: KV store overrides are loaded lazily at runtime (LLM-08)
-    # to avoid asyncio issues during module load
     return {**defaults, **file_settings}
 
 
@@ -117,7 +106,8 @@ ocr_settings = load_ocr_settings()
 # --- Pydantic Models ---
 
 class OcrSettingsRequest(BaseModel):
-    ollama_url: str = DEFAULT_OLLAMA_URL
+    # ollama_url/ollama_urls deprecated - provider comes from KV store now
+    ollama_url: str = ""
     ollama_urls: Optional[List[str]] = None
     model: str = DEFAULT_OCR_MODEL
     max_image_size: int = 1344
