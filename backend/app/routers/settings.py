@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
-from typing import List, Optional
+from typing import Optional
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from app.database import get_db
@@ -9,7 +9,6 @@ from app.models.auth_config import AuthConfig
 from app.models.settings_model import (
     LLM_KEY_CLASSIFIER_PROVIDER,
     LLM_KEY_CLASSIFIER_MODEL,
-    LLM_KEY_OCR_PROVIDER,
     LLM_KEY_OCR_MODEL,
 )
 from app.services.llm import list_llm_models, list_llm_providers, PROVIDER_DISPLAY_NAMES

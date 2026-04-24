@@ -2,10 +2,9 @@
 
 from __future__ import annotations
 
-from datetime import datetime, date
+from datetime import date
 from typing import Dict, List, Optional, Any
 from sqlalchemy import select, func
-from app.database import async_session
 from app.models import CleanupStatistics, DailyStats
 
 

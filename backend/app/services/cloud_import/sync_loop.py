@@ -7,7 +7,6 @@ import logging
 from datetime import datetime
 
 from dishka import AsyncContainer
-from sqlalchemy import select
 
 from app.services.paperless import PaperlessClient
 # Import CloudImportService from protocol (not service/impl) — fixed bug
@@ -51,7 +50,7 @@ async def _run_sync_cycle(state: CloudSyncState, container: AsyncContainer) -> N
             service: CloudImportService = await ctx.get(CloudImportService)
 
             async with service.session_factory() as db:
-                src_q = await db.execute(sa_select(CloudSource).where(CloudSource.enabled == True))
+                src_q = await db.execute(sa_select(CloudSource).where(CloudSource.enabled))
                 sources = src_q.scalars().all()
 
                 now = datetime.utcnow()

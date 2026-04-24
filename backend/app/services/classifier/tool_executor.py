@@ -89,8 +89,7 @@ class ToolExecutor:
                     "name": name,
                     "document_count": tag.get("document_count", 0),
                 })
-
-        ignore_total = len(self._tags_ignore_exact) + len(self._tags_ignore_patterns)
+                
         logger.info(f"search_tags('{query}'): {len(all_tags)} total -> {len(results)} after exclusions "
                      f"(excluded_ids={len(self._excluded_tag_ids)}, "
                      f"ignore_exact={len(self._tags_ignore_exact)}, "

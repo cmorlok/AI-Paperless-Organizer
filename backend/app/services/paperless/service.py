@@ -5,12 +5,12 @@ from __future__ import annotations
 import httpx
 import asyncio
 import logging
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict
 
 logger = logging.getLogger(__name__)
-from sqlalchemy import select
-from app.models import PaperlessSettings
-from app.services.cache import get_cache
+from sqlalchemy import select  # noqa: E402
+from app.models import PaperlessSettings  # noqa: E402
+from app.services.cache import get_cache  # noqa: E402
 
 # Cache TTL in seconds (30 minutes - tags/correspondents change rarely)
 CACHE_TTL = 1800
@@ -136,7 +136,7 @@ class PaperlessClient:
         await self._request("DELETE", f"/correspondents/{correspondent_id}/")
         # Invalidate cache
         cache = get_cache()
-        await cache.clear(f"paperless:correspondents:")
+        await cache.clear("paperless:correspondents:")
     
     # Tags
     async def get_tags(self, use_cache: bool = True) -> List[Dict]:
@@ -170,7 +170,7 @@ class PaperlessClient:
         """Delete a tag."""
         await self._request("DELETE", f"/tags/{tag_id}/")
         cache = get_cache()
-        await cache.clear(f"paperless:tags:")
+        await cache.clear("paperless:tags:")
     
     async def delete_tags_bulk(self, tag_ids: List[int]) -> dict:
         """Delete multiple tags in parallel batches for maximum performance."""
@@ -228,7 +228,7 @@ class PaperlessClient:
             updated = [t for t in existing if t.get("id") not in deleted_set]
             await cache.set(cache_key, updated, CACHE_TTL)
         else:
-            await cache.clear(f"paperless:tags:")
+            await cache.clear("paperless:tags:")
         
         return {"deleted": deleted, "deleted_count": len(deleted), "errors": errors, "base_url": self.base_url}
     
@@ -265,7 +265,7 @@ class PaperlessClient:
         await self._request("DELETE", f"/document_types/{doc_type_id}/")
         # Invalidate cache
         cache = get_cache()
-        await cache.clear(f"paperless:document_types:")
+        await cache.clear("paperless:document_types:")
     
     # Documents
     async def get_documents(

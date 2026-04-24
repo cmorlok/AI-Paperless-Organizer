@@ -5,13 +5,18 @@ from __future__ import annotations
 import asyncio
 import json
 import re
-import time
 import traceback
 from collections import defaultdict
 from typing import Optional, Dict, Any, List
 
 import httpx
 import litellm
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.core.logging import get_logger
+from app.database import async_session
+from app.models import LLMProvider
 
 # Local LLM providers that need GPU lock serialization
 LOCAL_LLM_PROVIDERS = frozenset({
@@ -24,7 +29,6 @@ class LLMLockTimeoutError(Exception):
     """Raised when a local LLM is busy and times out waiting for the lock."""
     pass
 
-from app.core.logging import get_logger
 
 logger = get_logger("llm")
 
@@ -32,7 +36,6 @@ logger = get_logger("llm")
 # LiteLLM callback-based request/response logging
 # =========================================================================
 
-from app.services.llm.state import _callbacks_registered
 
 
 def _log_llm(msg: str, data: dict[str, Any]) -> None:
@@ -159,12 +162,6 @@ def log_llm_error(msg: str, exc: Exception):
     tb = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
     print(f"ERROR app.services.llm.service: {msg}: {detail}\n{tb}", flush=True)
     logger.error("%s: %s", msg, detail, exc_info=True)
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
-
-from app.database import async_session
-from app.models import LLMProvider
-from app.models.settings_model import LLM_KEY_CLASSIFIER_MODEL, LLM_KEY_CLASSIFIER_PROVIDER
 
 # Static extra headers injected per provider on every call.
 _PROVIDER_EXTRA_HEADERS: Dict[str, Dict[str, str]] = {
@@ -639,20 +636,21 @@ class LitellmService:
 
         # Local LLMs need serialization (D-17)
         lock = self._locks[provider]
-        try:
-            async with asyncio.timeout(timeout):
-                response = await litellm.acompletion(
-                    model=model_name,
-                    messages=messages,
-                    temperature=temperature,
-                    stream=stream,
-                    **kwargs
-                )
-                if stream:
-                    return response
-                return response.choices[0].message.content
-        except asyncio.TimeoutError:
-            raise LLMLockTimeoutError(
+        async with lock:
+            try:
+                async with asyncio.timeout(timeout):
+                    response = await litellm.acompletion(
+                        model=model_name,
+                        messages=messages,
+                        temperature=temperature,
+                        stream=stream,
+                        **kwargs
+                    )
+                    if stream:
+                        return response
+                    return response.choices[0].message.content
+            except asyncio.TimeoutError:
+                raise LLMLockTimeoutError(
                 f"Local LLM {provider} busy (held by another background job). "
                 f"Try again in a moment."
             )
@@ -755,7 +753,7 @@ class LitellmService:
             token_warning = f"Viele Items ({len(items)})! Geschätzte Tokens: ~{estimated_input_tokens}. Könnte das Limit überschreiten."
 
         # Get LLM response
-        logger.info(f"[LLM] Sending request to LLM provider...")
+        logger.info("[LLM] Sending request to LLM provider...")
         response = await self.complete(prompt)
         logger.info(f"[LLM] Got response, length: {len(response)} chars, first 200: {response[:200]}")
 

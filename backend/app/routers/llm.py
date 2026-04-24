@@ -1,8 +1,7 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter
 from pydantic import BaseModel
 from typing import Optional
 from app.services.llm.protocol import LLMService as LLMProviderService
-from app.services.llm.service import LitellmService
 from dishka.integrations.fastapi import inject
 from dishka import FromDishka
 

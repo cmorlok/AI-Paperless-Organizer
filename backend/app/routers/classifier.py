@@ -11,7 +11,7 @@ from sqlalchemy import select
 from dataclasses import asdict
 
 from dishka.integrations.fastapi import inject
-from dishka import FromDishka, AsyncContainer
+from dishka import FromDishka
 from app.container import container as di_container
 
 from app.database import get_db
@@ -19,7 +19,7 @@ from app.services.paperless.protocol import PaperlessClient
 from app.services.classifier.protocol import DocumentClassifierService
 from app.services.classifier import AutoClassifyState, auto_classify_loop
 from app.models.classifier import (
-    ClassifierConfig, StoragePathProfile, CustomFieldMapping, ClassificationHistory,
+    ClassificationHistory,
 )
 from app.models.settings_model import LLM_KEY_CLASSIFIER_MODEL
 from app.routers.settings import get_setting

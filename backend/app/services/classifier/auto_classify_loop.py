@@ -6,7 +6,6 @@ from dishka import AsyncContainer
 from sqlalchemy import select
 
 from app.core.logging import get_logger
-from app.database import async_session
 from app.models.classifier import ClassificationHistory
 # Internal imports from same package — keep deep to avoid circular imports
 from app.services.classifier.protocol import DocumentClassifierService

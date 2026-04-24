@@ -1,8 +1,8 @@
 """Debug and diagnostics endpoints for network troubleshooting."""
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter
 from pydantic import BaseModel
-from typing import Optional, List
+from typing import Optional
 import httpx
 import socket
 import asyncio
@@ -264,7 +264,7 @@ async def paperless_test(request: PaperlessTestRequest):
                     resp = await client.get(f"{url}/api/", headers=headers)
                     if resp.status_code in [301, 302, 303, 307, 308]:
                         redirect_info = resp.headers.get("location")
-                except:
+                except Exception:
                     pass
             
             return {
@@ -299,9 +299,9 @@ async def get_network_info():
             import subprocess
             result = subprocess.run(["ip", "addr"], capture_output=True, text=True, timeout=5)
             interfaces = result.stdout.split("\n") if result.returncode == 0 else []
-        except:
+        except Exception:
             pass
-        
+
         # Test common hosts
         dns_servers = []
         try:
@@ -309,7 +309,7 @@ async def get_network_info():
                 for line in f:
                     if line.startswith("nameserver"):
                         dns_servers.append(line.split()[1])
-        except:
+        except Exception:
             pass
         
         return {

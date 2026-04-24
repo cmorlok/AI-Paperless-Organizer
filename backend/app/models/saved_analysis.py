@@ -1,6 +1,6 @@
 """Model for saved AI analysis results."""
 
-from sqlalchemy import Column, Integer, String, DateTime, JSON, Text
+from sqlalchemy import Column, Integer, String, DateTime, JSON
 from sqlalchemy.sql import func
 from app.database import Base
 

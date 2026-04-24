@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, Query, HTTPException
+from fastapi import APIRouter, Query, HTTPException
 from fastapi.responses import Response
 from typing import List, Dict, Any
 from app.services.paperless.protocol import PaperlessClient

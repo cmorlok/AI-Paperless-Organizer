@@ -1,7 +1,5 @@
-import json
 import logging
 import os
-import sys
 import time
 import traceback
 from typing import Optional
@@ -19,15 +17,15 @@ from app.database import run_migrations
 init_logging()
 logger = get_logger("app.main")
 
-from app.routers import paperless, correspondents, tags, document_types, settings, llm, debug, statistics, ignored_items, ocr, cleanup, classifier, rag, api_keys, cloud_import, duplicates, auth
-from app.routers.ocr import ocr_settings
-from app.services.ocr import OcrState, OcrService
-from app.services.classifier import AutoClassifyState, auto_classify_loop
-from app.services.paperless import PaperlessClient
-from app.services.rag import RAGService
-from app.services.auth import SessionAuthMiddleware
-from app.database import async_session
-from app.container import container as di_container
+from app.routers import paperless, correspondents, tags, document_types, settings, llm, debug, statistics, ignored_items, ocr, cleanup, classifier, rag, api_keys, cloud_import, duplicates, auth  # noqa: E402
+from app.routers.ocr import ocr_settings  # noqa: E402
+from app.services.ocr import OcrState, OcrService  # noqa: E402
+from app.services.classifier import AutoClassifyState, auto_classify_loop  # noqa: E402
+from app.services.paperless import PaperlessClient  # noqa: E402
+from app.services.rag import RAGService  # noqa: E402
+from app.services.auth import SessionAuthMiddleware  # noqa: E402
+from app.database import async_session  # noqa: E402
+from app.container import container as di_container  # noqa: E402
 
 async def reset_password_if_requested() -> None:
     """Per CONTEXT.md D-14: RESET_PASSWORD=true clears AuthConfig password_hash."""
@@ -50,7 +48,6 @@ async def reset_password_if_requested() -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     import asyncio
-    from app.models.settings_model import PaperlessSettings
     from sqlalchemy import select as sa_select
 
     # Run database migrations (Alembic upgrade to head)
@@ -169,7 +166,7 @@ async def lifespan(app: FastAPI):
         try:
             from app.models.cloud_import import CloudSource
             src_q = await db_sess.execute(
-                sa_select(CloudSource).where(CloudSource.enabled == True)
+                sa_select(CloudSource).where(CloudSource.enabled is True)
             )
             kv_cloud_sync_enabled = src_q.scalars().first() is not None
         except Exception:

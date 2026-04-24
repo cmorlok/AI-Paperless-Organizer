@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from dishka import Provider, Scope, provide, make_async_container, AsyncContainer
-from dishka.integrations.fastapi import setup_dishka
 from typing import AsyncIterator
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 

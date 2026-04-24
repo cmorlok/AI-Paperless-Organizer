@@ -1,6 +1,6 @@
 """Persistent cache model for storing Paperless data."""
 
-from sqlalchemy import Column, Integer, String, Text, DateTime, JSON
+from sqlalchemy import Column, Integer, String, DateTime, JSON
 from sqlalchemy.sql import func
 from app.database import Base
 

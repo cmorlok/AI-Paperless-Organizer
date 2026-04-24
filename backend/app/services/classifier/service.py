@@ -739,10 +739,6 @@ class DocumentClassifierService:
         await self._post_process(result, config, document.content)
 
         classifier_provider_name = await self._get_classifier_provider_name()
-        try:
-            llm_prov = await self._get_llm_provider(classifier_provider_name)
-        except Exception:
-            pass
 
         if self.session_factory is not None:
             async with self.session_factory() as db:
@@ -795,7 +791,6 @@ class DocumentClassifierService:
         slots: List[tuple],
     ) -> Dict[str, Any]:
         """Run classification with N provider/model combos, strictly sequential."""
-        import asyncio
 
         config = await self.get_config()
         document, doc_data = await self._build_document_context(document_id)

@@ -1,6 +1,6 @@
 """Protocol for OCR service."""
 
-from typing import Protocol, runtime_checkable, Any, List, Dict, Optional
+from typing import Protocol, runtime_checkable, Any, List, Dict
 
 # Import PaperlessClient — cross-service, use package-level
 from app.services.paperless import PaperlessClient

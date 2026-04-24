@@ -1,6 +1,6 @@
 """Protocol for Paperless-ngx API client."""
 
-from typing import Protocol, runtime_checkable, Optional, List, Dict, Any
+from typing import Protocol, runtime_checkable, Optional, List, Dict
 
 
 @runtime_checkable

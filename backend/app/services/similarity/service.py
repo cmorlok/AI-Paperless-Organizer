@@ -7,7 +7,6 @@ import re
 import fnmatch
 from typing import Dict, List, Optional, Any
 from sqlalchemy import select
-from app.database import async_session
 from app.models import CustomPrompt, IgnoredTag
 from app.services.paperless.protocol import PaperlessClient
 from app.services.llm.protocol import LLMService
@@ -35,7 +34,7 @@ class SimilarityService:
             result = await db.execute(
                 select(CustomPrompt).where(
                     CustomPrompt.entity_type == entity_type,
-                    CustomPrompt.is_active == True
+                    CustomPrompt.is_active
                 )
             )
             prompt = result.scalar_one_or_none()
@@ -59,12 +58,12 @@ class SimilarityService:
         for pattern_info in ignored_patterns:
             pattern = pattern_info["pattern"]
             is_regex = pattern_info.get("is_regex", False)
-            
+
             if is_regex:
                 try:
                     if re.match(pattern, tag_name, re.IGNORECASE):
                         return True
-                except:
+                except Exception:
                     pass
             else:
                 # Support simple wildcards (* for any characters)
@@ -227,10 +226,6 @@ class SimilarityService:
         if len(groups) == 0:
             return groups
         
-        # Build a lookup of all items by ID and name
-        items_by_id = {item["id"]: item for item in all_items}
-        items_by_name = {item["name"].lower(): item for item in all_items}
-        
         # Collect all suggested names and their members for context
         group_info = []
         for g in groups:
@@ -353,7 +348,7 @@ Wenn nichts zusammengehört: {{"group_merges": [], "add_to_groups": []}}"""
             
             return merged_groups
             
-        except Exception as e:
+        except Exception as _exc:
             # If cross-batch merge fails, return original groups
             return groups
 
@@ -471,10 +466,10 @@ Wenn nichts zusammengehört: {{"group_merges": [], "add_to_groups": []}}"""
                 fixed_json = re.sub(r',(\s*[}\]])', r'\1', json_str)
                 try:
                     result = json.loads(fixed_json)
-                except:
+                except Exception:
                     return {
-                        "nonsense_tags": [], 
-                        "error": f"JSON-Parse-Fehler: {str(je)}", 
+                        "nonsense_tags": [],
+                        "error": f"JSON-Parse-Fehler: {str(je)}",
                         "stats": stats,
                         "raw_response": response[:1000]
                     }
@@ -560,10 +555,10 @@ Wenn nichts zusammengehört: {{"group_merges": [], "add_to_groups": []}}"""
                 fixed_json = re.sub(r',(\s*[}\]])', r'\1', json_str)
                 try:
                     result = json.loads(fixed_json)
-                except:
+                except Exception:
                     return {
-                        "correspondent_tags": [], 
-                        "error": f"JSON-Parse-Fehler: {str(je)}", 
+                        "correspondent_tags": [],
+                        "error": f"JSON-Parse-Fehler: {str(je)}",
                         "stats": stats,
                         "raw_response": response[:1000]
                     }
@@ -653,10 +648,10 @@ Wenn nichts zusammengehört: {{"group_merges": [], "add_to_groups": []}}"""
                 fixed_json = re.sub(r',(\s*[}\]])', r'\1', json_str)
                 try:
                     result = json.loads(fixed_json)
-                except:
+                except Exception:
                     return {
-                        "doctype_tags": [], 
-                        "error": f"JSON-Parse-Fehler: {str(je)}", 
+                        "doctype_tags": [],
+                        "error": f"JSON-Parse-Fehler: {str(je)}",
                         "stats": stats,
                         "raw_response": response[:1000]
                     }

@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import AsyncGenerator, Optional, Dict, Any, List, Tuple
+import re
+from typing import AsyncGenerator, Optional, Dict, Any, List
 
 from sqlalchemy import select as sa_select, func as sa_func, delete as sa_delete
 from app.database import async_session
@@ -142,14 +143,13 @@ class RAGService:
                 search_question = question
         else:
             # Legacy manual enrichment (kept as fallback when LLM rewriting is disabled)
-            import re as _query_re
             if len(question.split()) <= 6 and chat_history:
                 last_user = next(
                     (m["content"] for m in reversed(chat_history) if m["role"] == "user"), ""
                 )
                 if last_user:
                     _NW = r'[A-Z\xc4\xd6\xdc][a-zA-Z\xe4\xf6\xfc\xc4\xd6\xdc\xdf\-]+'
-                    subj_match = _query_re.search(
+                    subj_match = re.search(
                         r'(?:von|über|für|nach|bei|zu|mit|an)[^\S\n]+(' + _NW + r'(?:[^\S\n]+' + _NW + r')+)',
                         last_user
                     )
@@ -257,10 +257,9 @@ class RAGService:
             # (e.g. "Hans-Peter Wilms") and that name appears in the document's first
             # identity chunk, strongly boost it. This prevents a Kaufvertrag that mentions
             # *other* people from outranking the actual document addressed to the queried person.
-            import re as _re_boost
             # Extract capitalized name sequences from the original question (not rewritten)
             # Allow uppercase mid-word for hyphenated names like "Hans-Peter"
-            _name_candidates = _re_boost.findall(
+            _name_candidates = re.findall(
                 r'[A-ZÄÖÜ][a-zA-ZäöüÄÖÜß\-]+(?:\s+[A-ZÄÖÜ][a-zA-ZäöüÄÖÜß\-]+)+', question
             )
             if _name_candidates:
@@ -298,7 +297,6 @@ class RAGService:
         # Build LLM context using the same multi-chunk combined text used for reranking.
         # Additionally, extract key structured facts (dates, names, IDs) from the text
         # and prepend them explicitly so the LLM finds them even in OCR table layouts.
-        import re as _re
 
         # Name word: allows hyphenated first names like "Hans-Peter"
         _NAME_WORD = r'[A-Z\xc4\xd6\xdc][a-zA-Z\xe4\xf6\xfc\xc4\xd6\xdc\xdf\-]+'
@@ -317,7 +315,7 @@ class RAGService:
 
             # Find addressee (non-newline whitespace to avoid multi-line address captures)
             addressees = []
-            for m in _re.finditer(
+            for m in re.finditer(
                 r'(?:Herrn?|Frau)' + _WS + r'(' + _NAME_WORD + r'(?:' + _WS + _NAME_WORD + r')+)', text
             ):
                 addressees.append(m.group(1).strip())
@@ -326,7 +324,7 @@ class RAGService:
             # Avoids returning birthdate when the question is about baptism, address, etc.
             if _wants_birthdate:
                 birthdates = []
-                for m in _re.finditer(r'Geburtsdatum\s*:?\s*(\d{1,2}[.\-/]\d{1,2}[.\-/]\d{4})', text, _re.IGNORECASE):
+                for m in re.finditer(r'Geburtsdatum\s*:?\s*(\d{1,2}[.\-/]\d{1,2}[.\-/]\d{4})', text, re.IGNORECASE):
                     birthdates.append(m.group(1))
                 if birthdates:
                     primary_person = addressees[0] if addressees else None
@@ -342,17 +340,19 @@ class RAGService:
 
             # Tax IDs: only when querying about taxes
             if _wants_tax:
-                for m in _re.finditer(r'Steuernummer\s*:?\s*(\d[\d/\s]{5,20})', text, _re.IGNORECASE):
+                for m in re.finditer(r'Steuernummer\s*:?\s*(\d[\d/\s]{5,20})', text, re.IGNORECASE):
                     facts.append(f"Steuernummer: {m.group(1).strip()}")
 
             # IBAN: only when explicitly relevant (not for every document)
             # (skipped unless a future query type warrants it)
 
             # Deduplicate
-            seen = set(); unique = []
+            seen = set()
+            unique = []
             for f in facts:
                 if f not in seen:
-                    seen.add(f); unique.append(f)
+                    seen.add(f)
+                    unique.append(f)
             return ("📌 " + " | ".join(unique[:6]) + "\n\n") if unique else ""
 
         context_parts = []
@@ -418,7 +418,6 @@ class RAGService:
             yield json.dumps({"type": "status", "message": "Generiere Antwort..."})
 
         # Stream LLM response
-        import re as _re
         full_response = ""
         async for token in self._stream_llm(config, messages):
             full_response += token
@@ -426,11 +425,11 @@ class RAGService:
 
         # Extract cited source indices — [N] notation AND "Quelle N" text references
         cited_set: set[int] = set()
-        for m in _re.findall(r'\[(\d+)\]', full_response):
+        for m in re.findall(r'\[(\d+)\]', full_response):
             idx = int(m)
             if 1 <= idx <= len(sources):
                 cited_set.add(idx)
-        for m in _re.findall(r'[Qq]uelle[n]?\s+(\d+)', full_response):
+        for m in re.findall(r'[Qq]uelle[n]?\s+(\d+)', full_response):
             idx = int(m)
             if 1 <= idx <= len(sources):
                 cited_set.add(idx)
@@ -479,7 +478,7 @@ class RAGService:
                 if finish is not None and finish != "length":
                     break
 
-        except LLMLockTimeoutError as e:
+        except LLMLockTimeoutError:
             # D-18: fail fast for RAG — return clear error to user
             yield "\n\n[Ollama ist gerade belegt (Klassifizierung läuft). Bitte in 30 Sekunden erneut versuchen.]"
         except Exception as e:
@@ -496,8 +495,6 @@ class RAGService:
         The LLM adds synonyms, official German document names and relevant terminology.
         Returns the expanded query string, or the original question on any error.
         """
-        import re as _re
-
         if not question.strip():
             return question
 
@@ -541,7 +538,7 @@ class RAGService:
             # complete_llm returns string when stream=False
             rewritten = result.strip() if isinstance(result, str) else (result.choices[0].message.content or "").strip()
             # Strip any markdown fences or explanatory text
-            rewritten = _re.sub(r'^```.*?\n|```$', '', rewritten, flags=_re.DOTALL).strip()
+            rewritten = re.sub(r'^```.*?\n|```$', '', rewritten, flags=re.DOTALL).strip()
             return rewritten if rewritten else question
         except Exception as e:
             logger.warning(f"Query rewrite failed, using original: {e}")
