@@ -612,6 +612,3 @@ class PaperlessClient:
             )
             response.raise_for_status()
             return response.text  # returns task ID string
-
-
-

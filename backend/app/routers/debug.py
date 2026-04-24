@@ -7,6 +7,13 @@ import httpx
 import socket
 import asyncio
 from urllib.parse import urlparse
+from dishka.integrations.fastapi import inject
+from dishka import FromDishka
+
+from app.services.ocr import OcrState
+from app.services.classifier import AutoClassifyState
+from app.services.cloud_import import CloudSyncState
+from app.services.duplicate import DuplicateScanState
 
 router = APIRouter()
 
@@ -340,4 +347,66 @@ async def run_common_tests():
                 tests.append({"test": f"HTTPS: {url}", "success": False, "result": str(e)})
     
     return {"tests": tests}
+
+
+# --- Service Statuses Endpoint (STATE-08) ---
+
+def _ocr_current_op(state: OcrState) -> str | None:
+    """Get current OCR operation text."""
+    if state.batch.running and state.batch.current_document:
+        doc = state.batch.current_document
+        title = doc.get("title", "?") if isinstance(doc, dict) else "?"
+        return f"Batch: {title}"
+    if state.watchdog.running:
+        return f"Watchdog (Intervall: {state.watchdog.interval_minutes}min)"
+    if state.is_locked():
+        return f"Einzel-OCR ({state.current_lock_holder()})"
+    return None
+
+
+@router.get("/services")
+@inject
+async def get_service_statuses(
+    ocr_state: FromDishka[OcrState] = None,
+    classify_state: FromDishka[AutoClassifyState] = None,
+    cloud_state: FromDishka[CloudSyncState] = None,
+    dup_state: FromDishka[DuplicateScanState] = None,
+):
+    """Return unified status of all background services (read-only)."""
+    return {
+        "services": [
+            {
+                "name": "ocr",
+                "label": "OCR",
+                "enabled": ocr_state.watchdog.enabled,
+                "running": ocr_state.watchdog.running or ocr_state.batch.running,
+                "current_op": _ocr_current_op(ocr_state),
+                "detail": ocr_state.watchdog.model_dump() if ocr_state.watchdog.running else ocr_state.batch.model_dump(),
+            },
+            {
+                "name": "classifier",
+                "label": "Klassifizierung",
+                "enabled": classify_state.enabled,
+                "running": classify_state.enabled and classify_state.running,
+                "current_op": f"Dokument {classify_state.current_doc}" if classify_state.current_doc else None,
+                "detail": classify_state.model_dump(),
+            },
+            {
+                "name": "cloud_import",
+                "label": "Cloud-Import",
+                "enabled": cloud_state.enabled,
+                "running": cloud_state.running,
+                "current_op": cloud_state.current_file,
+                "detail": cloud_state.model_dump(),
+            },
+            {
+                "name": "duplicate",
+                "label": "Duplikat-Scan",
+                "enabled": False,  # duplicate scan is on-demand, not daemon
+                "running": dup_state.running,
+                "current_op": dup_state.phase if dup_state.running else None,
+                "detail": dup_state.model_dump(),
+            },
+        ]
+    }
 

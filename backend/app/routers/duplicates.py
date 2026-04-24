@@ -9,10 +9,10 @@ from sqlalchemy import select, delete, and_
 
 from app.database import get_db
 from app.models.duplicates import DuplicateIgnore
-from app.services.duplicate_service import get_scan_state, _scan_state
+from app.services.duplicate.protocol import DuplicateService
+from app.services.duplicate.state import DuplicateScanState
 from dishka.integrations.fastapi import inject
 from dishka import FromDishka
-from app.services.protocols import DuplicateService
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -33,9 +33,13 @@ class IgnoreRequest(BaseModel):
 
 @router.post("/scan")
 @inject
-async def start_scan(body: ScanRequest, service: FromDishka[DuplicateService] = None):
+async def start_scan(
+    body: ScanRequest,
+    service: FromDishka[DuplicateService] = None,
+    state: FromDishka[DuplicateScanState] = None,
+):
     """Startet einen Duplikat-Scan im Hintergrund."""
-    if _scan_state.get("running"):
+    if state.running:
         raise HTTPException(status_code=409, detail="Scan läuft bereits")
 
     asyncio.create_task(
@@ -49,36 +53,36 @@ async def start_scan(body: ScanRequest, service: FromDishka[DuplicateService] = 
 
 
 @router.get("/status")
-async def scan_status():
+@inject
+async def scan_status(state: FromDishka[DuplicateScanState] = None):
     """Polling-Endpoint für den Scan-Fortschritt."""
-    state = get_scan_state()
     return {
-        "running": state.get("running", False),
-        "phase": state.get("phase", ""),
-        "progress": state.get("progress", 0),
-        "total": state.get("total", 0),
-        "error": state.get("error"),
+        "running": state.running,
+        "phase": state.phase,
+        "progress": state.progress,
+        "total": state.total,
+        "error": state.error,
     }
 
 
 @router.post("/stop")
-async def stop_scan():
+@inject
+async def stop_scan(state: FromDishka[DuplicateScanState] = None):
     """Stoppt den laufenden Scan."""
-    state = get_scan_state()
-    if not state.get("running"):
+    if not state.running:
         return {"status": "not_running"}
-    _scan_state["cancel_requested"] = True
+    state.request_cancel()
     logger.info("Duplicate scan stop requested")
     return {"status": "stopping"}
 
 
 @router.get("/results")
-async def scan_results():
+@inject
+async def scan_results(state: FromDishka[DuplicateScanState] = None):
     """Gibt die Ergebnis-Gruppen des letzten Scans zurück."""
-    state = get_scan_state()
-    if state.get("running"):
+    if state.running:
         raise HTTPException(status_code=409, detail="Scan läuft noch")
-    return {"groups": state.get("results", [])}
+    return {"groups": state.results}
 
 
 # ── Ignore-Liste ─────────────────────────────────────────────────────────────

@@ -33,8 +33,8 @@ class TestPhase1Smoke:
         assert not p.exists(), f"ollama_provider.py still exists at {p}"
 
     def test_llm_service_importable(self):
-        """LLM-01: llm_service.py must be importable with core methods."""
-        from app.services.llm_service import LitellmService
+        """LLM-01: llm service must be importable with core methods."""
+        from app.services.llm.service import LitellmService
 
         # Verify core methods exist
         assert hasattr(LitellmService, "complete")
@@ -51,14 +51,14 @@ class TestPhase1Smoke:
         print("PASS: LitellmService importable with core methods")
 
     def test_all_6_consumers_updated(self):
-        """LLM-01 / DI-01: All 6 consumer files must import LLM types from protocols."""
+        """LLM-01 / DI-01: All consumer files must import LLM types from llm.protocol."""
         consumer_files = [
             "app/routers/llm.py",
             "app/routers/tags.py",
             "app/routers/correspondents.py",
             "app/routers/document_types.py",
             "app/routers/ocr.py",
-            "app/services/similarity.py",
+            "app/services/similarity/service.py",
         ]
         from pathlib import Path
         backend_root = Path(__file__).parent.parent
@@ -66,10 +66,11 @@ class TestPhase1Smoke:
         for rel_path in consumer_files:
             file_path = backend_root / rel_path
             content = file_path.read_text()
-            assert "from app.services.protocols import" in content and "LLMService" in content, \
-                f"{rel_path} does not import LLMService from protocols"
-            assert "from app.services.llm_provider import" not in content, \
-                f"{rel_path} still imports from llm_provider"
+            # After Phase 04-07, imports should be from llm.protocol (distributed)
+            assert "from app.services.llm.protocol import" in content and "LLMService" in content, \
+                f"{rel_path} does not import LLMService from app.services.llm.protocol"
+            assert "from app.services.llm_service import" not in content, \
+                f"{rel_path} still imports from llm_service"
 
         print(f"PASS: All {len(consumer_files)} consumer files updated")
 
@@ -103,14 +104,14 @@ class TestPhase1Smoke:
 
     def test_duplicate_service_importable(self):
         """Duplicate service must import without error (uses litellm)."""
-        from app.services.duplicate_service import DuplicateService
+        from app.services.duplicate.service import DuplicateService
         assert DuplicateService is not None
         print("PASS: DuplicateService importable")
 
     def test_ocr_service_importable(self):
         """OCR service must import without error (uses litellm)."""
-        from app.services.ocr_service import batch_state
-        assert batch_state is not None
+        from app.services.ocr.state import OcrState
+        assert OcrState is not None
         print("PASS: OCR service importable")
 
     def test_app_main_loads(self):

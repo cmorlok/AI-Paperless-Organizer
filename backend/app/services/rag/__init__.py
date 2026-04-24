@@ -1,5 +1,5 @@
-from app.services.protocols import RAGService
-from app.services.rag.embedding_service import EmbeddingService
-from app.services.rag.search_engine import SearchEngine
-from app.services.rag.chunking import ChunkingService
-from app.services.rag.indexer import Indexer
+"""RAG service: semantic search and chat over Paperless documents."""
+
+from app.services.rag.protocol import RAGService
+
+__all__ = ["RAGService"]

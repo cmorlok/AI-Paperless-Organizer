@@ -2,14 +2,9 @@
 
 import pytest
 
-from app.services.auth_service import (
-    SessionAuthMiddleware,
-    PUBLIC_PATHS,
-    COOKIE_NAME,
-    SESSIONS,
-    create_session,
-    is_auth_disabled,
-)
+from app.services.auth.middleware import SessionAuthMiddleware
+from app.services.auth.state import PUBLIC_PATHS, COOKIE_NAME, SESSIONS
+from app.services.auth.service import create_session, is_auth_disabled
 
 
 def test_middleware_blocks_unauthenticated_api_request(client):

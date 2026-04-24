@@ -18,7 +18,7 @@ from app.models.settings_model import (
     LLM_KEY_CLASSIFIER_MODEL,
 )
 from app.routers.settings import get_setting
-from app.services.protocols import PaperlessClient
+from app.services.paperless import PaperlessClient
 from app.services.classifier.base_provider import (
     BaseClassifierProvider, ClassificationResult, DocumentContext,
 )
@@ -27,6 +27,7 @@ from app.services.classifier.litellm_provider import (
     LitellmOllamaProvider,
 )
 from app.services.classifier.tool_executor import ToolExecutor
+from app.services.classifier.state import AutoClassifyState
 
 logger = logging.getLogger(__name__)
 
@@ -112,9 +113,15 @@ def _clean_title(title: str, created_date: str = None) -> str:
 class DocumentClassifierService:
     """Orchestrates document classification using the configured provider."""
 
-    def __init__(self, paperless: Optional[PaperlessClient] = None, session_factory: Optional[Any] = None):
+    def __init__(
+        self,
+        paperless: Optional[PaperlessClient] = None,
+        session_factory: Optional[Any] = None,
+        state: Optional[AutoClassifyState] = None,
+    ):
         self.paperless = paperless
         self.session_factory = session_factory
+        self.state = state
 
     async def get_config(self) -> ClassifierConfig:
         if self.session_factory is None:
@@ -281,7 +288,7 @@ class DocumentClassifierService:
         if provider_name == "ollama":
             return LitellmOllamaProvider(model=model, tool_executor=tool_executor)
 
-        from app.services.llm_service import PROVIDER_DISPLAY_NAMES
+        from app.services.llm.service import PROVIDER_DISPLAY_NAMES
         label = PROVIDER_DISPLAY_NAMES.get(provider_name, provider_name.replace("_", " ").title())
         return LitellmToolCallingProvider(model=model, provider=provider_name, tool_executor=tool_executor, provider_label=label)
 

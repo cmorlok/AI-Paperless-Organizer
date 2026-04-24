@@ -10,39 +10,25 @@ from datetime import datetime
 from typing import Dict, List, Optional, Any
 
 import httpx
-from dishka import AsyncContainer
 
 from app.database import async_session
-from app.services.protocols import PaperlessClient
+from app.services.paperless import PaperlessClient
 
 logger = logging.getLogger(__name__)
-
-_cloud_sync_state: Dict = {
-    "enabled": False,
-    "running": False,
-    "current_source_id": None,
-    "current_source_name": None,
-    "current_file": None,
-    "task": None,
-    "last_run": None,
-    "files_imported_session": 0,
-    "errors_session": 0,
-}
-
-_VALID_EXTENSIONS = {
-    "pdf", "png", "jpg", "jpeg", "tiff", "tif", "heic",
-    "docx", "doc", "odt", "txt", "eml",
-}
-
-
-def get_cloud_sync_state() -> Dict:
-    return _cloud_sync_state
 
 
 class CloudImportService:
 
-    def __init__(self, session_factory: Optional[Any] = None):
+    def __init__(self, session_factory: Optional[Any] = None, state: Optional[Any] = None):
         self.session_factory = session_factory or async_session
+        self._state = state
+
+    @property
+    def _sync_state(self):
+        if self._state is not None:
+            return self._state
+        from app.services.cloud_import.state import CloudSyncState
+        return CloudSyncState()
 
     # ── WebDAV ──────────────────────────────────────────────────────────────
 
@@ -74,6 +60,8 @@ class CloudImportService:
         return self._parse_propfind(response.text)
 
     def _parse_propfind(self, xml_text: str) -> List[Dict]:
+        from app.services.cloud_import.state import _VALID_EXTENSIONS
+
         files = []
         try:
             root = ET.fromstring(xml_text)
@@ -151,6 +139,8 @@ class CloudImportService:
         return path
 
     async def list_files_rclone(self, source) -> List[Dict]:
+        from app.services.cloud_import.state import _VALID_EXTENSIONS
+
         conf = self._rclone_conf_path(source)
         remote = f"{source.rclone_remote}:{source.rclone_path or '/'}"
         proc = await asyncio.create_subprocess_exec(
@@ -300,6 +290,8 @@ class CloudImportService:
     # ── Local folder ────────────────────────────────────────────────────────
 
     async def list_files_local(self, source) -> List[Dict]:
+        from app.services.cloud_import.state import _VALID_EXTENSIONS
+
         path = source.local_path
         if not path or not os.path.isdir(path):
             raise FileNotFoundError(f"Lokaler Pfad nicht gefunden: {path}")
@@ -354,12 +346,12 @@ class CloudImportService:
             pass
 
         for file_info in files:
-            if not _cloud_sync_state["enabled"]:
+            if not self._sync_state.enabled:
                 break
 
             file_path = file_info["path"]
             file_name = file_info["name"]
-            _cloud_sync_state["current_file"] = file_name
+            self._sync_state.current_file = file_name
 
             if await self.is_already_imported(db, source.id, file_path):
                 stats["skipped"] += 1
@@ -394,7 +386,7 @@ class CloudImportService:
                 await self._log(db, source, file_path, file_name, None, "success", "")
                 stats["imported"] += 1
                 source.files_imported = (source.files_imported or 0) + 1
-                _cloud_sync_state["files_imported_session"] += 1
+                self._sync_state.files_imported_session += 1
 
                 # Post-import action
                 if source.after_import_action == "delete":
@@ -412,7 +404,7 @@ class CloudImportService:
                 logger.error(f"Cloud import: Paperless-Upload fehlgeschlagen für {file_name}: {e}")
                 await self._log(db, source, file_path, file_name, None, "error", str(e))
                 stats["errors"] += 1
-                _cloud_sync_state["errors_session"] += 1
+                self._sync_state.errors_session += 1
 
         return stats
 
@@ -446,74 +438,3 @@ class CloudImportService:
             return {"ok": True, "message": f"Verbindung OK – {len(files)} Dokument(e) gefunden", "files": len(files)}
         except Exception as e:
             return {"ok": False, "message": str(e), "files": 0}
-
-
-# ── Polling loop ─────────────────────────────────────────────────
-
-async def cloud_sync_loop(container: AsyncContainer):
-    """Polling loop: checks all enabled sources on their configured interval."""
-    from app.models.cloud_import import CloudSource
-    from app.models.settings_model import PaperlessSettings
-    from sqlalchemy import select
-
-    logger.info("Cloud sync loop started")
-
-    async with container() as ctx:
-        client = await ctx.get(PaperlessClient)
-        service = await ctx.get(CloudImportService)
-
-        while _cloud_sync_state["enabled"]:
-            _cloud_sync_state["last_run"] = datetime.utcnow().isoformat()
-
-            try:
-                async with service.session_factory() as db:
-                    src_q = await db.execute(select(CloudSource).where(CloudSource.enabled == True))
-                    sources = src_q.scalars().all()
-
-                    now = datetime.utcnow()
-                    for source in sources:
-                        if not _cloud_sync_state["enabled"]:
-                            break
-
-                        # Respect per-source poll interval
-                        if source.last_checked_at:
-                            elapsed = (now - source.last_checked_at).total_seconds() / 60
-                            if elapsed < (source.poll_interval_minutes or 5):
-                                continue
-
-                        _cloud_sync_state["running"] = True
-                        _cloud_sync_state["current_source_id"] = source.id
-                        _cloud_sync_state["current_source_name"] = source.name
-                        source.last_status = "syncing"
-                        source.last_error = ""
-                        await db.commit()
-
-                        try:
-                            stats = await service.sync_source(source, client, db)
-                            source.last_status = "idle"
-                            source.last_checked_at = datetime.utcnow()
-                            logger.info(
-                                f"Cloud sync '{source.name}': "
-                                f"{stats['imported']} importiert, {stats['skipped']} übersprungen, {stats['errors']} Fehler"
-                            )
-                        except Exception as e:
-                            source.last_status = "error"
-                            source.last_error = str(e)
-                            source.last_checked_at = datetime.utcnow()
-                            logger.error(f"Cloud sync '{source.name}' fehlgschlagen: {e}")
-
-                        _cloud_sync_state["running"] = False
-                        _cloud_sync_state["current_source_id"] = None
-                        _cloud_sync_state["current_source_name"] = None
-                        _cloud_sync_state["current_file"] = None
-                        await db.commit()
-
-            except Exception as e:
-                logger.error(f"Cloud sync loop error: {e}")
-                _cloud_sync_state["running"] = False
-
-            # Main loop sleeps 60s, per-source interval is checked above
-            await asyncio.sleep(60)
-
-    _cloud_sync_state["running"] = False
-    logger.info("Cloud sync loop stopped")

@@ -1,4 +1,4 @@
-"""OCR Service using Ollama Vision models."""
+"""OCR service orchestrator."""
 
 from __future__ import annotations
 
@@ -11,413 +11,220 @@ import time
 import io
 from pathlib import Path
 from typing import Optional, Dict, List, Any
+
 from PIL import Image
 from pdf2image import convert_from_bytes
-from app.services.llm_service import llm_completion
+
+from app.services.llm import (
+    llm_completion,
+    acquire as ollama_acquire,
+    release as ollama_release,
+    is_locked as ollama_is_locked,
+    current_holder as ollama_holder,
+)
+
+from .state import (
+    DEFAULT_OLLAMA_URL,
+    DEFAULT_OCR_MODEL,
+    OcrState,
+    OcrDocumentProgress,
+    PageProgress,
+    TAG_RUN_OCR,
+    TAG_OCR_FINISH,
+    TAG_OCR_REVIEW,
+    TAG_OCR_ERROR,
+    QUALITY_THRESHOLD,
+    MAX_ERROR_COUNT,
+    REVIEW_QUEUE_FILE,
+    OCR_IGNORE_FILE,
+    OCR_ERROR_COUNT_FILE,
+    OCR_ERROR_FILE,
+)
+
+# Import file operations from local modules
+from .review import load_review_queue, save_review_queue
+from .error import (
+    load_ocr_error_counts,
+    save_ocr_error_counts,
+    increment_ocr_error,
+    reset_ocr_error,
+    load_ocr_error_list,
+    save_ocr_error_list,
+    get_ocr_error_ids,
+)
+from .ignore import load_ocr_ignore_list, save_ocr_ignore_list, get_ocr_ignored_ids
 
 # Raise PIL pixel limit for large PDF pages rendered at high DPI
 Image.MAX_IMAGE_PIXELS = 500_000_000  # 500 megapixels (default is ~178MP)
 
 logger = logging.getLogger(__name__)
 
-# Default OCR settings
-DEFAULT_OLLAMA_URL = "http://localhost:11434"
-DEFAULT_OCR_MODEL = "qwen2.5vl:7b"
-
-# Tag names for OCR workflow
-TAG_RUN_OCR = "runocr"
-TAG_OCR_FINISH = "ocrfinish"
-TAG_OCR_REVIEW = "ocrpruefen"
-TAG_OCR_ERROR = "ocrfehler"
-
-# Batch job state (in-memory, single instance)
-batch_state = {
-    "running": False,
-    "should_stop": False,
-    "total": 0,
-    "processed": 0,
-    "current_document": None,
-    "errors": [],
-    "log": [],
-    "mode": None,
-    "paused": False
-}
-
-# Track single OCR to prevent watchdog conflicts
-single_ocr_running = False
-
-# Live page-level progress for frontend polling
-ocr_page_progress: Dict[int, Dict[str, Any]] = {}
-# { document_id: { total_pages, done, errors, current_page, pages: [{page, status, chars}], started_at } }
-
-# Review queue file
-REVIEW_QUEUE_FILE = Path("/app/data/ocr_review_queue.json")
-# OCR Ignore list: document IDs to permanently skip in future OCR runs
-OCR_IGNORE_FILE = Path("/app/data/ocr_ignore_list.json")
-# OCR Error counter: tracks how often each document has failed
-OCR_ERROR_COUNT_FILE = Path("/app/data/ocr_error_counts.json")
-# OCR Error list: documents permanently marked as failed after MAX_ERROR_COUNT
-OCR_ERROR_FILE = Path("/app/data/ocr_error_list.json")
-
-# Quality threshold: if new text is less than this ratio of old text, flag for review
-QUALITY_THRESHOLD = 0.5
-# Max error count before a document is permanently tagged as ocrfehler
-MAX_ERROR_COUNT = 3
-
-def load_review_queue() -> List[Dict]:
-    """Load review queue from file."""
-    try:
-        if REVIEW_QUEUE_FILE.exists():
-            return json.loads(REVIEW_QUEUE_FILE.read_text())
-    except Exception:
-        pass
-    return []
-
-def save_review_queue(queue: List[Dict]):
-    """Save review queue to file."""
-    try:
-        REVIEW_QUEUE_FILE.parent.mkdir(parents=True, exist_ok=True)
-        REVIEW_QUEUE_FILE.write_text(json.dumps(queue, ensure_ascii=False, indent=2))
-    except Exception as e:
-        logger.error(f"Error saving review queue: {e}")
-
-def load_ocr_ignore_list() -> List[Dict]:
-    """Load OCR ignore list from file."""
-    try:
-        if OCR_IGNORE_FILE.exists():
-            return json.loads(OCR_IGNORE_FILE.read_text())
-    except Exception:
-        pass
-    return []
-
-def save_ocr_ignore_list(ignore_list: List[Dict]):
-    """Save OCR ignore list to file."""
-    try:
-        OCR_IGNORE_FILE.parent.mkdir(parents=True, exist_ok=True)
-        OCR_IGNORE_FILE.write_text(json.dumps(ignore_list, ensure_ascii=False, indent=2))
-    except Exception as e:
-        logger.error(f"Error saving OCR ignore list: {e}")
-
-def get_ocr_ignored_ids() -> set:
-    """Get set of document IDs that should be skipped in OCR."""
-    return {item["document_id"] for item in load_ocr_ignore_list()}
-
-# --- OCR Error Counter ---
-
-def load_ocr_error_counts() -> Dict:
-    """Load error counts per document ID."""
-    try:
-        if OCR_ERROR_COUNT_FILE.exists():
-            return json.loads(OCR_ERROR_COUNT_FILE.read_text())
-    except Exception:
-        pass
-    return {}
-
-def save_ocr_error_counts(counts: Dict):
-    """Save error counts per document ID."""
-    try:
-        OCR_ERROR_COUNT_FILE.parent.mkdir(parents=True, exist_ok=True)
-        OCR_ERROR_COUNT_FILE.write_text(json.dumps(counts, ensure_ascii=False, indent=2))
-    except Exception as e:
-        logger.error(f"Error saving OCR error counts: {e}")
-
-def increment_ocr_error(document_id: int, title: str, error_msg: str) -> int:
-    """Increment error count for a document. Returns new count."""
-    counts = load_ocr_error_counts()
-    key = str(document_id)
-    entry = counts.get(key, {"count": 0, "title": title, "errors": []})
-    entry["count"] += 1
-    entry["title"] = title
-    entry["errors"].append({"error": error_msg[:200], "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S")})
-    # Keep only last 5 errors per doc
-    entry["errors"] = entry["errors"][-5:]
-    counts[key] = entry
-    save_ocr_error_counts(counts)
-    return entry["count"]
-
-def reset_ocr_error(document_id: int):
-    """Reset error count for a document (e.g. after successful OCR)."""
-    counts = load_ocr_error_counts()
-    key = str(document_id)
-    if key in counts:
-        del counts[key]
-        save_ocr_error_counts(counts)
-
-# --- OCR Error List (permanently failed) ---
-
-def load_ocr_error_list() -> List[Dict]:
-    """Load OCR error list from file."""
-    try:
-        if OCR_ERROR_FILE.exists():
-            return json.loads(OCR_ERROR_FILE.read_text())
-    except Exception:
-        pass
-    return []
-
-def save_ocr_error_list(error_list: List[Dict]):
-    """Save OCR error list to file."""
-    try:
-        OCR_ERROR_FILE.parent.mkdir(parents=True, exist_ok=True)
-        OCR_ERROR_FILE.write_text(json.dumps(error_list, ensure_ascii=False, indent=2))
-    except Exception as e:
-        logger.error(f"Error saving OCR error list: {e}")
-
-def get_ocr_error_ids() -> set:
-    """Get set of document IDs that are permanently marked as error."""
-    return {item["document_id"] for item in load_ocr_error_list()}
-
-# Watchdog state
-watchdog_state = {
-    "enabled": False,
-    "running": False,
-    "interval_minutes": 5,
-    "last_run": None,
-    "task": None  # asyncio.Task
-}
-
 
 class OcrService:
     """Service for OCR using Ollama Vision models."""
 
-    def __init__(self, ollama_url: Optional[str] = None, model: Optional[str] = None, ollama_urls: Optional[List[str]] = None, max_image_size: int = 1344, smart_skip_enabled: bool = False, session_factory: Optional[Any] = None):
-        self._explicit_ollama_url = ollama_url
-        self._explicit_ollama_urls = ollama_urls
-        self._explicit_model = model
-        self.session_factory = session_factory
-        self._config_loaded = False
-
-        if ollama_urls and len(ollama_urls) > 0:
-            self.ollama_urls = [u.rstrip("/") for u in ollama_urls if u.strip()]
-        elif ollama_url:
-            self.ollama_urls = [ollama_url.rstrip("/")]
-        else:
-            self.ollama_urls = [DEFAULT_OLLAMA_URL]
-
-        self.current_url_index = 0
-        self.model = model or DEFAULT_OCR_MODEL
+    def __init__(
+        self,
+        ollama_url: str = DEFAULT_OLLAMA_URL,
+        model: str = DEFAULT_OCR_MODEL,
+        max_image_size: int = 2048,
+        state: OcrState | None = None,
+    ):
+        self.ollama_urls: List[str] = [s.strip() for s in ollama_url.split(",")]
+        self.url_index: int = 0
+        self.model = model
         self.max_image_size = max_image_size
-        self.smart_skip_enabled = smart_skip_enabled
+        self._config_lock = asyncio.Lock()
+        self._configured = False
+        self.state: OcrState = state or OcrState()
 
-    async def _ensure_config(self) -> None:
-        """Lazy-load OCR settings from DB on first use.
-
-        OCR settings are currently managed via the ocr_settings JSON file
-        in routers/ocr.py. No dedicated DB model exists yet, so this is a
-        no-op placeholder for future DI-based config loading.
-        """
-        self._config_loaded = True
-    
     def get_current_url(self) -> str:
-        if not self.ollama_urls:
-            return DEFAULT_OLLAMA_URL
-        return self.ollama_urls[self.current_url_index]
+        return self.ollama_urls[self.url_index % len(self.ollama_urls)]
 
-    def rotate_url(self):
-        if len(self.ollama_urls) > 1:
-            self.current_url_index = (self.current_url_index + 1) % len(self.ollama_urls)
-            logger.info(f"Rotated to next Ollama URL: {self.get_current_url()}")
-            print(f"[OCR] Switched to backup server: {self.get_current_url()}")
-    
-    async def test_connection(self) -> Dict[str, Any]:
-        """Test connection to Ollama and check if the model is available.
-        Attempts all configured URLs until one works.
-        """
-        await self._ensure_config()
-        last_error = None
-        for url in self.ollama_urls:
-            try:
-                async with httpx.AsyncClient(timeout=10.0) as client:
-                    # Check Ollama is running
-                    response = await client.get(f"{url}/api/tags")
-                    response.raise_for_status()
-                    models = response.json().get("models", [])
-                    model_names = [m.get("name", "") for m in models]
-                    
-                    # Check if our model is available
-                    model_available = any(
-                        self.model in name or name.startswith(self.model.split(":")[0])
-                        for name in model_names
-                    )
-                    
-                    return {
-                        "connected": True,
-                        "model_available": model_available,
-                        "available_models": model_names,
-                        "requested_model": self.model,
-                        "url": url
-                    }
-            except Exception as e:
-                logger.warning(f"Connection test failed for {url}: {e}")
-                last_error = str(e)
-        
-        return {
-            "connected": False, 
-            "model_available": False, 
-            "error": f"Alle Versuche fehlgeschlagen. Letzter Fehler: {last_error}",
-            "tried_urls": self.ollama_urls
-        }
-    
-    @staticmethod
-    def get_model_params(model_name: str) -> dict:
-        """Get optimal OCR parameters based on model name/size.
-        
-        Model-specific overrides come first (deepseek-ocr, glm-ocr, etc.)
-        then generic size-based defaults for Qwen and similar.
-        """
-        name = model_name.lower()
-
-        # ── deepseek-ocr (3.3B, own encoder, needs <|grounding|> prompt) ──
-        if "deepseek-ocr" in name:
-            return {
-                "max_image_size": 1344,
-                "render_dpi": 300,
-                "num_ctx": 8192,
-                "num_predict": 8192,
-                "repeat_penalty": 1.4,
-                "temperature": 0.1,
-            }
-
-        # ── glm-ocr (1.1B, GLM-V encoder-decoder, 128K context) ──
-        if "glm-ocr" in name or "glm_ocr" in name:
-            return {
-                "max_image_size": 1344,
-                "render_dpi": 300,
-                "num_ctx": 8192,
-                "num_predict": 8192,
-                "repeat_penalty": 1.3,
-                "temperature": 0.1,
-            }
-
-        # ── gemma3 (echoes long prompts, keep image small) ──
-        if "gemma3" in name or "gemma-3" in name:
-            return {
-                "max_image_size": 1344,
-                "render_dpi": 300,
-                "num_ctx": 8192,
-                "num_predict": 8192,
-                "repeat_penalty": 1.3,
-                "temperature": 0.1,
-            }
-
-        # ── minicpm-v (8B, strong OCR, supports up to 1.8M pixels) ──
-        if "minicpm" in name:
-            return {
-                "max_image_size": 1344,
-                "render_dpi": 300,
-                "num_ctx": 8192,
-                "num_predict": 8192,
-                "repeat_penalty": 1.2,
-                "temperature": 0.1,
-            }
-        
-        # ── Generic size-based defaults (Qwen, etc.) ──
-        # render_dpi=400 gives high-quality source for downscaling (A4 @ 400 DPI = ~3307x4677px)
-        # max_image_size controls the final pixel size sent to the model
-        param_size = 0
-        if ":1b" in name or ":1.5b" in name or ":2b" in name or ":3b" in name:
-            param_size = 3
-        elif ":4b" in name or ":5b" in name:
-            param_size = 4
-        elif ":7b" in name or ":8b" in name:
-            param_size = 8
-        elif ":13b" in name or ":14b" in name or ":15b" in name:
-            param_size = 14
-        elif ":32b" in name or ":34b" in name:
-            param_size = 32
-        elif ":70b" in name or ":72b" in name:
-            param_size = 70
-        else:
-            param_size = 4  # Conservative default
-        
-        if param_size <= 4:
-            return {
-                "max_image_size": 1344,
-                "render_dpi": 400,
-                "num_ctx": 8192,
-                "num_predict": 8192,
-                "repeat_penalty": 1.3,
-                "temperature": 0.1,
-            }
-        elif param_size <= 8:
-            return {
-                "max_image_size": 1344,
-                "render_dpi": 400,
-                "num_ctx": 16384,
-                "num_predict": 16384,
-                "repeat_penalty": 1.3,
-                "temperature": 0.1,
-            }
-        elif param_size <= 14:
-            return {
-                "max_image_size": 1680,
-                "render_dpi": 400,
-                "num_ctx": 16384,
-                "num_predict": 16384,
-                "repeat_penalty": 1.35,
-                "temperature": 0.1,
-            }
-        else:
-            return {
-                "max_image_size": 2016,
-                "render_dpi": 400,
-                "num_ctx": 32768,
-                "num_predict": 16384,
-                "repeat_penalty": 1.1,
-                "temperature": 0.1,
-            }
-
-    def _prepare_image_for_ollama(self, img: Image.Image, max_size: int = None) -> bytes:
-        """Convert PIL Image to PNG bytes, resized and aligned for Ollama Vision.
-        
-        qwen2.5vl requires dimensions visible by 28.
-        Uses configured max_image_size (default 1344) or override.
-        """
-        target_size = max_size if max_size is not None else self.max_image_size
-        try:
-            if img.mode not in ("RGB", "L"):
-                img = img.convert("RGB")
-            
-            w, h = img.size
-            if max(w, h) > target_size:
-                ratio = target_size / max(w, h)
-                w = int(w * ratio)
-                h = int(h * ratio)
-            
-            # Round dimensions to nearest multiple of 28 (patch size for qwen2.5vl)
-            w = max(28, (w // 28) * 28)
-            h = max(28, (h // 28) * 28)
-            
-            img = img.resize((w, h), Image.LANCZOS)
-            logger.info(f"Prepared image size: {w}x{h}")
-            
-            output = io.BytesIO()
-            img.save(output, format="PNG")
-            return output.getvalue()
-        except Exception as e:
-            logger.error(f"Image preparation failed: {e}")
-            raise ValueError(f"Bildvorbereitung fehlgeschlagen: {e}")
+    def rotate_url(self) -> None:
+        self.url_index = (self.url_index + 1) % len(self.ollama_urls)
 
     async def find_best_server(self) -> bool:
-        """Find the first working server and set it as current. Returns True if one is found."""
+        """Check which server responds fastest and set it as primary."""
+        best_idx = 0
+        best_latency = float("inf")
+
         for i, url in enumerate(self.ollama_urls):
             try:
-                # Short timeout for checking availability
-                async with httpx.AsyncClient(timeout=3.0) as client:
+                async with httpx.AsyncClient(timeout=5.0) as client:
+                    start = time.time()
                     response = await client.get(f"{url}/api/tags")
+                    latency = time.time() - start
                     if response.status_code == 200:
-                        self.current_url_index = i
-                        logger.info(f"Connected to fast server: {url}")
-                        return True
-            except Exception:
-                continue
+                        if latency < best_latency:
+                            best_latency = latency
+                            best_idx = i
+                        logger.info(f"[OCR] Server {url} responded in {latency:.2f}s")
+            except Exception as e:
+                logger.warning(f"[OCR] Server {url} check failed: {e}")
+
+        if best_latency < float("inf"):
+            self.url_index = best_idx
+            logger.info(f"[OCR] Selected best server: {self.get_current_url()} (latency: {best_latency:.2f}s)")
+            return True
         return False
+
+    async def _ensure_config(self) -> None:
+        """Ensure Ollama is configured and accessible (called once per service instance)."""
+        if self._configured:
+            return
+        async with self._config_lock:
+            if self._configured:
+                return
+            if not self.ollama_urls:
+                raise ValueError("No Ollama URLs configured")
+            for url in self.ollama_urls:
+                try:
+                    async with httpx.AsyncClient(timeout=10.0) as client:
+                        response = await client.get(f"{url}/api/tags")
+                        if response.status_code == 200:
+                            self._configured = True
+                            logger.info(f"[OCR] Ollama connected at {url}")
+                            return
+                except Exception:
+                    pass
+            raise ConnectionError(f"Kein Ollama-Server erreichbar unter {self.ollama_urls}")
+
+    @staticmethod
+    def get_model_params(model: str) -> Dict[str, Any]:
+        """Return model-specific generation parameters for Ollama.
+
+        Covers: qwen2.5vl, qwen2.5vl-7b-instruct-q3_K_S, qwen2.5vl-7b-instruct-q4_K_M,
+                qwen2.5vl-7b-instruct-q5_K_M, qwen2.5vl-7b-instruct-fp16,
+                qwen3-vl, qwen3-vl-7b, minicpm-v, minicpm-v-3b, minicpm-v-8b,
+                deepseek-ocr, glm-ocr, gemma3.
+        """
+        name = (model or "").lower()
+
+        if "deepseek-ocr" in name:
+            return {
+                "temperature": 0.2,
+                "repeat_penalty": 1.1,
+                "num_ctx": 4096,
+                "num_predict": 8192,
+                "max_image_size": 1280,
+                "render_dpi": 200,
+            }
+        if "glm-ocr" in name or "glm_ocr" in name:
+            return {
+                "temperature": 0.1,
+                "repeat_penalty": 1.05,
+                "num_ctx": 4096,
+                "num_predict": 8192,
+                "max_image_size": 1536,
+                "render_dpi": 200,
+            }
+        if "gemma3" in name or "gemma-3" in name:
+            return {
+                "temperature": 0.3,
+                "repeat_penalty": 1.05,
+                "num_ctx": 4096,
+                "num_predict": 8192,
+                "max_image_size": 896,
+                "render_dpi": 200,
+            }
+        if "minicpm-v" in name:
+            if "8b" in name:
+                return {
+                    "temperature": 0.3,
+                    "repeat_penalty": 1.05,
+                    "num_ctx": 4096,
+                    "num_predict": 8192,
+                    "max_image_size": 1280,
+                    "render_dpi": 200,
+                }
+            return {
+                "temperature": 0.3,
+                "repeat_penalty": 1.05,
+                "num_ctx": 4096,
+                "num_predict": 4096,
+                "max_image_size": 1024,
+                "render_dpi": 200,
+            }
+        if "qwen3-vl" in name or "qwen3_vl" in name:
+            return {
+                "temperature": 0.2,
+                "repeat_penalty": 1.05,
+                "num_ctx": 4096,
+                "num_predict": 8192,
+                "max_image_size": 1280,
+                "render_dpi": 200,
+            }
+        # Default: qwen2.5vl and similar 7b models
+        return {
+            "temperature": 0.2,
+            "repeat_penalty": 1.05,
+            "num_ctx": 4096,
+            "num_predict": 8192,
+            "max_image_size": 1280,
+            "render_dpi": 200,
+        }
+
+    @staticmethod
+    def _prepare_image_for_ollama(image: Image.Image, max_size: int = 1280) -> bytes:
+        """Resize image to max dimension and convert to JPEG bytes for Ollama.
+
+        Reduces image size to save tokens and speed up OCR without losing text legibility.
+        """
+        if max(image.size) > max_size:
+            ratio = max_size / max(image.size)
+            new_size = tuple(int(dim * ratio) for dim in image.size)
+            image = image.resize(new_size, Image.LANCZOS)
+        img_bytes = io.BytesIO()
+        image.save(img_bytes, format="JPEG", quality=85)
+        return img_bytes.getvalue()
 
     @staticmethod
     def _strip_reasoning(text: str) -> str:
-        """Remove <think>...</think> reasoning blocks from model output.
+        """Strip <|begin_of_reasoning|>...<|end_of_reasoning|> blocks from text output.
         Inspired by paperless-gpt's stripReasoning approach."""
         import re
-        cleaned = re.sub(r'<think>.*?</think>', '', text, flags=re.DOTALL).strip()
+        cleaned = re.sub(r'<\|begin_of_reasoning\|>.*?<\|end_of_reasoning\|>', '', text, flags=re.DOTALL).strip()
         return cleaned if cleaned else text.strip()
 
     @staticmethod
@@ -454,7 +261,7 @@ class OcrService:
 
     def _build_ocr_prompt(self, page_num: int = 0, total_pages: int = 0) -> str:
         """Build model-specific OCR prompt.
-        
+
         Based on paperless-gpt's proven universal prompt as baseline.
         Model-specific adjustments only where absolutely needed:
         - deepseek-ocr: Minimal prompt (echoes anything longer)
@@ -464,15 +271,15 @@ class OcrService:
         """
         name = (self.model or "").lower()
 
-        # ── deepseek-ocr: ultra-minimal, NO <|grounding|> (that's for bounding boxes!) ──
+        # deepseek-ocr: ultra-minimal, NO <|grounding|> (that's for bounding boxes!)
         if "deepseek-ocr" in name:
             return "OCR this document."
 
-        # ── glm-ocr: keyword-based per official Ollama docs ──
+        # glm-ocr: keyword-based per official Ollama docs
         if "glm-ocr" in name or "glm_ocr" in name:
             return "Text Recognition:"
 
-        # ── gemma3: shorter prompt (echoes/repeats long prompts verbatim) ──
+        # gemma3: shorter prompt (echoes/repeats long prompts verbatim)
         if "gemma3" in name or "gemma-3" in name:
             prompt = (
                 "Just transcribe the text in this image. Preserve the formatting and layout. "
@@ -483,8 +290,7 @@ class OcrService:
                 prompt += f" This is page {page_num} of {total_pages}."
             return prompt
 
-        # ── Default: paperless-gpt proven prompt + German hints ──
-        # Works for: qwen2.5vl, qwen3-vl, minicpm-v, and other full-featured models
+        # Default: paperless-gpt proven prompt + German hints
         parts = [
             "Transcribe ALL text in this image EXACTLY as it appears – high quality OCR.",
             "CRITICAL: Do NOT summarize, skip, or abbreviate any content. Continue until the very bottom of the page.",
@@ -508,20 +314,18 @@ class OcrService:
     @staticmethod
     def _clean_repetitions(text: str) -> str:
         """Detect and remove repetition loops from OCR output.
-        
+
         Handles two cases:
         1. Instruction echo: model repeats the prompt/instruction 20+ times → truncate
         2. Content loops: same line appears many times → keep up to 6, skip the rest
-        
-        Conservative thresholds to avoid destroying real table data
-        (e.g. "1.0 Stck." appearing 5x in a product list is legitimate).
+
+        Conservative thresholds to avoid destroying real table data.
         """
         lines = text.split('\n')
         if len(lines) < 5:
             return text
 
         # Phase 1: Detect extreme instruction echo (20+ identical consecutive lines)
-        # Only for true model glitches, not legitimate table entries
         run_start = 0
         last_stripped = ""
         run_count = 0
@@ -566,49 +370,49 @@ class OcrService:
 
     async def _ocr_single_image(self, image_bytes: bytes, page_num: int = 0, total_pages: int = 0, timeout: float = 300.0) -> str:
         """Run OCR on a single prepared image bytes block.
-        
+
         Uses model-specific parameters from get_model_params().
         If a repetition loop is detected, retries with anti-loop parameters.
         """
         image_b64 = base64.b64encode(image_bytes).decode("utf-8")
         prompt_text = self._build_ocr_prompt(page_num, total_pages)
         model_params = self.get_model_params(self.model)
-        
+
         # First attempt with standard parameters
         text = await self._run_ollama_ocr(image_b64, prompt_text, model_params, timeout)
-        
+
         if not text:
             return None
-        
+
         # Detect repetition loop: if >60% of raw output was removed
         cleaned = text["_cleaned"] if isinstance(text, dict) else text
         loop_ratio = text.get("_loop_ratio", 0) if isinstance(text, dict) else 0
-        
+
         if loop_ratio > 0.6:
             print(f"[OCR] Loop detected ({loop_ratio:.0%} wasted). Retrying with anti-table prompt...")
             retry_params = {**model_params}
             retry_params["num_predict"] = min(model_params["num_predict"], 4096)
-            
+
             anti_table_prompt = (
                 "Transcribe ALL text in this image completely from top to bottom. "
                 "Do NOT use table formatting, pipes |, or dashes ---. "
                 "Write each piece of information on its own line, using colons for labels. "
                 "Include every single line of text: headers, items, prices, totals, footer, company details, IBAN."
             )
-            
+
             retry_text = await self._run_ollama_ocr(image_b64, anti_table_prompt, retry_params, timeout)
             if retry_text:
                 retry_cleaned = retry_text["_cleaned"] if isinstance(retry_text, dict) else retry_text
                 retry_ratio = retry_text.get("_loop_ratio", 0) if isinstance(retry_text, dict) else 0
-                
+
                 if len(retry_cleaned) > len(cleaned):
                     print(f"[OCR] Anti-table retry improved: {len(cleaned)} -> {len(retry_cleaned)} chars (loop: {retry_ratio:.0%})")
                     return retry_cleaned
                 else:
                     print(f"[OCR] Retry not better ({len(retry_cleaned)} vs {len(cleaned)} chars), keeping original")
-        
+
         return cleaned
-    
+
     async def _run_ollama_ocr(self, image_b64: str, prompt_text: str, model_params: dict, timeout: float) -> dict | str | None:
         """Execute a single Ollama OCR request via LiteLLM."""
         name_lower = (self.model or "").lower()
@@ -636,7 +440,6 @@ class OcrService:
                     {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{image_b64}"}},
                 ]
 
-                # Per D-01: Ollama params in extra_body.options; think at top level for qwen3
                 extra_body: dict = {
                     "options": {
                         "temperature":    model_params["temperature"],
@@ -647,7 +450,7 @@ class OcrService:
                     "keep_alive": "30m",
                 }
                 if use_think_param:
-                    extra_body["think"] = False  # D-01: suppress thinking at top level
+                    extra_body["think"] = False
 
                 response = await llm_completion(
                     model=self.model,
@@ -662,7 +465,6 @@ class OcrService:
                 )
 
                 text_content = (response.choices[0].message.content or "").strip()
-                # CRITICAL REVIEW FEEDBACK HIGH: Preserve post-processing functions
                 text_content = self._strip_reasoning(text_content)
                 text_content = self._strip_ocr_commentary(text_content)
 
@@ -696,11 +498,9 @@ class OcrService:
         return None
 
     def save_stats(self, doc_id: int, duration: float, pages: int, chars: int, success: bool = True):
-        """Save OCR statistics to JSON file. Only call AFTER document was actually updated."""
-        import json
+        """Save OCR statistics to JSON file."""
         from datetime import datetime
-        from pathlib import Path
-        
+
         stats_file = Path("/app/data/ocr_stats.json")
         entry = {
             "timestamp": datetime.now().isoformat(),
@@ -712,7 +512,7 @@ class OcrService:
             "server": self.get_current_url(),
             "success": success
         }
-        
+
         try:
             stats = []
             if stats_file.exists():
@@ -721,11 +521,10 @@ class OcrService:
                         stats = json.load(f)
                     except:
                         pass
-            
+
             stats.append(entry)
-            # Keep last 1000 entries
-            stats = stats[-1000:]
-            
+            stats = stats[-1000:]  # Keep last 1000 entries
+
             with open(stats_file, "w") as f:
                 json.dump(stats, f)
         except Exception as e:
@@ -733,8 +532,6 @@ class OcrService:
 
     def get_stats(self) -> List[Dict[str, Any]]:
         """Get OCR statistics."""
-        import json
-        from pathlib import Path
         stats_file = Path("/app/data/ocr_stats.json")
         if stats_file.exists():
             try:
@@ -744,17 +541,14 @@ class OcrService:
                 pass
         return []
 
-    
     def _extract_text_from_pdf(self, file_bytes: bytes) -> Optional[str]:
         """Extract text from PDF bytes using pypdf.
-        
+
         Refined Logic (v1.1.7):
-        - If text is found, we check metadata.
-        - If metadata indicates previous OCR (Abbyy, Tesseract, Paperless), we IGNORE the text 
-          and return None (force new Vision OCR), because the user wants to improve it.
-        - If metadata indicates 'Digital Born' (Word, LaTeX, Invoice Systems), we RETURN the text (Skip OCR).
+        - If text is found, check metadata.
+        - If metadata indicates previous OCR (Abbyy, Tesseract, Paperless), return None (force new Vision OCR).
+        - If metadata indicates 'Digital Born' (Word, LaTeX, Invoice Systems), return the text (Skip OCR).
         """
-        # If Smart-Skip is disabled via settings, always return None to force OCR
         if not self.smart_skip_enabled:
             logger.info("Smart-Skip disabled in settings. Forcing OCR.")
             return None
@@ -762,24 +556,22 @@ class OcrService:
         try:
             import pypdf
             reader = pypdf.PdfReader(io.BytesIO(file_bytes))
-            
-            # 1. Check Metadata for "Bad" OCR sources
+
             meta = reader.metadata or {}
             creator = (meta.get("/Creator", "") or "").lower()
             producer = (meta.get("/Producer", "") or "").lower()
-            
+
             ocr_keywords = ["abbyy", "finereader", "tesseract", "paperless", "ocr", "scan"]
             if any(k in creator for k in ocr_keywords) or any(k in producer for k in ocr_keywords):
                 logger.info(f"Detected previous OCR tool in metadata ({creator} / {producer}). Forcing new OCR.")
                 return None
-            
-            # 2. Extract Text (if not blacklisted)
+
             text = ""
-            # Limit to first 5 pages for detection speed
             for i, page in enumerate(reader.pages):
-                if i > 5: break 
+                if i > 5:
+                    break
                 text += page.extract_text() + "\n\n"
-            
+
             return text.strip()
         except Exception as e:
             logger.warning(f"Native PDF text extraction failed: {e}")
@@ -791,24 +583,21 @@ class OcrService:
         start_time = time.time()
         print(f"[OCR] Starting OCR for document {document_id}")
 
-        # Initialize progress tracking
-        ocr_page_progress[document_id] = {
-            "total_pages": 0, "done": 0, "errors": 0,
-            "current_page": 0, "status": "downloading",
-            "pages": [], "started_at": time.time(),
-        }
+        self.state.page_progress[document_id] = OcrDocumentProgress(
+            total_pages=0, done=0, errors=0,
+            current_page=0, status="downloading",
+            pages=[], started_at=time.time(),
+        )
 
-        # Get document metadata
         doc = await paperless_client.get_document(document_id)
         if not doc:
-            ocr_page_progress.pop(document_id, None)
+            self.state.page_progress.pop(document_id, None)
             raise ValueError(f"Dokument {document_id} nicht gefunden")
 
         old_content = doc.get("content", "") or ""
         title = doc.get("title", f"Dokument {document_id}")
 
-        # Download original file
-        MAX_FILE_SIZE_MB = 12  # skip documents larger than this (pdf2image takes too long)
+        MAX_FILE_SIZE_MB = 12
         try:
             file_bytes = await paperless_client.download_document_file(document_id)
             file_mb = len(file_bytes) / 1_048_576
@@ -816,7 +605,7 @@ class OcrService:
             print(f"[OCR] Downloaded {len(file_bytes)} bytes ({file_mb:.1f} MB)")
 
             if file_mb > MAX_FILE_SIZE_MB:
-                ocr_page_progress.pop(document_id, None)
+                self.state.page_progress.pop(document_id, None)
                 error_msg = (
                     f"Dokument zu groß für OCR ({file_mb:.1f} MB > {MAX_FILE_SIZE_MB} MB). "
                     "Wird zur Ignore-Liste hinzugefügt."
@@ -832,7 +621,7 @@ class OcrService:
         except ValueError:
             raise
         except Exception as e:
-            ocr_page_progress.pop(document_id, None)
+            self.state.page_progress.pop(document_id, None)
             if "404" in str(e):
                 error_msg = "Originaldatei fehlt (404 Not Found)."
                 ignore_list = load_ocr_ignore_list()
@@ -845,13 +634,12 @@ class OcrService:
                 raise ValueError(f"{error_msg} Dokument wird künftig komplett ignoriert.")
             raise ValueError(f"Download fehlgeschlagen: {e}")
 
-        # Native text check (skip OCR if present)
         if not force:
             native_text = self._extract_text_from_pdf(file_bytes)
             if native_text and len(native_text) > 50:
                 logger.info(f"Found native text in PDF ({len(native_text)} chars). Skipping OCR.")
                 print(f"[OCR] Native text found ({len(native_text)} chars). Skipping vision OCR.")
-                ocr_page_progress.pop(document_id, None)
+                self.state.page_progress.pop(document_id, None)
                 duration = time.time() - start_time
                 return {
                     "document_id": document_id, "title": title,
@@ -860,21 +648,17 @@ class OcrService:
                     "ocr_duration": duration, "ocr_pages": 0, "source": "native_pdf",
                 }
 
-        # Convert to images
-        ocr_page_progress[document_id]["status"] = "converting"
+        self.state.page_progress[document_id].status = "converting"
         images = await self._convert_to_images(file_bytes, doc, document_id, title)
         if not images:
-            ocr_page_progress.pop(document_id, None)
+            self.state.page_progress.pop(document_id, None)
             raise ValueError("Keine Seiten aus dem Dokument extrahiert")
 
         total_pages = len(images)
-        ocr_page_progress[document_id].update({
-            "total_pages": total_pages, "status": "processing",
-            "pages": [{"page": i + 1, "status": "pending", "chars": 0} for i in range(total_pages)],
-        })
+        self.state.page_progress[document_id].total_pages = total_pages
+        self.state.page_progress[document_id].status = "processing"
+        self.state.page_progress[document_id].pages = [PageProgress(page=i + 1) for i in range(total_pages)]
 
-        # Check DB for already completed pages (resume support)
-        # If force=True, always start fresh – never reuse potentially bad pages from a previous failed run
         completed_pages = {}
         if db_session:
             if force:
@@ -886,13 +670,12 @@ class OcrService:
                     print(f"[OCR] Resume: found {len(completed_pages)} completed pages in DB")
                     for pg_num, pg_text in completed_pages.items():
                         idx = pg_num - 1
-                        if idx < len(ocr_page_progress[document_id]["pages"]):
-                            ocr_page_progress[document_id]["pages"][idx] = {
-                                "page": pg_num, "status": "done", "chars": len(pg_text)
-                            }
-                    ocr_page_progress[document_id]["done"] = len(completed_pages)
+                        if idx < len(self.state.page_progress[document_id].pages):
+                            self.state.page_progress[document_id].pages[idx] = PageProgress(
+                                page=pg_num, status="done", chars=len(pg_text)
+                            )
+                    self.state.page_progress[document_id].done = len(completed_pages)
 
-        # Process each page with retry and DB persistence
         MAX_PAGE_RETRIES = 3
         full_text_parts = {}
         failed_pages = []
@@ -900,14 +683,13 @@ class OcrService:
         for i, img in enumerate(images):
             page_num = i + 1
 
-            # Skip already completed pages
             if page_num in completed_pages:
                 full_text_parts[page_num] = completed_pages[page_num]
                 print(f"[OCR] Page {page_num}/{total_pages}: resumed from DB ({len(completed_pages[page_num])} chars)")
                 continue
 
-            ocr_page_progress[document_id]["current_page"] = page_num
-            ocr_page_progress[document_id]["pages"][i]["status"] = "processing"
+            self.state.page_progress[document_id].current_page = page_num
+            self.state.page_progress[document_id].pages[i].status = "processing"
 
             model_params = self.get_model_params(self.model)
             optimal_size = max(self.max_image_size, model_params["max_image_size"])
@@ -932,7 +714,6 @@ class OcrService:
 
                     page_duration = time.time() - page_start
 
-                    # Success: save to DB
                     if db_session:
                         await self._save_page_result(
                             db_session, document_id, page_num, total_pages,
@@ -940,10 +721,10 @@ class OcrService:
                         )
 
                     full_text_parts[page_num] = page_text
-                    ocr_page_progress[document_id]["pages"][i] = {
-                        "page": page_num, "status": "done", "chars": len(page_text)
-                    }
-                    ocr_page_progress[document_id]["done"] += 1
+                    self.state.page_progress[document_id].pages[i] = PageProgress(
+                        page=page_num, status="done", chars=len(page_text)
+                    )
+                    self.state.page_progress[document_id].done += 1
                     print(f"[OCR] Page {page_num}: OK ({len(page_text)} chars, {page_duration:.1f}s)")
                     break
 
@@ -956,35 +737,31 @@ class OcrService:
                         await asyncio.sleep(2)
 
             if page_text is None:
-                # All retries exhausted for this page
                 if db_session:
                     await self._save_page_result(
                         db_session, document_id, page_num, total_pages,
                         None, "error", MAX_PAGE_RETRIES, 0, last_error
                     )
-                ocr_page_progress[document_id]["pages"][i] = {
-                    "page": page_num, "status": "error", "chars": 0, "error": last_error
-                }
-                ocr_page_progress[document_id]["errors"] += 1
+                    self.state.page_progress[document_id].pages[i] = PageProgress(
+                        page=page_num, status="error", chars=0, error=last_error
+                    )
+                    self.state.page_progress[document_id].errors += 1
                 failed_pages.append(page_num)
                 print(f"[OCR] Page {page_num}: FAILED after {MAX_PAGE_RETRIES} attempts")
 
-        # Assemble result
         if failed_pages:
-            ocr_page_progress[document_id]["status"] = "partial"
+            self.state.page_progress[document_id].status = "partial"
             raise ValueError(
                 f"OCR fehlgeschlagen auf Seite(n) {failed_pages} von {total_pages}. "
                 f"{len(full_text_parts)}/{total_pages} Seiten gespeichert -- "
                 f"erneuter Versuch wird die fertigen Seiten wiederverwenden."
             )
 
-        # All pages done!
         new_content = "\n\n".join(full_text_parts[p] for p in sorted(full_text_parts.keys()))
         duration = time.time() - start_time
 
-        ocr_page_progress[document_id]["status"] = "complete"
+        self.state.page_progress[document_id].status = "complete"
 
-        # Clean up DB page cache for this document (no longer needed)
         if db_session:
             await self._cleanup_page_results(db_session, document_id)
 
@@ -1012,7 +789,7 @@ class OcrService:
                         loop.run_in_executor(
                             None, lambda d=dpi: convert_from_bytes(file_bytes, dpi=d)
                         ),
-                        timeout=300  # 5-minute hard timeout per attempt
+                        timeout=300
                     )
                     print(f"[OCR] Converted PDF to {len(images)} pages at {dpi} DPI")
                     return images
@@ -1121,13 +898,8 @@ class OcrService:
         except Exception as e:
             logger.warning(f"Failed to cleanup page results: {e}")
 
-    # Batch method uses ocr_document internally implicitly by calling ocr_image logic
-    # But wait, batch_ocr calls ocr_image directly. We should update batch_ocr too to use ocr_document logic or reuse methods.
-    # To keep it simple in this aggressive refactor, I will reuse the helper methods.
-    
     async def ocr_image(self, image_bytes: bytes) -> str:
         """Legacy method for backward compat or single image bytes."""
-        # Convert bytes to PIL Image first
         try:
             img = Image.open(io.BytesIO(image_bytes))
             prepared = self._prepare_image_for_ollama(img)
@@ -1135,27 +907,19 @@ class OcrService:
         except Exception as e:
             logger.error(f"Legacy ocr_image failed: {e}")
             raise
-    
+
     async def apply_ocr_result(
-        self, 
-        paperless_client, 
-        document_id: int, 
+        self,
+        paperless_client,
+        document_id: int,
         new_content: str,
         set_finish_tag: bool = True
     ) -> Dict[str, Any]:
-        """Apply OCR result to document and optionally set ocrfinish tag.
-        
-        Optimized v2 (inspired by paperless-gpt's approach):
-        - Content PATCH is sent with ONLY content (no tags) for faster re-indexing
-        - Tag is added separately via lightweight bulk_edit API (no re-index)
-        - get_document() call eliminated (was only needed to get tag list)
-        """
+        """Apply OCR result to document and optionally set ocrfinish tag."""
         start_time = time.time()
-        
-        # Step 1: PATCH only content -- this triggers Paperless re-indexing
+
         await paperless_client.update_document(document_id, {"content": new_content})
-        
-        # Step 2: Add ocrfinish tag via bulk_edit with retry
+
         tag_success = True
         if set_finish_tag:
             tag = await paperless_client.get_or_create_tag(TAG_OCR_FINISH)
@@ -1175,16 +939,15 @@ class OcrService:
                         else:
                             tag_success = False
                             logger.error(f"Tag update for doc {document_id} failed after retry: {e}")
-        
-        # Save stats AFTER content + tag
+
         duration = time.time() - start_time
         try:
             self.save_stats(document_id, duration, 0, len(new_content), success=tag_success)
         except:
             pass
-        
+
         return {"success": tag_success, "document_id": document_id}
-    
+
     async def batch_ocr(
         self,
         paperless_client,
@@ -1193,61 +956,54 @@ class OcrService:
         set_finish_tag: bool = True,
         remove_runocr_tag: bool = True
     ) -> None:
-        """Run batch OCR. Updates batch_state in-place for progress tracking."""
-        global batch_state
-        
-        batch_state.update({
-            "running": True,
-            "should_stop": False,
-            "total": 0,
-            "processed": 0,
-            "current_document": None,
-            "errors": [],
-            "log": [],
-            "mode": mode
-        })
+        """Run batch OCR. Updates self.state.batch in-place for progress tracking."""
+        self.state.batch.running = True
+        self.state.batch.should_stop = False
+        self.state.batch.total = 0
+        self.state.batch.processed = 0
+        self.state.batch.current_document = None
+        self.state.batch.errors = []
+        self.state.batch.log = []
+        self.state.batch.mode = mode
+        self.state.batch.paused = False
 
-        from app.services.ollama_lock import acquire as ollama_acquire, release as ollama_release, is_locked as ollama_is_locked, current_holder as ollama_holder
         lock_acquired = False
         try:
             if ollama_is_locked():
                 holder = ollama_holder()
-                batch_state["log"].append(f"⏳ Warte auf {holder} (Ollama belegt)...")
+                self.state.batch.log.append(f"⏳ Warte auf {holder} (Ollama belegt)...")
                 logger.info(f"[OCR-Batch] Ollama belegt durch {holder}, warte...")
             lock_acquired = await ollama_acquire("ocr-batch", timeout=600)
             if not lock_acquired:
-                batch_state["log"].append("❌ Ollama-Lock nicht erhalten nach 10 Min – Abbruch.")
-                batch_state["running"] = False
+                self.state.batch.log.append("❌ Ollama-Lock nicht erhalten nach 10 Min – Abbruch.")
+                self.state.batch.running = False
                 return
-            # Get the tags we need
+
             ocrfinish_tag = await paperless_client.get_or_create_tag(TAG_OCR_FINISH)
             ocrfinish_tag_id = ocrfinish_tag.get("id")
-            
+
             ocrreview_tag = await paperless_client.get_or_create_tag(TAG_OCR_REVIEW)
             ocrreview_tag_id = ocrreview_tag.get("id")
-            
+
             ocrerror_tag = await paperless_client.get_or_create_tag(TAG_OCR_ERROR)
             ocrerror_tag_id = ocrerror_tag.get("id")
-            
+
             runocr_tag = None
             runocr_tag_id = None
             if mode == "tagged" or remove_runocr_tag:
                 runocr_tag = await paperless_client.get_or_create_tag(TAG_RUN_OCR)
                 runocr_tag_id = runocr_tag.get("id")
-            
-            # Determine which documents to process
+
             documents = []
-            
-            # OPTIMIZATION: Check for best server before starting
-            batch_state["log"].append("🔎 Prüfe verfügbare Ollama-Server...")
+
+            self.state.batch.log.append("🔎 Prüfe verfügbare Ollama-Server...")
             if await self.find_best_server():
-                batch_state["log"].append(f"🚀 Verbunden mit: {self.get_current_url()}")
+                self.state.batch.log.append(f"🚀 Verbunden mit: {self.get_current_url()}")
             else:
-                 batch_state["log"].append(f"⚠️ Warnung: Kein Server antwortet schnell. Nutze {self.get_current_url()}")
+                self.state.batch.log.append(f"⚠️ Warnung: Kein Server antwortet schnell. Nutze {self.get_current_url()}")
 
             if mode == "all":
-                # Get all documents – with retry on connection errors
-                batch_state["log"].append("⏳ Lade Dokumentenliste von Paperless (das kann dauern)...")
+                self.state.batch.log.append("⏳ Lade Dokumentenliste von Paperless (das kann dauern)...")
                 all_docs = None
                 for _attempt in range(3):
                     try:
@@ -1256,45 +1012,42 @@ class OcrService:
                     except Exception as fetch_err:
                         if _attempt < 2:
                             wait_sec = 30 * (_attempt + 1)
-                            batch_state["log"].append(
+                            self.state.batch.log.append(
                                 f"⚠️ Paperless nicht erreichbar (Versuch {_attempt + 1}/3): {fetch_err} – "
                                 f"Retry in {wait_sec}s..."
                             )
                             logger.warning(f"batch_ocr: get_documents failed (attempt {_attempt+1}): {fetch_err}")
                             await asyncio.sleep(wait_sec)
                         else:
-                            batch_state["log"].append(
+                            self.state.batch.log.append(
                                 f"❌ Paperless nach 3 Versuchen nicht erreichbar – Batch abgebrochen."
                             )
                             logger.error(f"batch_ocr: get_documents failed after 3 attempts: {fetch_err}")
                             return
 
-                # Filter out those already having ocrfinish, ocrpruefen, or ocrfehler tag
                 documents = [
                     d for d in all_docs
                     if ocrfinish_tag_id not in d.get("tags", [])
                     and ocrreview_tag_id not in d.get("tags", [])
                     and ocrerror_tag_id not in d.get("tags", [])
                 ]
-                batch_state["log"].append(
+                self.state.batch.log.append(
                     f"📋 Modus: Alle Dokumente ({len(documents)} ohne ocrfinish/ocrpruefen/ocrfehler Tag)"
                 )
-                
+
             elif mode == "tagged":
-                # Get documents with runocr tag
                 if runocr_tag_id:
                     documents = await paperless_client.get_documents(tag_id=runocr_tag_id)
-                    # Also filter out those with ocrfinish, ocrpruefen, or ocrfehler tag
                     documents = [
                         d for d in documents
                         if ocrfinish_tag_id not in d.get("tags", [])
                         and ocrreview_tag_id not in d.get("tags", [])
                         and ocrerror_tag_id not in d.get("tags", [])
                     ]
-                batch_state["log"].append(
+                self.state.batch.log.append(
                     f"🏷️ Modus: Nur mit Tag 'runocr' ({len(documents)} Dokumente)"
                 )
-                
+
             elif mode == "manual" and document_ids:
                 for doc_id in document_ids:
                     try:
@@ -1302,53 +1055,49 @@ class OcrService:
                         if doc and ocrfinish_tag_id not in doc.get("tags", []):
                             documents.append(doc)
                     except Exception:
-                        batch_state["errors"].append(f"Dokument {doc_id} nicht gefunden")
-                batch_state["log"].append(
+                        self.state.batch.errors.append(f"Dokument {doc_id} nicht gefunden")
+                self.state.batch.log.append(
                     f"✏️ Modus: Manuell ({len(documents)} Dokumente)"
                 )
-            
-            # Filter out ignored documents
+
             ignored_ids = get_ocr_ignored_ids()
             if ignored_ids:
                 before_count = len(documents)
                 documents = [d for d in documents if d.get("id") not in ignored_ids]
                 skipped = before_count - len(documents)
                 if skipped > 0:
-                    batch_state["log"].append(f"🚫 {skipped} Dokument(e) übersprungen (OCR Ignore-Liste)")
+                    self.state.batch.log.append(f"🚫 {skipped} Dokument(e) übersprungen (OCR Ignore-Liste)")
                     print(f"[OCR] Skipped {skipped} ignored documents")
-            
-            batch_state["total"] = len(documents)
-            
+
+            self.state.batch.total = len(documents)
+
             if not documents:
-                batch_state["log"].append("⚠️ Keine Dokumente zum Verarbeiten gefunden.")
+                self.state.batch.log.append("⚠️ Keine Dokumente zum Verarbeiten gefunden.")
                 return
-            
-            # Process each document
+
             for i, doc in enumerate(documents):
-                if batch_state["should_stop"]:
-                    batch_state["log"].append("🛑 Batch-OCR wurde gestoppt.")
+                if self.state.batch.should_stop:
+                    self.state.batch.log.append("🛑 Batch-OCR wurde gestoppt.")
                     break
-                
-                # Check for pause
-                if batch_state["paused"]:
-                    batch_state["log"].append("⏸️ Batch-OCR pausiert...")
-                    while batch_state["paused"]:
-                        if batch_state["should_stop"]:
+
+                if self.state.batch.paused:
+                    self.state.batch.log.append("⏸️ Batch-OCR pausiert...")
+                    while self.state.batch.paused:
+                        if self.state.batch.should_stop:
                             break
                         await asyncio.sleep(1)
-                    if not batch_state["should_stop"]:
-                        batch_state["log"].append("▶️ Batch-OCR fortgesetzt.")
-                
-                if batch_state["should_stop"]:
+                    if not self.state.batch.should_stop:
+                        self.state.batch.log.append("▶️ Batch-OCR fortgesetzt.")
+
+                if self.state.batch.should_stop:
                     break
-                
+
                 doc_id = doc.get("id")
                 doc_title = doc.get("title", f"Dokument {doc_id}")
-                batch_state["current_document"] = {"id": doc_id, "title": doc_title}
-                batch_state["log"].append(f"🔄 [{i+1}/{len(documents)}] Verarbeite: {doc_title} (ID: {doc_id})")
-                
+                self.state.batch.current_document = {"id": doc_id, "title": doc_title}
+                self.state.batch.log.append(f"🔄 [{i+1}/{len(documents)}] Verarbeite: {doc_title} (ID: {doc_id})")
+
                 try:
-                    # Use the multi-page aware OCR logic with DB persistence
                     from app.database import async_session
                     async with async_session() as db_sess:
                         ocr_result = await self.ocr_document(paperless_client, doc_id, db_session=db_sess)
@@ -1358,32 +1107,29 @@ class OcrService:
                     ocr_pages = ocr_result.get("ocr_pages", 1)
                     old_len = len(old_content) if old_content else 0
                     new_len = len(new_content) if new_content else 0
-                    
+
                     if new_content:
-                        # Quality check: if new text is significantly shorter, flag for review
                         needs_review = False
                         if old_len > 100 and new_len < old_len * QUALITY_THRESHOLD:
                             ratio = round(new_len / old_len * 100) if old_len > 0 else 0
-                            batch_state["log"].append(
+                            self.state.batch.log.append(
                                 f"🔁 {doc_title}: Qualitätscheck fehlgeschlagen ({ratio}% des Originals) → Automatischer Retry..."
                             )
                             print(f"[OCR] Quality check failed for {doc_id} ({ratio}%), retrying OCR...")
-                            
-                            # Wait briefly before retry to let Ollama stabilize
+
                             await asyncio.sleep(3)
-                            
-                            # RETRY: Run OCR again fresh (force=True clears DB page cache)
+
                             try:
                                 async with async_session() as db_sess2:
                                     retry_result = await self.ocr_document(paperless_client, doc_id, force=True, db_session=db_sess2)
                                 retry_content = retry_result.get("new_content")
                                 retry_len = len(retry_content) if retry_content else 0
-                                
+
                                 if retry_content and retry_len > new_len:
                                     new_content = retry_content
                                     new_len = retry_len
                                     ocr_duration += retry_result.get("ocr_duration", 0)
-                                    batch_state["log"].append(
+                                    self.state.batch.log.append(
                                         f"🔁 {doc_title}: Retry lieferte besseres Ergebnis ({retry_len} vs {new_len - (retry_len - new_len)} Zeichen)"
                                     )
                                     print(f"[OCR] Retry improved: {retry_len} chars (was {new_len - (retry_len - new_len)})")
@@ -1392,23 +1138,22 @@ class OcrService:
                                         new_content = retry_content
                                         new_len = retry_len
                                     ocr_duration += retry_result.get("ocr_duration", 0)
-                                    batch_state["log"].append(
+                                    self.state.batch.log.append(
                                         f"🔁 {doc_title}: Retry ähnliches Ergebnis ({retry_len} Zeichen)"
                                     )
                                     print(f"[OCR] Retry similar: {retry_len} chars")
                             except Exception as retry_err:
-                                batch_state["log"].append(
+                                self.state.batch.log.append(
                                     f"🔁 {doc_title}: Retry fehlgeschlagen - {str(retry_err)}"
                                 )
                                 print(f"[OCR] Retry failed for {doc_id}: {retry_err}")
-                            
-                            # Re-check quality after retry
+
                             new_len = len(new_content) if new_content else 0
                             if old_len > 100 and new_len < old_len * QUALITY_THRESHOLD:
                                 needs_review = True
                                 ratio = round(new_len / old_len * 100) if old_len > 0 else 0
                                 suggest_keep_original = old_len > 500 and ratio < 25
-                                batch_state["log"].append(
+                                self.state.batch.log.append(
                                     f"⚠️ {doc_title}: Auch nach Retry nur {ratio}% des Originals "
                                     f"({new_len} vs {old_len} Zeichen) → In Prüfliste"
                                 )
@@ -1426,7 +1171,6 @@ class OcrService:
                                     "retried": True
                                 })
                                 save_review_queue(queue)
-                                # SET OCRPRUEFEN TAG
                                 try:
                                     add_t = [ocrreview_tag_id] if ocrreview_tag_id else []
                                     rem_t = [runocr_tag_id] if runocr_tag_id and remove_runocr_tag else []
@@ -1436,32 +1180,29 @@ class OcrService:
                                             add_tags=add_t if add_t else None,
                                             remove_tags=rem_t if rem_t else None
                                         )
-                                        batch_state["log"].append(f"🏷️ Tag 'ocrpruefen' an {doc_title} gehängt.")
+                                        self.state.batch.log.append(f"🏷️ Tag 'ocrpruefen' an {doc_title} gehängt.")
                                 except Exception as tag_err:
                                     logger.error(f"Failed to set ocrpruefen tag for {doc_id}: {tag_err}")
                             else:
-                                batch_state["log"].append(
+                                self.state.batch.log.append(
                                     f"✅ {doc_title}: Retry erfolgreich! Qualität jetzt OK ({new_len} Zeichen)"
                                 )
                                 print(f"[OCR] Retry fixed quality for {doc_id}: {new_len} chars now passes threshold")
-                        
+
                         if not needs_review:
-                            # Reset error counter on success (transient errors should not accumulate)
                             reset_ocr_error(doc_id)
-                            
-                            # Step 1: PATCH content to Paperless
+
                             await paperless_client.update_document(doc_id, {"content": new_content})
-                            
-                            # Step 2: Tag changes via bulk_edit (with retry)
+
                             add_tags = []
                             remove_tags = []
                             tag_success = True
-                            
+
                             if set_finish_tag and ocrfinish_tag_id:
                                 add_tags.append(ocrfinish_tag_id)
                             if remove_runocr_tag and runocr_tag_id:
                                 remove_tags.append(runocr_tag_id)
-                            
+
                             if add_tags or remove_tags:
                                 for attempt in range(2):
                                     try:
@@ -1479,37 +1220,33 @@ class OcrService:
                                             await asyncio.sleep(2)
                                         else:
                                             logger.error(f"Tag update for doc {doc_id} failed after retry: {e}")
-                                            batch_state["log"].append(f"⚠️ {doc_title}: Tag-Update 2x fehlgeschlagen: {e}")
-                            
-                            # Stats ONLY after content + tag were both handled
+                                            self.state.batch.log.append(f"⚠️ {doc_title}: Tag-Update 2x fehlgeschlagen: {e}")
+
                             try:
                                 self.save_stats(doc_id, ocr_duration, ocr_pages, new_len, success=tag_success)
                             except:
                                 pass
-                            
+
                             if not tag_success:
-                                batch_state["log"].append(f"⚠️ {doc_title}: Content OK, aber ocrfinish-Tag fehlt! ({new_len} Zeichen)")
+                                self.state.batch.log.append(f"⚠️ {doc_title}: Content OK, aber ocrfinish-Tag fehlt! ({new_len} Zeichen)")
                             else:
-                                batch_state["log"].append(f"✅ {doc_title}: OCR erfolgreich ({new_len} Zeichen)")
+                                self.state.batch.log.append(f"✅ {doc_title}: OCR erfolgreich ({new_len} Zeichen)")
                     else:
-                        batch_state["log"].append(f"⚠️ {doc_title}: Kein Text erkannt")
-                        batch_state["errors"].append(f"{doc_title}: Kein Text erkannt")
-                    
+                        self.state.batch.log.append(f"⚠️ {doc_title}: Kein Text erkannt")
+                        self.state.batch.errors.append(f"{doc_title}: Kein Text erkannt")
+
                 except Exception as e:
-                    # Save failed stats so we can track failures
                     try:
                         self.save_stats(doc_id, 0, 0, 0, success=False)
                     except:
                         pass
                     error_msg = f"❌ {doc_title}: Fehler - {str(e)}"
-                    batch_state["log"].append(error_msg)
-                    batch_state["errors"].append(error_msg)
+                    self.state.batch.log.append(error_msg)
+                    self.state.batch.errors.append(error_msg)
                     logger.error(f"OCR error for document {doc_id}: {e}")
-                    
-                    # Persistent error tracking: count failures per document
+
                     err_count = increment_ocr_error(doc_id, doc_title, str(e))
                     if err_count >= MAX_ERROR_COUNT:
-                        # Tag document as permanently failed
                         try:
                             add_t = [ocrerror_tag_id] if ocrerror_tag_id else []
                             rem_t = [runocr_tag_id] if runocr_tag_id and remove_runocr_tag else []
@@ -1519,7 +1256,6 @@ class OcrService:
                                     add_tags=add_t if add_t else None,
                                     remove_tags=rem_t if rem_t else None
                                 )
-                            # Add to permanent error list
                             error_list = load_ocr_error_list()
                             if not any(entry["document_id"] == doc_id for entry in error_list):
                                 error_list.append({
@@ -1530,38 +1266,37 @@ class OcrService:
                                     "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S")
                                 })
                                 save_ocr_error_list(error_list)
-                            batch_state["log"].append(
+                            self.state.batch.log.append(
                                 f"🚫 {doc_title}: {err_count}x fehlgeschlagen → Tag 'ocrfehler' gesetzt, wird nicht mehr verarbeitet"
                             )
                             print(f"[OCR] Doc {doc_id} permanently marked as failed ({err_count} failures)")
                         except Exception as tag_err:
                             logger.error(f"Failed to set ocrfehler tag for {doc_id}: {tag_err}")
                     else:
-                        batch_state["log"].append(
+                        self.state.batch.log.append(
                             f"⚠️ {doc_title}: Fehler {err_count}/{MAX_ERROR_COUNT} - wird beim nächsten Lauf erneut versucht"
                         )
-                
-                batch_state["processed"] = i + 1
-                
-                # Small delay between documents to not overload Ollama
+
+                self.state.batch.processed = i + 1
+
                 await asyncio.sleep(5)
-            
-            batch_state["log"].append(
-                f"🏁 Fertig! {batch_state['processed']}/{batch_state['total']} Dokumente verarbeitet, "
-                f"{len(batch_state['errors'])} Fehler."
+
+            self.state.batch.log.append(
+                f"🏁 Fertig! {self.state.batch.processed}/{self.state.batch.total} Dokumente verarbeitet, "
+                f"{len(self.state.batch.errors)} Fehler."
             )
-            
+
         except Exception as e:
             import traceback
             error_details = traceback.format_exc()
-            batch_state["log"].append(f"💥 Kritischer Fehler: {str(e)}")
-            batch_state["log"].append(f"Traceback: {error_details}")
+            self.state.batch.log.append(f"💥 Kritischer Fehler: {str(e)}")
+            self.state.batch.log.append(f"Traceback: {error_details}")
             logger.error(f"Batch OCR critical error: {e}\n{error_details}")
         finally:
             if lock_acquired:
                 ollama_release("ocr-batch")
-            batch_state["running"] = False
-            batch_state["current_document"] = None
+            self.state.batch.running = False
+            self.state.batch.current_document = None
 
     async def watchdog_loop(self, paperless_client):
         """Continuous background loop to check for new documents."""
@@ -1570,7 +1305,6 @@ class OcrService:
         logger.info("Watchdog started")
         print("[OCR] Watchdog started")
 
-        # Cache tag objects so we don't query Paperless on every cycle
         _ocrfinish_tag = None
         _ocrpruefen_tag = None
         _ocrerror_tag = None
@@ -1591,19 +1325,17 @@ class OcrService:
             except Exception:
                 return []
 
-        while watchdog_state["enabled"]:
+        while self.state.watchdog.enabled:
             try:
-                watchdog_state["running"] = True
+                self.state.watchdog.running = True
 
-                from app.services.ollama_lock import is_locked as ollama_is_locked, current_holder as ollama_holder
-                if batch_state["running"] or single_ocr_running or ollama_is_locked():
-                    reason = "Batch" if batch_state["running"] else "Single-OCR" if single_ocr_running else f"Ollama belegt ({ollama_holder()})"
+                if self.state.batch.running or self.state.is_locked() or ollama_is_locked():
+                    reason = "Batch" if self.state.batch.running else "Single-OCR" if self.state.is_locked() else f"Ollama belegt ({ollama_holder()})"
                     logger.info(f"Watchdog: {reason} aktiv, ueberspringe diesen Zyklus")
                 else:
                     logger.info("Watchdog checking for new documents...")
                     print(f"[OCR] Watchdog check at {datetime.now().isoformat()}")
 
-                    # --- Smart pre-check: only start batch when there's something to do ---
                     should_run = True
                     try:
                         exclude_ids = await _get_exclude_tag_ids()
@@ -1611,9 +1343,6 @@ class OcrService:
                             pending_count = await paperless_client.get_document_count(
                                 tags_id_none=exclude_ids
                             )
-                            # NOTE: Do NOT subtract the ignore list here – ignored documents already
-                            # have ocrfinish/ocrfehler tags and are excluded by the Paperless query.
-                            # Subtracting would cause false negatives when the ignore list is large.
                             if pending_count == 0:
                                 logger.info("Watchdog: Keine neuen Dokumente – überspringe diesen Zyklus")
                                 should_run = False
@@ -1630,20 +1359,19 @@ class OcrService:
                             remove_runocr_tag=True
                         )
 
-                watchdog_state["last_run"] = datetime.now().isoformat()
+                self.state.watchdog.last_run = datetime.now().isoformat()
 
             except Exception as e:
                 logger.error(f"Watchdog error: {e}")
                 print(f"[OCR] Watchdog error: {e}")
 
-            # Idle between cycles – not "running" during the wait
-            watchdog_state["running"] = False
-            interval_min = watchdog_state.get("interval_minutes", 1)
+            self.state.watchdog.running = False
+            interval_min = self.state.watchdog.get("interval_minutes", 1)
             for _ in range(interval_min * 60):
-                if not watchdog_state["enabled"]:
+                if not self.state.watchdog.enabled:
                     break
                 await asyncio.sleep(1)
 
-        watchdog_state["running"] = False
+        self.state.watchdog.running = False
         logger.info("Watchdog stopped")
         print("[OCR] Watchdog stopped")

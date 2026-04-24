@@ -1,5 +1,6 @@
 """API Router for the KI-Klassifizierer feature."""
 
+import asyncio
 import httpx
 import logging
 from fastapi import APIRouter, Depends, HTTPException
@@ -14,7 +15,9 @@ from dishka import FromDishka, AsyncContainer
 from app.container import container as di_container
 
 from app.database import get_db
-from app.services.protocols import PaperlessClient, DocumentClassifierService
+from app.services.paperless.protocol import PaperlessClient
+from app.services.classifier.protocol import DocumentClassifierService
+from app.services.classifier import AutoClassifyState, auto_classify_loop
 from app.models.classifier import (
     ClassifierConfig, StoragePathProfile, CustomFieldMapping, ClassificationHistory,
 )
@@ -179,7 +182,17 @@ async def get_prompt_defaults():
     return FIELD_DEFAULTS
 
 
-# --- Statistics ---
+# Persist enabled flag to AppSettings KV store (STATE-08)
+
+async def _persist_auto_classify_enabled(enabled: bool, db: AsyncSession) -> None:
+    """Persist auto_classify_enabled flag to AppSettings."""
+    from app.routers.settings import set_setting
+    await set_setting(
+        "auto_classify_enabled",
+        "true" if enabled else "false",
+        "bool",
+        db
+    )
 
 @router.get("/stats")
 @inject
@@ -973,205 +986,71 @@ async def get_tag_stats(db: AsyncSession = Depends(get_db)):
 
 # ── Auto-Classify Background Job ─────────────────────────────────────────────
 
-import asyncio
-
-_auto_classify_state: Dict[str, Any] = {
-    "enabled": False,
-    "running": False,
-    "task": None,
-    "processed": 0,
-    "errors": 0,
-    "reviewed": 0,
-    "current_doc": None,
-    "last_run": None,
-}
-
-
-async def _auto_classify_loop(container: AsyncContainer):
-    """Background loop that classifies unprocessed documents."""
-    import time
-    from app.services.ollama_lock import acquire as ollama_acquire, release as ollama_release, is_locked as ollama_is_locked, current_holder as ollama_holder
-
-    async with container() as ctx:
-        client = await ctx.get(PaperlessClient)
-        service = await ctx.get(DocumentClassifierService)
-
-        while _auto_classify_state["enabled"]:
-            _auto_classify_state["last_run"] = time.strftime("%Y-%m-%dT%H:%M:%S")
-            _auto_classify_state["running"] = False
-
-            try:
-                config = await service.get_config()
-                uses_ollama = config.active_provider == "ollama"
-                mode = getattr(config, "auto_classify_mode", "review") or "review"
-                interval = getattr(config, "auto_classify_interval", 5) or 5
-
-                # Find all applied document IDs using service's session_factory
-                classified_ids: set = set()
-                if service.session_factory is not None:
-                    async with service.session_factory() as db_sess:
-                        applied_q = await db_sess.execute(
-                            select(ClassificationHistory.document_id).where(
-                                ClassificationHistory.status.in_(["applied", "review", "pending"])
-                            ).distinct()
-                        )
-                        classified_ids = {r[0] for r in applied_q.all()}
-
-                # Fetch documents in batches to find unclassified ones
-                found_any = False
-                page = 1
-                while _auto_classify_state["enabled"]:
-                    result = await client._request(
-                        "GET", "/documents/",
-                        params={"page_size": 50, "page": page, "ordering": "id"},
-                    )
-                    if not result:
-                        break
-
-                    docs = result.get("results", [])
-                    if not docs:
-                        break
-
-                    for doc in docs:
-                        if not _auto_classify_state["enabled"]:
-                            break
-                        doc_id = doc.get("id")
-                        if doc_id in classified_ids:
-                            continue
-
-                        # Skip documents with tags in auto_classify_skip_tag_ids
-                        skip_tags = getattr(config, "auto_classify_skip_tag_ids", None) or []
-                        if skip_tags:
-                            doc_tags = doc.get("tags", [])
-                            if any(t in skip_tags for t in doc_tags):
-                                classified_ids.add(doc_id)  # don't retry
-                                continue
-
-                        # Per-document Ollama lock: acquire before, release after
-                        if uses_ollama:
-                            if ollama_is_locked():
-                                holder = ollama_holder()
-                                logger.info(f"Auto-classify doc {doc_id}: Ollama belegt durch {holder}, warte...")
-                                _auto_classify_state["current_doc"] = None
-                                while ollama_is_locked() and _auto_classify_state["enabled"]:
-                                    await asyncio.sleep(5)
-                                if not _auto_classify_state["enabled"]:
-                                    break
-                            got_lock = await ollama_acquire("classifier", timeout=300)
-                            if not got_lock:
-                                logger.warning(f"Auto-classify doc {doc_id}: Lock-Timeout, ueberspringe")
-                                await asyncio.sleep(10)
-                                continue
-
-                        found_any = True
-                        _auto_classify_state["running"] = True
-                        _auto_classify_state["current_doc"] = doc_id
-
-                        try:
-                            res = await service.classify_document_auto(doc_id, mode)
-                            action = res.get("action", "")
-                            if action == "applied":
-                                _auto_classify_state["processed"] += 1
-                            elif action == "review":
-                                _auto_classify_state["reviewed"] += 1
-                            elif action == "error":
-                                _auto_classify_state["errors"] += 1
-                            else:
-                                _auto_classify_state["processed"] += 1
-                            classified_ids.add(doc_id)
-                            logger.info(f"Auto-classify doc {doc_id}: {action}")
-                        except Exception as e:
-                            _auto_classify_state["errors"] += 1
-                            classified_ids.add(doc_id)
-                            logger.error(f"Auto-classify doc {doc_id} failed: {e}")
-                        finally:
-                            if uses_ollama:
-                                ollama_release("classifier")
-                            _auto_classify_state["running"] = False
-                            _auto_classify_state["current_doc"] = None
-
-                        await asyncio.sleep(2)
-
-                    if not result.get("next"):
-                        break
-                    page += 1
-
-                if not found_any:
-                    logger.info(f"Auto-classify: keine neuen Dokumente, warte {interval} min")
-
-            except Exception as e:
-                logger.error(f"Auto-classify loop error: {e}")
-
-            _auto_classify_state["running"] = False
-            _auto_classify_state["current_doc"] = None
-
-            if _auto_classify_state["enabled"]:
-                await asyncio.sleep(interval * 60)
-
 
 @router.post("/auto-classify/start")
-async def start_auto_classify(db: AsyncSession = Depends(get_db)):
+@inject
+async def start_auto_classify(
+    db: AsyncSession = Depends(get_db),
+    state: FromDishka[AutoClassifyState] = None,
+):
     """Start the auto-classification background job."""
-    if _auto_classify_state["enabled"]:
+    if state.enabled:
         return {"status": "already_running"}
 
-    _auto_classify_state["enabled"] = True
-    _auto_classify_state["processed"] = 0
-    _auto_classify_state["errors"] = 0
-    _auto_classify_state["reviewed"] = 0
-    _auto_classify_state["task"] = asyncio.create_task(_auto_classify_loop(di_container))
+    state.enabled = True
+    state.processed = 0
+    state.errors = 0
+    state.reviewed = 0
+    state._task = asyncio.create_task(auto_classify_loop(di_container))
     logger.info("Auto-classify started")
 
-    # Persist to DB so it auto-starts after restart
+    # Persist to AppSettings KV store (STATE-08)
     try:
-        q = await db.execute(select(ClassifierConfig).where(ClassifierConfig.id == 1))
-        config = q.scalars().first()
-        if config:
-            config.auto_classify_enabled = True
-            await db.commit()
+        await _persist_auto_classify_enabled(True, db)
     except Exception as e:
-        logger.warning(f"Could not persist auto-classify enabled: {e}")
+        logger.warning(f"Could not persist auto-classify enabled to KV: {e}")
 
     return {"status": "started"}
 
 
 @router.post("/auto-classify/stop")
-async def stop_auto_classify(db: AsyncSession = Depends(get_db)):
+@inject
+async def stop_auto_classify(
+    db: AsyncSession = Depends(get_db),
+    state: FromDishka[AutoClassifyState] = None,
+):
     """Stop the auto-classification background job."""
-    _auto_classify_state["enabled"] = False
-    task = _auto_classify_state.get("task")
+    state.enabled = False
+    task = state._task
     if task and not task.done():
         task.cancel()
-    _auto_classify_state["running"] = False
-    _auto_classify_state["current_doc"] = None
+    state.running = False
+    state.current_doc = None
     logger.info("Auto-classify stopped")
 
-    # Persist to DB
+    # Persist to AppSettings KV store (STATE-08)
     try:
-        q = await db.execute(select(ClassifierConfig).where(ClassifierConfig.id == 1))
-        config = q.scalars().first()
-        if config:
-            config.auto_classify_enabled = False
-            await db.commit()
+        await _persist_auto_classify_enabled(False, db)
     except Exception as e:
-        logger.warning(f"Could not persist auto-classify disabled: {e}")
+        logger.warning(f"Could not persist auto-classify disabled to KV: {e}")
 
     return {"status": "stopped"}
 
 
 @router.get("/auto-classify/status")
-async def get_auto_classify_status():
+@inject
+async def get_auto_classify_status(state: FromDishka[AutoClassifyState] = None):
     """Get current status of the auto-classification job."""
-    from app.services.ollama_lock import is_locked as ollama_is_locked, current_holder as ollama_holder
+    from app.services.llm import is_locked as ollama_is_locked, current_holder as ollama_holder
     return {
-        "enabled": _auto_classify_state["enabled"],
-        "running": _auto_classify_state["running"],
-        "processed": _auto_classify_state["processed"],
-        "errors": _auto_classify_state["errors"],
-        "reviewed": _auto_classify_state["reviewed"],
-        "current_doc": _auto_classify_state["current_doc"],
-        "last_run": _auto_classify_state["last_run"],
-        "waiting_for": ollama_holder() if ollama_is_locked() and _auto_classify_state["enabled"] and ollama_holder() != "classifier" else None,
+        "enabled": state.enabled,
+        "running": state.running,
+        "processed": state.processed,
+        "errors": state.errors,
+        "reviewed": state.reviewed,
+        "current_doc": state.current_doc,
+        "last_run": state.last_run,
+        "waiting_for": ollama_holder() if ollama_is_locked() and state.enabled and ollama_holder() != "classifier" else None,
     }
 
 

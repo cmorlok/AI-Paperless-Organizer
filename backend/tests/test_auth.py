@@ -6,14 +6,14 @@ import sys
 
 import pytest
 
-from app.services.auth_service import (
+from app.services.auth.service import (
     hash_password,
     verify_password,
-    SESSIONS,
     create_session,
     is_session_valid,
     is_auth_disabled,
 )
+from app.services.auth.state import SESSIONS
 from app.models.auth_config import AuthConfig
 from sqlalchemy import select
 
@@ -37,8 +37,8 @@ def test_no_transitive_container_import():
     # Save current modules
     before = set(sys.modules.keys())
 
-    # Import auth_service fresh
-    importlib.import_module("app.services.auth_service")
+    # Import auth service sub-package fresh
+    importlib.import_module("app.services.auth.service")
     after_auth_service = set(sys.modules.keys())
 
     # Import auth router fresh

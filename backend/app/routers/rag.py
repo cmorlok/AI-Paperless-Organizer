@@ -8,7 +8,7 @@ from starlette.requests import Request
 from dishka.integrations.fastapi import inject
 from dishka import FromDishka
 
-from app.services.protocols import RAGService
+from app.services.rag.protocol import RAGService
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -192,7 +192,7 @@ async def rag_health(service: FromDishka[RAGService] = None):
 
 
 async def _probe_embedding(config: dict) -> dict:
-    from app.services.llm_service import llm_embedding
+    from app.services.llm import llm_embedding
     provider = config["embedding_provider"]
     model = config["embedding_model"]
     try:

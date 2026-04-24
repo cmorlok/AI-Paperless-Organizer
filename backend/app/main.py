@@ -4,6 +4,7 @@ import os
 import sys
 import time
 import traceback
+from typing import Optional
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -20,12 +21,13 @@ logger = get_logger("app.main")
 
 from app.routers import paperless, correspondents, tags, document_types, settings, llm, debug, statistics, ignored_items, ocr, cleanup, classifier, rag, api_keys, cloud_import, duplicates, auth
 from app.routers.ocr import ocr_settings
-from app.services.ocr_service import watchdog_state
-from app.services.protocols import PaperlessClient, OcrService, RAGService
-from app.services.auth_service import SessionAuthMiddleware
+from app.services.ocr import OcrState, OcrService
+from app.services.classifier import AutoClassifyState, auto_classify_loop
+from app.services.paperless import PaperlessClient
+from app.services.rag import RAGService
+from app.services.auth import SessionAuthMiddleware
 from app.database import async_session
 from app.container import container as di_container
-
 
 async def reset_password_if_requested() -> None:
     """Per CONTEXT.md D-14: RESET_PASSWORD=true clears AuthConfig password_hash."""
@@ -61,35 +63,53 @@ async def lifespan(app: FastAPI):
     logger.info("Logging active — worker process ready")
     await reset_password_if_requested()
 
-    # Auto-start watchdog if it was enabled before shutdown
-    if ocr_settings.get("watchdog_enabled"):
+    # Get a database session for reading persisted settings
+    db_sess = async_session()
+
+    # Helper to read from KV store
+    async def _read_kv_setting(key: str) -> Optional[bool]:
+        try:
+            from app.routers.settings import get_setting
+            val = await get_setting(key, db_sess)
+            return val == "true" if val is not None else None
+        except Exception:
+            return None
+
+    # Auto-start watchdog if it was enabled before shutdown (STATE-08: check KV store first)
+    kv_watchdog_enabled = await _read_kv_setting("ocr_watchdog_enabled")
+    file_watchdog_enabled = ocr_settings.get("watchdog_enabled")
+    start_watchdog = kv_watchdog_enabled if kv_watchdog_enabled is not None else file_watchdog_enabled
+
+    if start_watchdog:
         try:
             async with di_container() as ctx:
                 client = await ctx.get(PaperlessClient)
                 service = await ctx.get(OcrService)
-                watchdog_state["enabled"] = True
-                watchdog_state["interval_minutes"] = ocr_settings.get("watchdog_interval", 5)
+                ocr_state = await ctx.get(OcrState)
+                ocr_state.reset()
+                ocr_state.watchdog.enabled = True
+                ocr_state.watchdog.interval_minutes = ocr_settings.get("watchdog_interval", 5)
                 loop = asyncio.get_running_loop()
-                watchdog_state["task"] = loop.create_task(service.watchdog_loop(client))
+                ocr_state.watchdog.task = loop.create_task(service.watchdog_loop(client))
                 logging.getLogger(__name__).info(
-                    f"Watchdog auto-started (interval: {watchdog_state['interval_minutes']} min)"
+                    f"Watchdog auto-started from KV store (interval: {ocr_state.watchdog.interval_minutes} min)"
                 )
         except Exception as e:
             logging.getLogger(__name__).error(f"Watchdog auto-start failed: {e}")
 
-    # Auto-start classifier background job if enabled
-    try:
-        from app.models.classifier import ClassifierConfig
-        async with async_session() as db_sess:
-            q = await db_sess.execute(sa_select(ClassifierConfig).where(ClassifierConfig.id == 1))
-            cls_config = q.scalars().first()
-            if cls_config and getattr(cls_config, "auto_classify_enabled", False):
-                from app.routers.classifier import _auto_classify_state, _auto_classify_loop
-                _auto_classify_state["enabled"] = True
-                asyncio.get_running_loop().create_task(_auto_classify_loop(di_container))
-                logging.getLogger(__name__).info("Auto-classify auto-started")
-    except Exception as e:
-        logging.getLogger(__name__).error(f"Auto-classify auto-start failed: {e}")
+    # Auto-start classifier background job if enabled (STATE-08: check KV store first)
+    kv_classify_enabled = await _read_kv_setting("auto_classify_enabled")
+
+    if kv_classify_enabled:
+        try:
+            async with di_container() as ctx:
+                ac_state: AutoClassifyState = await ctx.get(AutoClassifyState)
+                ac_state.reset()
+                ac_state.enabled = True
+            asyncio.get_running_loop().create_task(auto_classify_loop(di_container))
+            logging.getLogger(__name__).info("Auto-classify auto-started from KV store")
+        except Exception as e:
+            logging.getLogger(__name__).error(f"Auto-classify auto-start failed: {e}")
 
     # Reset stale RAG indexing status + auto-resume incomplete indexing
     try:
@@ -141,47 +161,71 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logging.getLogger(__name__).error(f"RAG status reset failed: {e}")
 
-    # Auto-start cloud sync daemon if any sources are enabled
-    try:
-        from app.models.cloud_import import CloudSource
-        from app.services.cloud_import_service import _cloud_sync_state, cloud_sync_loop
-        async with async_session() as db_sess:
+    # Auto-start cloud sync daemon if enabled in KV store (STATE-08)
+    kv_cloud_sync_enabled = await _read_kv_setting("cloud_sync_enabled")
+
+    # Fall back to checking if any sources are enabled (legacy behavior)
+    if kv_cloud_sync_enabled is None:
+        try:
+            from app.models.cloud_import import CloudSource
             src_q = await db_sess.execute(
                 sa_select(CloudSource).where(CloudSource.enabled == True)
             )
-            has_sources = src_q.scalars().first() is not None
-        if has_sources:
-            _cloud_sync_state["enabled"] = True
+            kv_cloud_sync_enabled = src_q.scalars().first() is not None
+        except Exception:
+            pass
+
+    if kv_cloud_sync_enabled:
+        try:
+            from app.services.cloud_import import CloudSyncState, cloud_sync_loop
+            async with di_container() as ctx:
+                css: CloudSyncState = await ctx.get(CloudSyncState)
+                css.reset()
+                css.enabled = True
             asyncio.get_running_loop().create_task(cloud_sync_loop(di_container))
-            logging.getLogger(__name__).info("Cloud sync daemon auto-started")
-    except Exception as e:
-        logging.getLogger(__name__).error(f"Cloud sync auto-start failed: {e}")
+            logging.getLogger(__name__).info("Cloud sync daemon auto-started from KV store")
+        except Exception as e:
+            logging.getLogger(__name__).error(f"Cloud sync auto-start failed: {e}")
+
+    # Close the session used for reading settings
+    await db_sess.close()
 
     yield
     # Shutdown: stop auto-classify + watchdog + cloud sync gracefully
+
+    # Auto-classify shutdown - resolve from container
     try:
-        from app.routers.classifier import _auto_classify_state
-        _auto_classify_state["enabled"] = False
-        task = _auto_classify_state.get("task")
-        if task and not task.done():
-            task.cancel()
+        async with di_container() as ctx:
+            ac_state: AutoClassifyState = await ctx.get(AutoClassifyState)
+            ac_state.enabled = False
+            task = ac_state._task
+            if task and not task.done():
+                task.cancel()
     except Exception:
         pass
 
+    # Cloud sync shutdown - resolve from container
     try:
-        from app.services.cloud_import_service import _cloud_sync_state as _css
-        _css["enabled"] = False
-        task = _css.get("task")
-        if task and not task.done():
-            task.cancel()
+        async with di_container() as ctx:
+            css: CloudSyncState = await ctx.get(CloudSyncState)
+            css.enabled = False
+            task = css.task
+            if task and not task.done():
+                task.cancel()
     except Exception:
         pass
 
-    if watchdog_state.get("enabled"):
-        watchdog_state["enabled"] = False
-        task = watchdog_state.get("task")
-        if task and not task.done():
-            task.cancel()
+    # OCR shutdown - resolve from container
+    try:
+        async with di_container() as ctx:
+            ocr_state = await ctx.get(OcrState)
+            if ocr_state.watchdog.enabled:
+                ocr_state.watchdog.enabled = False
+                task = ocr_state.watchdog.task
+                if task and not task.done():
+                    task.cancel()
+    except Exception:
+        pass
 
 
 app = FastAPI(

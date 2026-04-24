@@ -7,7 +7,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from app.database import get_db
 from app.models import PaperlessCache
-from app.services.protocols import StatisticsService, PaperlessClient
+from app.services.statistics.protocol import StatisticsService
+from app.services.paperless.protocol import PaperlessClient
 from dishka.integrations.fastapi import inject
 from dishka import FromDishka
 

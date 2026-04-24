@@ -27,7 +27,7 @@ def test_app_imports_cleanly():
 def test_unauthenticated_tags_returns_401(test_session_factory, monkeypatch):
     import app.database as db_mod
     monkeypatch.setattr(db_mod, "async_session", test_session_factory)
-    from app.services.auth_service import SESSIONS
+    from app.services.auth.state import SESSIONS
     SESSIONS.clear()
     import app.main as main_mod
     with TestClient(main_mod.app) as client:
@@ -39,7 +39,7 @@ def test_unauthenticated_tags_returns_401(test_session_factory, monkeypatch):
 def test_unauthenticated_settings_paperless_returns_401(test_session_factory, monkeypatch):
     import app.database as db_mod
     monkeypatch.setattr(db_mod, "async_session", test_session_factory)
-    from app.services.auth_service import SESSIONS
+    from app.services.auth.state import SESSIONS
     SESSIONS.clear()
     import app.main as main_mod
     with TestClient(main_mod.app) as client:
@@ -50,7 +50,7 @@ def test_unauthenticated_settings_paperless_returns_401(test_session_factory, mo
 def test_public_auth_status_returns_200_without_cookie(test_session_factory, monkeypatch):
     import app.database as db_mod
     monkeypatch.setattr(db_mod, "async_session", test_session_factory)
-    from app.services.auth_service import SESSIONS
+    from app.services.auth.state import SESSIONS
     SESSIONS.clear()
     import app.main as main_mod
     with TestClient(main_mod.app) as client:
@@ -65,7 +65,7 @@ def test_public_auth_status_returns_200_without_cookie(test_session_factory, mon
 def test_public_settings_app_returns_200_without_cookie(test_session_factory, monkeypatch):
     import app.database as db_mod
     monkeypatch.setattr(db_mod, "async_session", test_session_factory)
-    from app.services.auth_service import SESSIONS
+    from app.services.auth.state import SESSIONS
     SESSIONS.clear()
     import app.main as main_mod
     with TestClient(main_mod.app) as client:
@@ -76,7 +76,7 @@ def test_public_settings_app_returns_200_without_cookie(test_session_factory, mo
 def test_public_health_returns_200_without_cookie(test_session_factory, monkeypatch):
     import app.database as db_mod
     monkeypatch.setattr(db_mod, "async_session", test_session_factory)
-    from app.services.auth_service import SESSIONS
+    from app.services.auth.state import SESSIONS
     SESSIONS.clear()
     import app.main as main_mod
     with TestClient(main_mod.app) as client:
@@ -116,7 +116,7 @@ def test_cors_default_origins_when_env_absent(monkeypatch):
 def test_login_logout_end_to_end(test_session_factory, monkeypatch):
     import app.database as db_mod
     monkeypatch.setattr(db_mod, "async_session", test_session_factory)
-    from app.services.auth_service import SESSIONS
+    from app.services.auth.state import SESSIONS
     SESSIONS.clear()
     import app.main as main_mod
     with TestClient(main_mod.app) as client:
@@ -150,7 +150,7 @@ def test_login_logout_end_to_end(test_session_factory, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_reset_password_env_clears_hash(monkeypatch, test_session_factory):
-    from app.services.auth_service import hash_password
+    from app.services.auth.service import hash_password
     from app.models.auth_config import AuthConfig
     from sqlalchemy import select
 
@@ -175,7 +175,7 @@ async def test_reset_password_env_clears_hash(monkeypatch, test_session_factory)
 def test_auth_disabled_env_bypasses_middleware(test_session_factory, monkeypatch):
     import app.database as db_mod
     monkeypatch.setattr(db_mod, "async_session", test_session_factory)
-    from app.services.auth_service import SESSIONS
+    from app.services.auth.state import SESSIONS
     SESSIONS.clear()
     monkeypatch.setenv("DISABLE_LOGIN", "true")
     import app.main as main_mod
@@ -194,7 +194,7 @@ def test_auth_disabled_env_bypasses_middleware(test_session_factory, monkeypatch
 async def test_settings_app_returns_password_set_from_auth_config(
     monkeypatch, test_session_factory
 ):
-    from app.services.auth_service import hash_password
+    from app.services.auth.service import hash_password
     from app.models.auth_config import AuthConfig
     from sqlalchemy import select
 
@@ -206,7 +206,7 @@ async def test_settings_app_returns_password_set_from_auth_config(
 
     import app.database as db_mod
     monkeypatch.setattr(db_mod, "async_session", test_session_factory)
-    from app.services.auth_service import SESSIONS
+    from app.services.auth.state import SESSIONS
     SESSIONS.clear()
     import app.main as main_mod
 

@@ -19,7 +19,7 @@ logger = get_logger("llm")
 # LiteLLM callback-based request/response logging
 # =========================================================================
 
-_callbacks_registered = False
+from app.services.llm.state import _callbacks_registered
 
 
 def _log_llm(msg: str, data: dict[str, Any]) -> None:
@@ -102,10 +102,12 @@ async def _llm_failure_callback(kwargs: dict[str, Any], exception: Exception, st
 
 def _register_litellm_callbacks() -> None:
     """Register input/success/failure callbacks with LiteLLM (idempotent)."""
-    global _callbacks_registered
+    from app.services.llm.state import _callbacks_registered
     if _callbacks_registered:
         return
-    _callbacks_registered = True
+    # Mark as registered before setting the flag to avoid races
+    import app.services.llm.state as llm_state
+    llm_state._callbacks_registered = True
     litellm.logging_callback_manager.add_litellm_input_callback(_llm_input_callback)
     litellm.logging_callback_manager.add_litellm_success_callback(_llm_success_callback)
     litellm.logging_callback_manager.add_litellm_failure_callback(_llm_failure_callback)
@@ -142,7 +144,7 @@ def log_llm_error(msg: str, exc: Exception):
     """Log error with full details + traceback via print() (bypasses uvicorn logging suppression)."""
     detail = extract_litellm_error(exc)
     tb = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
-    print(f"ERROR app.services.llm_service: {msg}: {detail}\n{tb}", flush=True)
+    print(f"ERROR app.services.llm.service: {msg}: {detail}\n{tb}", flush=True)
     logger.error("%s: %s", msg, detail, exc_info=True)
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -234,7 +236,7 @@ async def llm_completion(
 ):
     """Wrapper around litellm.acompletion.
 
-    For provider=\"ollama\" calls, applies sensible defaults internally:
+    For provider="ollama" calls, applies sensible defaults internally:
       num_ctx=16384, json_output=True, keep_alive as specified (or None).
     Callers only need to override what differs from the default.
     """
@@ -809,6 +811,3 @@ class LitellmService:
                 "error": f"JSON-Fehler: {str(e)}. Kontext: ...{error_context}...",
                 "stats": stats
             }
-
-
-

@@ -10,18 +10,29 @@ from sqlalchemy import select, desc
 
 from app.database import get_db
 from app.models.cloud_import import CloudSource, CloudImportLog
-from app.services.cloud_import_service import (
-    get_cloud_sync_state,
-    cloud_sync_loop,
-    _cloud_sync_state,
-)
+from app.services.cloud_import.protocol import CloudImportService
+from app.services.cloud_import.state import CloudSyncState
+from app.services.cloud_import.sync_loop import cloud_sync_loop
 from app.container import container as di_container
 from dishka.integrations.fastapi import inject
 from dishka import FromDishka
-from app.services.protocols import PaperlessClient, CloudImportService
+from app.services.paperless.protocol import PaperlessClient
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
+
+
+# Persist enabled flag to AppSettings KV store (STATE-08)
+
+async def _persist_cloud_sync_enabled(enabled: bool, db: AsyncSession) -> None:
+    """Persist cloud_sync_enabled flag to AppSettings."""
+    from app.routers.settings import set_setting
+    await set_setting(
+        "cloud_sync_enabled",
+        "true" if enabled else "false",
+        "bool",
+        db
+    )
 
 
 # ── Pydantic schemas ─────────────────────────────────────────────────────────
@@ -217,39 +228,61 @@ async def clear_import_log(source_id: Optional[int] = None, db: AsyncSession = D
 # ── Sync daemon control ──────────────────────────────────────────────────────
 
 @router.get("/status")
-async def get_sync_status():
-    state = get_cloud_sync_state()
+@inject
+async def get_sync_status(state: FromDishka[CloudSyncState] = None):
     return {
-        "enabled": state["enabled"],
-        "running": state["running"],
-        "current_source_name": state["current_source_name"],
-        "current_file": state["current_file"],
-        "last_run": state["last_run"],
-        "files_imported_session": state["files_imported_session"],
-        "errors_session": state["errors_session"],
+        "enabled": state.enabled,
+        "running": state.running,
+        "current_source_name": state.current_source_name,
+        "current_file": state.current_file,
+        "last_run": state.last_run,
+        "files_imported_session": state.files_imported_session,
+        "errors_session": state.errors_session,
     }
 
 
 @router.post("/start")
-async def start_sync_daemon():
-    if _cloud_sync_state["enabled"]:
+@inject
+async def start_sync_daemon(
+    db: AsyncSession = Depends(get_db),
+    state: FromDishka[CloudSyncState] = None,
+):
+    if state.enabled:
         return {"status": "already_running"}
-    _cloud_sync_state["enabled"] = True
-    _cloud_sync_state["files_imported_session"] = 0
-    _cloud_sync_state["errors_session"] = 0
-    _cloud_sync_state["task"] = asyncio.get_running_loop().create_task(cloud_sync_loop(di_container))
+    state.enabled = True
+    state.files_imported_session = 0
+    state.errors_session = 0
+    state.task = asyncio.get_running_loop().create_task(cloud_sync_loop(di_container))
     logger.info("Cloud sync daemon gestartet")
+
+    # Persist to AppSettings KV store (STATE-08)
+    try:
+        await _persist_cloud_sync_enabled(True, db)
+    except Exception as e:
+        logger.warning(f"Could not persist cloud_sync_enabled to KV: {e}")
+
     return {"status": "started"}
 
 
 @router.post("/stop")
-async def stop_sync_daemon():
-    _cloud_sync_state["enabled"] = False
-    task = _cloud_sync_state.get("task")
+@inject
+async def stop_sync_daemon(
+    db: AsyncSession = Depends(get_db),
+    state: FromDishka[CloudSyncState] = None,
+):
+    state.enabled = False
+    task = state.task
     if task and not task.done():
         task.cancel()
-    _cloud_sync_state["running"] = False
+    state.running = False
     logger.info("Cloud sync daemon gestoppt")
+
+    # Persist to AppSettings KV store (STATE-08)
+    try:
+        await _persist_cloud_sync_enabled(False, db)
+    except Exception as e:
+        logger.warning(f"Could not persist cloud_sync_enabled to KV: {e}")
+
     return {"status": "stopped"}
 
 

@@ -11,8 +11,8 @@ from app.services.rag.embedding_service import EmbeddingService
 from app.services.rag.search_engine import SearchEngine, SearchResult
 from app.services.rag.indexer import Indexer
 from app.services.rag.rerank_service import RerankService
-from app.services import ollama_lock
-from app.services.llm_service import llm_completion
+from app.services.llm.lock import acquire as ollama_acquire, release as ollama_release, is_locked as ollama_is_locked, current_holder as ollama_holder
+from app.services.llm.service import llm_completion
 
 logger = logging.getLogger(__name__)
 
@@ -65,12 +65,12 @@ class RAGService:
 
         # Use Ollama lock for query embedding so OCR doesn't block us indefinitely
         if embed_service.provider == "ollama":
-            acquired = await ollama_lock.acquire("rag_embed", timeout=180)
+            acquired = await ollama_acquire("rag_embed", timeout=180)
             try:
                 query_embeddings = await embed_service.generate([query])
             finally:
                 if acquired:
-                    ollama_lock.release("rag_embed")
+                    ollama_release("rag_embed")
         else:
             query_embeddings = await embed_service.generate([query])
 
@@ -417,8 +417,8 @@ class RAGService:
         yield json.dumps({"type": "sources", "sources": sources})
 
         # Signal that LLM is generating (show lock state if busy)
-        if ollama_lock.is_locked() and ollama_lock.current_holder() != "rag_chat":
-            yield json.dumps({"type": "status", "message": f"Warte auf Ollama (läuft: {ollama_lock.current_holder()})..."})
+        if ollama_is_locked() and ollama_holder() != "rag_chat":
+            yield json.dumps({"type": "status", "message": f"Warte auf Ollama (läuft: {ollama_holder()})..."})
         else:
             yield json.dumps({"type": "status", "message": "Generiere Antwort..."})
 
@@ -465,7 +465,7 @@ class RAGService:
         try:
             if is_ollama:
                 # CRITICAL REVIEW FEEDBACK HIGH: ollama_lock MUST be acquired BEFORE llm_completion
-                acquired = await ollama_lock.acquire("rag_chat", timeout=120)
+                acquired = await ollama_acquire("rag_chat", timeout=120)
                 if not acquired:
                     logger.warning("RAG chat: OllamaLock timeout – Classifier läuft noch, bitte erneut versuchen")
                     yield "\n\n[Ollama ist gerade belegt (Klassifizierung läuft). Bitte in 30 Sekunden erneut versuchen.]"
@@ -499,7 +499,7 @@ class RAGService:
 
             finally:
                 if is_ollama:
-                    ollama_lock.release("rag_chat")
+                    ollama_release("rag_chat")
 
         except Exception as e:
             logger.warning(f"Streaming error: {e}")

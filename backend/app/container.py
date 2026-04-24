@@ -6,32 +6,57 @@ from typing import AsyncIterator
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.database import async_session
-from app.services.protocols import (
-    LLMService,
-    PaperlessClient,
-    SimilarityService,
-    MergeService,
-    StatisticsService,
-    OcrService,
-    RAGService,
-    DocumentClassifierService,
-    DuplicateService,
-    CloudImportService,
-)
+# Protocol/state imports — use package-level
+from app.services.llm import LLMService
+from app.services.paperless import PaperlessClient
+from app.services.similarity import SimilarityService
+from app.services.merge import MergeService
+from app.services.statistics import StatisticsService
+from app.services.ocr import OcrService, OcrState, OcrCompareState
+from app.services.rag import RAGService
+from app.services.classifier import DocumentClassifierService, AutoClassifyState
+from app.services.duplicate import DuplicateService, DuplicateScanState
+from app.services.cloud_import import CloudImportService, CloudSyncState
 # Implementation imports use aliases to avoid name collision with Protocols
-from app.services.llm_service import LitellmService
-from app.services.paperless_client import PaperlessClient as PaperlessClientImpl
-from app.services.similarity import SimilarityService as SimilarityServiceImpl
-from app.services.merge import MergeService as MergeServiceImpl
-from app.services.statistics import StatisticsService as StatisticsServiceImpl
-from app.services.ocr_service import OcrService as OcrServiceImpl
+from app.services.llm.service import LitellmService
+from app.services.paperless.service import PaperlessClient as PaperlessClientImpl
+from app.services.similarity.service import SimilarityService as SimilarityServiceImpl
+from app.services.merge.service import MergeService as MergeServiceImpl
+from app.services.statistics.service import StatisticsService as StatisticsServiceImpl
+from app.services.ocr.service import OcrService as OcrServiceImpl
 from app.services.rag.service import RAGService as RAGServiceImpl
 from app.services.classifier.service import DocumentClassifierService as DocumentClassifierServiceImpl
-from app.services.duplicate_service import DuplicateService as DuplicateServiceImpl
-from app.services.cloud_import_service import CloudImportService as CloudImportServiceImpl
+from app.services.duplicate.service import DuplicateService as DuplicateServiceImpl
+from app.services.cloud_import.service import CloudImportService as CloudImportServiceImpl
 
 
 class AppProvider(Provider):
+    # State classes — APP-scoped singletons (Phase 05)
+    # Each service plan adds its own state provider here:
+    #   Plan 02: OcrState provider
+    #   Plan 03: AutoClassifyState provider
+    #   Plan 04: CloudSyncState and DuplicateScanState providers
+
+    @provide(scope=Scope.APP)
+    def ocr_state(self) -> OcrState:
+        return OcrState()
+
+    @provide(scope=Scope.APP)
+    def ocr_compare_state(self) -> OcrCompareState:
+        return OcrCompareState()
+
+    @provide(scope=Scope.APP)
+    def auto_classify_state(self) -> AutoClassifyState:
+        return AutoClassifyState()
+
+    @provide(scope=Scope.APP)
+    def cloud_sync_state(self) -> CloudSyncState:
+        return CloudSyncState()
+
+    @provide(scope=Scope.APP)
+    def duplicate_scan_state(self) -> DuplicateScanState:
+        return DuplicateScanState()
+
     @provide(scope=Scope.APP)
     def session_factory(self) -> async_sessionmaker:
         return async_session
@@ -83,9 +108,13 @@ class AppProvider(Provider):
     @provide(scope=Scope.APP)
     def ocr_service(
         self,
-        session_factory: async_sessionmaker,
+        state: OcrState,
     ) -> OcrService:
-        return OcrServiceImpl(session_factory=session_factory)
+        return OcrServiceImpl(
+            ollama_url="http://localhost:11434",
+            model="qwen2.5vl:7b",
+            state=state,
+        )
 
     @provide(scope=Scope.APP)
     def rag_service(
@@ -103,10 +132,12 @@ class AppProvider(Provider):
         self,
         paperless_client: PaperlessClient,
         session_factory: async_sessionmaker,
+        state: AutoClassifyState,
     ) -> DocumentClassifierService:
         return DocumentClassifierServiceImpl(
             paperless=paperless_client,
             session_factory=session_factory,
+            state=state,
         )
 
     @provide(scope=Scope.APP)
@@ -114,18 +145,21 @@ class AppProvider(Provider):
         self,
         session_factory: async_sessionmaker,
         paperless_client: PaperlessClient,
+        state: DuplicateScanState,
     ) -> DuplicateService:
         return DuplicateServiceImpl(
             session_factory=session_factory,
             paperless_client=paperless_client,
+            state=state,
         )
 
     @provide(scope=Scope.APP)
     def cloud_import_service(
         self,
         session_factory: async_sessionmaker,
+        state: CloudSyncState,
     ) -> CloudImportService:
-        return CloudImportServiceImpl(session_factory=session_factory)
+        return CloudImportServiceImpl(session_factory=session_factory, state=state)
 
 
 # Module-level container singleton

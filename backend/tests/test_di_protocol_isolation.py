@@ -61,7 +61,10 @@ def test_no_concrete_service_imports(source_file: Path):
 
 
 def test_routers_import_from_protocols():
-    """All routers must import service types from app.services.protocols."""
+    """All routers must import service types from protocol files.
+
+    Protocols are distributed to service sub-packages (e.g., app.services.paperless.protocol).
+    """
     routers_dir = Path(__file__).parent.parent / "app" / "routers"
     for router_file in routers_dir.glob("*.py"):
         if router_file.name == "__init__.py":
@@ -70,11 +73,11 @@ def test_routers_import_from_protocols():
         for node in ast.walk(tree):
             if isinstance(node, ast.ImportFrom):
                 module = node.module or ""
-                if module.startswith("app.services.") and module != "app.services.protocols":
-                    # Allow non-class imports (module-level state, constants, helpers)
+                if module.startswith("app.services.") and not module.endswith(".protocol"):
+                    # Allow protocol imports from sub-packages
                     for alias in node.names:
                         if alias.name in sum(BANNED_IMPORTS.values(), []):
                             pytest.fail(
                                 f"{router_file.name}: imports {alias.name} from {module} — "
-                                f"must import from app.services.protocols instead"
+                                f"must import from protocol file (e.g., app.services.X.protocol)"
                             )

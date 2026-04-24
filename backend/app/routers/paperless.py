@@ -3,7 +3,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from app.database import get_db
 from app.models import PaperlessCache
-from app.services.protocols import PaperlessClient
+from app.services.paperless.protocol import PaperlessClient
 from app.services.cache import get_cache
 from dishka.integrations.fastapi import inject
 from dishka import FromDishka
@@ -74,7 +74,7 @@ async def get_tags(
 ):
     """Get all tags - in-memory cache → DB cache → Paperless (fallback only)."""
     from app.services.cache import get_cache
-    from app.services.paperless_client import CACHE_TTL
+    from app.services.paperless.service import CACHE_TTL
     cache = get_cache()
     cache_key = f"paperless:tags:{client.base_url}"
 

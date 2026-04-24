@@ -242,5 +242,5 @@ class TestRAGServiceIntegration:
             elif isinstance(node, ast.ImportFrom):
                 if node.module:
                     imports.append(node.module)
-        assert "app.services.llm_service" in imports, "rag/service.py should import from app.services.llm_service (unified LLM abstraction)"
+        assert "app.services.llm.service" in imports, "rag/service.py should import from app.services.llm.service (unified LLM abstraction)"
         assert "litellm" not in imports, "rag/service.py should NOT import litellm directly — use llm_completion from llm_service"

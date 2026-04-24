@@ -27,11 +27,11 @@ async def auth_app(test_session_factory, monkeypatch):
     import app.database as db_mod
     monkeypatch.setattr(db_mod, "async_session", test_session_factory)
     # Clear session store between tests
-    from app.services.auth_service import SESSIONS
+    from app.services.auth.state import SESSIONS
     SESSIONS.clear()
 
     from app.routers.auth import router as auth_router
-    from app.services.auth_service import SessionAuthMiddleware
+    from app.services.auth.middleware import SessionAuthMiddleware
 
     app = FastAPI()
     app.add_middleware(SessionAuthMiddleware)
@@ -61,7 +61,7 @@ def client(auth_app):
 @pytest_asyncio.fixture
 async def seed_password(test_session_factory):
     """Async helper returning a coroutine-like that seeds an AuthConfig row with a Scrypt-hashed password."""
-    from app.services.auth_service import hash_password
+    from app.services.auth.service import hash_password
     from app.models.auth_config import AuthConfig
     from sqlalchemy import select
 

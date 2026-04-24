@@ -173,7 +173,3 @@ class StatisticsService:
                 }
                 for d in daily
             ]
-
-
-
-

@@ -7,7 +7,7 @@ import time
 import logging
 from typing import Dict, Any, List, Optional
 
-from app.services.llm_service import llm_completion
+from app.services.llm.service import llm_completion
 
 from app.services.classifier.base_provider import (
     BaseClassifierProvider, ClassificationResult, DocumentContext,
