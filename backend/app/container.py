@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from dishka import Provider, Scope, provide, make_async_container, AsyncContainer
-from dishka.integrations.fastapi import setup_dishka
 from typing import AsyncIterator
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -121,10 +120,12 @@ class AppProvider(Provider):
         self,
         session_factory: async_sessionmaker,
         paperless_client: PaperlessClient,
+        llm_service: LLMService,
     ) -> RAGService:
         return RAGServiceImpl(
             session_factory=session_factory,
             paperless_client=paperless_client,
+            llm_service=llm_service,
         )
 
     @provide(scope=Scope.APP)

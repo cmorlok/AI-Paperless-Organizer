@@ -11,7 +11,7 @@ from sqlalchemy import select
 from dataclasses import asdict
 
 from dishka.integrations.fastapi import inject
-from dishka import FromDishka, AsyncContainer
+from dishka import FromDishka
 from app.container import container as di_container
 
 from app.database import get_db
@@ -19,10 +19,11 @@ from app.services.paperless.protocol import PaperlessClient
 from app.services.classifier.protocol import DocumentClassifierService
 from app.services.classifier import AutoClassifyState, auto_classify_loop
 from app.models.classifier import (
-    ClassifierConfig, StoragePathProfile, CustomFieldMapping, ClassificationHistory,
+    ClassificationHistory,
 )
 from app.models.settings_model import LLM_KEY_CLASSIFIER_MODEL
 from app.routers.settings import get_setting
+from app.services.llm.protocol import LLMService as LLMProviderService
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -1039,9 +1040,13 @@ async def stop_auto_classify(
 
 @router.get("/auto-classify/status")
 @inject
-async def get_auto_classify_status(state: FromDishka[AutoClassifyState] = None):
+async def get_auto_classify_status(
+    state: FromDishka[AutoClassifyState] = None,
+    llm_service: FromDishka[LLMProviderService] = None,
+):
     """Get current status of the auto-classification job."""
-    from app.services.llm import is_locked as ollama_is_locked, current_holder as ollama_holder
+    lock_status = llm_service.get_lock_status() if llm_service else {}
+    waiting = next((p for p, s in lock_status.items() if s["locked"] and p != "classifier"), None) if state.enabled else None
     return {
         "enabled": state.enabled,
         "running": state.running,
@@ -1050,7 +1055,7 @@ async def get_auto_classify_status(state: FromDishka[AutoClassifyState] = None):
         "reviewed": state.reviewed,
         "current_doc": state.current_doc,
         "last_run": state.last_run,
-        "waiting_for": ollama_holder() if ollama_is_locked() and state.enabled and ollama_holder() != "classifier" else None,
+        "waiting_for": waiting,
     }
 
 

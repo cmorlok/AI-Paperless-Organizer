@@ -2,16 +2,33 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import re
-import time
 import traceback
+from collections import defaultdict
 from typing import Optional, Dict, Any, List
 
 import httpx
 import litellm
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.logging import get_logger
+from app.database import async_session
+from app.models import LLMProvider
+
+# Local LLM providers that need GPU lock serialization
+LOCAL_LLM_PROVIDERS = frozenset({
+    "ollama", "ollama_chat", "lm_studio", "lm_studio_chat",
+    "vllm", "llama.cpp", "llama-cpp", "local"
+})
+
+
+class LLMLockTimeoutError(Exception):
+    """Raised when a local LLM is busy and times out waiting for the lock."""
+    pass
+
 
 logger = get_logger("llm")
 
@@ -19,7 +36,6 @@ logger = get_logger("llm")
 # LiteLLM callback-based request/response logging
 # =========================================================================
 
-from app.services.llm.state import _callbacks_registered
 
 
 def _log_llm(msg: str, data: dict[str, Any]) -> None:
@@ -146,12 +162,6 @@ def log_llm_error(msg: str, exc: Exception):
     tb = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
     print(f"ERROR app.services.llm.service: {msg}: {detail}\n{tb}", flush=True)
     logger.error("%s: %s", msg, detail, exc_info=True)
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
-
-from app.database import async_session
-from app.models import LLMProvider
-from app.models.settings_model import LLM_KEY_CLASSIFIER_MODEL, LLM_KEY_CLASSIFIER_PROVIDER
 
 # Static extra headers injected per provider on every call.
 _PROVIDER_EXTRA_HEADERS: Dict[str, Dict[str, str]] = {
@@ -559,6 +569,102 @@ class LitellmService:
         self.model = model
         self.session_factory = session_factory
         self._config_loaded = False
+        # Per-provider lock dict for local LLM serialization
+        self._locks: defaultdict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
+
+    def _is_local_provider(self, provider: str) -> bool:
+        """Check if provider is a local LLM (needs GPU lock serialization)."""
+        if not provider:
+            return False
+        provider_lower = provider.lower().split("/")[0]
+        return provider_lower in LOCAL_LLM_PROVIDERS
+
+    async def complete_llm(
+        self,
+        model: str,
+        messages: list,
+        *,
+        timeout: float = 30.0,
+        stream: bool = False,
+        temperature: float = 0.0,
+        provider: Optional[str] = None,
+        **kwargs
+    ) -> Any:
+        """
+        Call LiteLLM with transparent per-provider lock serialization for local LLMs.
+
+        D-05: Lock acquisition is TRANSPARENT inside this method — no separate
+        lock method call needed by callers. Cloud LLMs bypass lock entirely.
+
+        Args:
+            model: Model name (e.g. "ollama/llama3", "qwen2.5vl:7b")
+            messages: List of message dicts [{"role": "user", "content": "..."}]
+            timeout: Max seconds to wait for lock + LLM response
+                D-18: RAG = 30s (fail fast)
+                D-19: OCR = 600s (skip cycle, watchdog retries)
+                D-20: Auto-classify = 300s (skip document, process next)
+            stream: If True, returns LiteLLM response object for streaming iteration
+            provider: Explicit provider name (e.g. "ollama"). If not provided, extracted from model.
+            **kwargs: Passed directly to litellm.acompletion (e.g., api_base, extra_body)
+
+        Returns:
+            If stream=False: str response content
+            If stream=True: LiteLLM response object (for async iteration)
+
+        Raises:
+            LLMLockTimeoutError: If local LLM is busy and lock times out
+        """
+        # Extract provider from model name if not explicitly provided
+        if provider is None:
+            provider = model.split("/")[0] if "/" in model else model
+
+        # Prefix model with provider if needed for LiteLLM routing
+        model_name = model if "/" in model else f"{provider}/{model}"
+
+        # Cloud LLMs don't contend for GPU memory — no lock needed (D-17)
+        if not self._is_local_provider(provider):
+            response = await litellm.acompletion(
+                model=model_name,
+                messages=messages,
+                temperature=temperature,
+                stream=stream,
+                **kwargs
+            )
+            if stream:
+                return response
+            return response.choices[0].message.content
+
+        # Local LLMs need serialization (D-17)
+        lock = self._locks[provider]
+        async with lock:
+            try:
+                async with asyncio.timeout(timeout):
+                    response = await litellm.acompletion(
+                        model=model_name,
+                        messages=messages,
+                        temperature=temperature,
+                        stream=stream,
+                        **kwargs
+                    )
+                    if stream:
+                        return response
+                    return response.choices[0].message.content
+            except asyncio.TimeoutError:
+                raise LLMLockTimeoutError(
+                f"Local LLM {provider} busy (held by another background job). "
+                f"Try again in a moment."
+            )
+
+    def get_lock_status(self) -> dict[str, dict]:
+        """Get current lock status for all local LLM providers.
+
+        Returns:
+            Dict mapping provider name to {"locked": bool}
+        """
+        status = {}
+        for prov, lock in self._locks.items():
+            status[prov] = {"locked": lock.locked()}
+        return status
 
     async def _ensure_config(self) -> None:
         """Lazy-load provider/model from DB on first use."""
@@ -647,7 +753,7 @@ class LitellmService:
             token_warning = f"Viele Items ({len(items)})! Geschätzte Tokens: ~{estimated_input_tokens}. Könnte das Limit überschreiten."
 
         # Get LLM response
-        logger.info(f"[LLM] Sending request to LLM provider...")
+        logger.info("[LLM] Sending request to LLM provider...")
         response = await self.complete(prompt)
         logger.info(f"[LLM] Got response, length: {len(response)} chars, first 200: {response[:200]}")
 

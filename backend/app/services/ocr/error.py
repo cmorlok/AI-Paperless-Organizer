@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 import logging
 import time
-from pathlib import Path
 from typing import Dict, List, Set
 
 from app.services.ocr.state import OCR_ERROR_COUNT_FILE, OCR_ERROR_FILE

@@ -24,17 +24,21 @@ from app.services.ocr.state import OcrState
 from app.services.ocr.service import (
     load_review_queue,
     save_review_queue,
-    load_ocr_ignore_list,
-    save_ocr_ignore_list,
-    load_ocr_error_list,
-    save_ocr_error_list,
-    load_ocr_error_counts,
-    save_ocr_error_counts,
     DEFAULT_OLLAMA_URL,
     DEFAULT_OCR_MODEL,
     TAG_OCR_REVIEW,
     TAG_OCR_FINISH,
     TAG_OCR_ERROR,
+)
+from app.services.ocr.ignore import (
+    load_ocr_ignore_list,
+    save_ocr_ignore_list,
+)
+from app.services.ocr.error import (
+    load_ocr_error_list,
+    save_ocr_error_list,
+    load_ocr_error_counts,
+    save_ocr_error_counts,
 )
 from app.services.llm.protocol import LLMService as LLMProviderService
 from app.services.ocr.state import OcrCompareState
@@ -456,7 +460,10 @@ async def start_batch_ocr(
 
 @router.get("/batch/status")
 @inject
-async def get_batch_status(state: FromDishka[OcrState] = None):
+async def get_batch_status(
+    state: FromDishka[OcrState] = None,
+    llm_service: FromDishka[LLMProviderService] = None,
+):
     """Get current batch OCR job status, including page-level progress for current document."""
     current_doc = state.batch.current_document
     current_doc_id = current_doc.get("id") if isinstance(current_doc, dict) else None
@@ -475,8 +482,9 @@ async def get_batch_status(state: FromDishka[OcrState] = None):
             "pages": pp.get("pages", []),
         }
 
-    from app.services.llm import is_locked as ollama_is_locked, current_holder as ollama_holder
-    waiting = ollama_holder() if ollama_is_locked() and not state.batch.running else None
+    # Use LLMService lock status instead of direct lock.py imports
+    lock_status = llm_service.get_lock_status() if llm_service else {}
+    waiting = next((p for p, s in lock_status.items() if s["locked"]), None) if not state.batch.running else None
 
     return {
         "running": state.batch.running,
@@ -501,25 +509,6 @@ async def stop_batch_ocr(state: FromDishka[OcrState] = None):
     
     state.batch.should_stop = True
     return {"stopped": True, "message": "Batch-Job wird gestoppt..."}
-
-
-# --- Tag Management ---
-
-@router.get("/tags/ensure")
-@inject
-async def ensure_ocr_tags(
-    client: FromDishka[PaperlessClient] = None
-):
-    """Ensure runocr and ocrfinish tags exist in Paperless."""
-    try:
-        runocr_tag = await client.get_or_create_tag("runocr")
-        ocrfinish_tag = await client.get_or_create_tag("ocrfinish")
-        return {
-            "runocr": {"id": runocr_tag.get("id"), "name": "runocr"},
-            "ocrfinish": {"id": ocrfinish_tag.get("id"), "name": "ocrfinish"}
-        }
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Tag-Fehler: {str(e)}")
 
 
 # --- Review Queue ---
@@ -890,8 +879,6 @@ async def _wait_for_ollama_ready(max_wait: int = 60) -> bool:
                 pass
         
         print(f"[Compare] Ollama nicht erreichbar, warte {interval}s... ({waited}/{max_wait}s)")
-        compare_state.phase = "waiting_ollama"
-        compare_state.elapsed_seconds = round(time.time() - (compare_state.job_start or time.time()), 1)
         await asyncio.sleep(interval)
         waited += interval
     
@@ -1064,7 +1051,7 @@ async def _run_compare_job(ocr_service: OcrService, paperless_client, document_i
 
             # If model had an error, wait for Ollama to recover before next model
             if error_msg:
-                print(f"[Compare] Modell hatte Fehler, warte 5s auf Ollama-Recovery...")
+                print("[Compare] Modell hatte Fehler, warte 5s auf Ollama-Recovery...")
                 await asyncio.sleep(5)
 
         compare_state.phase = "done"
@@ -1273,7 +1260,7 @@ WICHTIG:
         cleaned = raw_response.strip()
         if cleaned.startswith("```"):
             lines = cleaned.split("\n")
-            lines = [l for l in lines if not l.strip().startswith("```")]
+            lines = [line for line in lines if not line.strip().startswith("```")]
             cleaned = "\n".join(lines)
         
         try:

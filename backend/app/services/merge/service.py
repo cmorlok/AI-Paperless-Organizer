@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from typing import List, Dict, Optional, Any
 from sqlalchemy import select
-from app.database import async_session
 from app.models import MergeHistory, MergeHistoryItem, CleanupStatistics
 from app.services.paperless import PaperlessClient
 from app.services.cache import get_cache

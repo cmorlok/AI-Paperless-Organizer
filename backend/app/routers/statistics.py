@@ -2,7 +2,6 @@
 
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
-from typing import Optional
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from app.database import get_db

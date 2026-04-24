@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import AsyncGenerator, Optional, Dict, Any, List, Tuple
+import re
+from typing import AsyncGenerator, Optional, Dict, Any, List
 
 from sqlalchemy import select as sa_select, func as sa_func, delete as sa_delete
 from app.database import async_session
@@ -11,8 +12,8 @@ from app.services.rag.embedding_service import EmbeddingService
 from app.services.rag.search_engine import SearchEngine, SearchResult
 from app.services.rag.indexer import Indexer
 from app.services.rag.rerank_service import RerankService
-from app.services.llm.lock import acquire as ollama_acquire, release as ollama_release, is_locked as ollama_is_locked, current_holder as ollama_holder
-from app.services.llm.service import llm_completion
+from app.services.llm.service import LLMLockTimeoutError
+from app.services.llm.protocol import LLMService
 
 logger = logging.getLogger(__name__)
 
@@ -20,12 +21,13 @@ logger = logging.getLogger(__name__)
 class RAGService:
     """Orchestrates RAG chat: retrieves context, generates answers with source attribution."""
 
-    def __init__(self, session_factory, paperless_client):
+    def __init__(self, session_factory, paperless_client, llm_service: LLMService):
         self.search_engine = SearchEngine()
         self.indexer = Indexer(self.search_engine, paperless_client=paperless_client)
         self._initialized = False
         self.session_factory = session_factory or async_session
         self.paperless_client = paperless_client
+        self.llm_service = llm_service
 
     async def initialize(self):
         if self._initialized:
@@ -63,16 +65,8 @@ class RAGService:
 
         embed_service = await self._get_embedding_service(config)
 
-        # Use Ollama lock for query embedding so OCR doesn't block us indefinitely
-        if embed_service.provider == "ollama":
-            acquired = await ollama_acquire("rag_embed", timeout=180)
-            try:
-                query_embeddings = await embed_service.generate([query])
-            finally:
-                if acquired:
-                    ollama_release("rag_embed")
-        else:
-            query_embeddings = await embed_service.generate([query])
+        # No lock needed for embeddings — LiteLLM handles Ollama concurrency internally
+        query_embeddings = await embed_service.generate([query])
 
         if not query_embeddings or not query_embeddings[0]:
             return []
@@ -149,14 +143,13 @@ class RAGService:
                 search_question = question
         else:
             # Legacy manual enrichment (kept as fallback when LLM rewriting is disabled)
-            import re as _query_re
             if len(question.split()) <= 6 and chat_history:
                 last_user = next(
                     (m["content"] for m in reversed(chat_history) if m["role"] == "user"), ""
                 )
                 if last_user:
                     _NW = r'[A-Z\xc4\xd6\xdc][a-zA-Z\xe4\xf6\xfc\xc4\xd6\xdc\xdf\-]+'
-                    subj_match = _query_re.search(
+                    subj_match = re.search(
                         r'(?:von|über|für|nach|bei|zu|mit|an)[^\S\n]+(' + _NW + r'(?:[^\S\n]+' + _NW + r')+)',
                         last_user
                     )
@@ -264,10 +257,9 @@ class RAGService:
             # (e.g. "Hans-Peter Wilms") and that name appears in the document's first
             # identity chunk, strongly boost it. This prevents a Kaufvertrag that mentions
             # *other* people from outranking the actual document addressed to the queried person.
-            import re as _re_boost
             # Extract capitalized name sequences from the original question (not rewritten)
             # Allow uppercase mid-word for hyphenated names like "Hans-Peter"
-            _name_candidates = _re_boost.findall(
+            _name_candidates = re.findall(
                 r'[A-ZÄÖÜ][a-zA-ZäöüÄÖÜß\-]+(?:\s+[A-ZÄÖÜ][a-zA-ZäöüÄÖÜß\-]+)+', question
             )
             if _name_candidates:
@@ -305,7 +297,6 @@ class RAGService:
         # Build LLM context using the same multi-chunk combined text used for reranking.
         # Additionally, extract key structured facts (dates, names, IDs) from the text
         # and prepend them explicitly so the LLM finds them even in OCR table layouts.
-        import re as _re
 
         # Name word: allows hyphenated first names like "Hans-Peter"
         _NAME_WORD = r'[A-Z\xc4\xd6\xdc][a-zA-Z\xe4\xf6\xfc\xc4\xd6\xdc\xdf\-]+'
@@ -324,7 +315,7 @@ class RAGService:
 
             # Find addressee (non-newline whitespace to avoid multi-line address captures)
             addressees = []
-            for m in _re.finditer(
+            for m in re.finditer(
                 r'(?:Herrn?|Frau)' + _WS + r'(' + _NAME_WORD + r'(?:' + _WS + _NAME_WORD + r')+)', text
             ):
                 addressees.append(m.group(1).strip())
@@ -333,7 +324,7 @@ class RAGService:
             # Avoids returning birthdate when the question is about baptism, address, etc.
             if _wants_birthdate:
                 birthdates = []
-                for m in _re.finditer(r'Geburtsdatum\s*:?\s*(\d{1,2}[.\-/]\d{1,2}[.\-/]\d{4})', text, _re.IGNORECASE):
+                for m in re.finditer(r'Geburtsdatum\s*:?\s*(\d{1,2}[.\-/]\d{1,2}[.\-/]\d{4})', text, re.IGNORECASE):
                     birthdates.append(m.group(1))
                 if birthdates:
                     primary_person = addressees[0] if addressees else None
@@ -349,17 +340,19 @@ class RAGService:
 
             # Tax IDs: only when querying about taxes
             if _wants_tax:
-                for m in _re.finditer(r'Steuernummer\s*:?\s*(\d[\d/\s]{5,20})', text, _re.IGNORECASE):
+                for m in re.finditer(r'Steuernummer\s*:?\s*(\d[\d/\s]{5,20})', text, re.IGNORECASE):
                     facts.append(f"Steuernummer: {m.group(1).strip()}")
 
             # IBAN: only when explicitly relevant (not for every document)
             # (skipped unless a future query type warrants it)
 
             # Deduplicate
-            seen = set(); unique = []
+            seen = set()
+            unique = []
             for f in facts:
                 if f not in seen:
-                    seen.add(f); unique.append(f)
+                    seen.add(f)
+                    unique.append(f)
             return ("📌 " + " | ".join(unique[:6]) + "\n\n") if unique else ""
 
         context_parts = []
@@ -417,13 +410,14 @@ class RAGService:
         yield json.dumps({"type": "sources", "sources": sources})
 
         # Signal that LLM is generating (show lock state if busy)
-        if ollama_is_locked() and ollama_holder() != "rag_chat":
-            yield json.dumps({"type": "status", "message": f"Warte auf Ollama (läuft: {ollama_holder()})..."})
+        lock_status = self.llm_service.get_lock_status()
+        is_locked = any(s["locked"] for s in lock_status.values())
+        if is_locked:
+            yield json.dumps({"type": "status", "message": "Warte auf Ollama (läuft: Klassifizierung)..."})
         else:
             yield json.dumps({"type": "status", "message": "Generiere Antwort..."})
 
         # Stream LLM response
-        import re as _re
         full_response = ""
         async for token in self._stream_llm(config, messages):
             full_response += token
@@ -431,11 +425,11 @@ class RAGService:
 
         # Extract cited source indices — [N] notation AND "Quelle N" text references
         cited_set: set[int] = set()
-        for m in _re.findall(r'\[(\d+)\]', full_response):
+        for m in re.findall(r'\[(\d+)\]', full_response):
             idx = int(m)
             if 1 <= idx <= len(sources):
                 cited_set.add(idx)
-        for m in _re.findall(r'[Qq]uelle[n]?\s+(\d+)', full_response):
+        for m in re.findall(r'[Qq]uelle[n]?\s+(\d+)', full_response):
             idx = int(m)
             if 1 <= idx <= len(sources):
                 cited_set.add(idx)
@@ -460,47 +454,33 @@ class RAGService:
         model_name = config.chat_model or "gpt-4o-mini"
         provider_name = getattr(config, "chat_model_provider", "openai") or "openai"
 
-        is_ollama = provider_name == "ollama"
-
         try:
-            if is_ollama:
-                # CRITICAL REVIEW FEEDBACK HIGH: ollama_lock MUST be acquired BEFORE llm_completion
-                acquired = await ollama_acquire("rag_chat", timeout=120)
-                if not acquired:
-                    logger.warning("RAG chat: OllamaLock timeout – Classifier läuft noch, bitte erneut versuchen")
-                    yield "\n\n[Ollama ist gerade belegt (Klassifizierung läuft). Bitte in 30 Sekunden erneut versuchen.]"
-                    return
+            # D-18: 30s timeout for RAG — fail fast with clear error to user
+            stream_response = await self.llm_service.complete_llm(
+                model=model_name,
+                messages=messages,
+                timeout=30.0,  # D-18: fail fast for RAG
+                stream=True,   # Streaming MUST be preserved
+                temperature=0.2,
+                num_ctx=max(8192, (getattr(config, "max_context_tokens", 4000) or 4000) * 2),
+                keep_alive="10m",
+                think=False,
+                provider=provider_name,
+            )
 
-            try:
-                stream = await llm_completion(
-                    model=model_name,
-                    provider=provider_name,
-                    messages=messages,
-                    stream=True,
-                    temperature=0.2,
-                    num_ctx=max(8192, (getattr(config, "max_context_tokens", 4000) or 4000) * 2),
-                    keep_alive="10m",
-                    think=False,
-                    timeout=300.0,
-                )
+            # stream_response is a LiteLLM response object for iteration
+            async for chunk in stream_response:
+                delta = chunk.choices[0].delta if chunk.choices else None
+                content = getattr(delta, "content", None) or ""
+                finish = getattr(chunk.choices[0], "finish_reason", None)
+                if content:
+                    yield content
+                if finish is not None and finish != "length":
+                    break
 
-                async for chunk in stream:
-                    # LiteLLM returns OpenAI-compatible SSE format:
-                    # {"choices": [{"delta": {"content": "..."}, "finish_reason": null}]}
-                    delta = chunk.choices[0].delta if chunk.choices else None
-                    content = getattr(delta, "content", None) or ""
-                    finish = getattr(chunk.choices[0], "finish_reason", None)
-
-                    if content:
-                        yield content
-
-                    if finish is not None and finish != "length":
-                        break
-
-            finally:
-                if is_ollama:
-                    ollama_release("rag_chat")
-
+        except LLMLockTimeoutError:
+            # D-18: fail fast for RAG — return clear error to user
+            yield "\n\n[Ollama ist gerade belegt (Klassifizierung läuft). Bitte in 30 Sekunden erneut versuchen.]"
         except Exception as e:
             logger.warning(f"Streaming error: {e}")
             yield f"\n\n[Fehler: {e}]"
@@ -515,8 +495,6 @@ class RAGService:
         The LLM adds synonyms, official German document names and relevant terminology.
         Returns the expanded query string, or the original question on any error.
         """
-        import re as _re
-
         if not question.strip():
             return question
 
@@ -545,19 +523,22 @@ class RAGService:
         provider_name = getattr(config, "chat_model_provider", "openai") or "openai"
 
         try:
-            result = await llm_completion(
+            result = await self.llm_service.complete_llm(
                 model=model_name,
-                provider=provider_name,
                 messages=messages,
+                timeout=30.0,
+                stream=False,
                 temperature=0.0,
                 max_tokens=200,
                 num_ctx=4096,
                 keep_alive="5m",
                 think=False,
+                provider=provider_name,
             )
-            rewritten = (result.choices[0].message.content or "").strip()
+            # complete_llm returns string when stream=False
+            rewritten = result.strip() if isinstance(result, str) else (result.choices[0].message.content or "").strip()
             # Strip any markdown fences or explanatory text
-            rewritten = _re.sub(r'^```.*?\n|```$', '', rewritten, flags=_re.DOTALL).strip()
+            rewritten = re.sub(r'^```.*?\n|```$', '', rewritten, flags=re.DOTALL).strip()
             return rewritten if rewritten else question
         except Exception as e:
             logger.warning(f"Query rewrite failed, using original: {e}")

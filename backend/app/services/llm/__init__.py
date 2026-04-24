@@ -1,4 +1,4 @@
-"""LLM service: LiteLLM-based completions, embeddings, and Ollama lock."""
+"""LLM service: LiteLLM-based completions, embeddings."""
 
 from app.services.llm.protocol import LLMService
 from app.services.llm.service import (
@@ -7,6 +7,8 @@ from app.services.llm.service import (
     list_llm_models,
     list_llm_providers,
     PROVIDER_DISPLAY_NAMES,
+    LLMLockTimeoutError,
+    LitellmService,
 )
 from app.services.llm.lock import (
     acquire,
@@ -22,6 +24,8 @@ __all__ = [
     "list_llm_models",
     "list_llm_providers",
     "PROVIDER_DISPLAY_NAMES",
+    "LLMLockTimeoutError",
+    "LitellmService",
     "acquire",
     "release",
     "is_locked",

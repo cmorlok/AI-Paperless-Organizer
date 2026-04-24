@@ -12,7 +12,6 @@ from typing import Dict, List, Optional, Any
 import httpx
 
 from app.database import async_session
-from app.services.paperless import PaperlessClient
 
 logger = logging.getLogger(__name__)
 

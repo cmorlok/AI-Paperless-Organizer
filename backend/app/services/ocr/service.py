@@ -17,11 +17,14 @@ from pdf2image import convert_from_bytes
 
 from app.services.llm import (
     llm_completion,
+)
+from app.services.llm.lock import (
     acquire as ollama_acquire,
     release as ollama_release,
     is_locked as ollama_is_locked,
     current_holder as ollama_holder,
 )
+from app.services.llm.protocol import LLMService
 
 from .state import (
     DEFAULT_OLLAMA_URL,
@@ -35,22 +38,15 @@ from .state import (
     TAG_OCR_ERROR,
     QUALITY_THRESHOLD,
     MAX_ERROR_COUNT,
-    REVIEW_QUEUE_FILE,
-    OCR_IGNORE_FILE,
-    OCR_ERROR_COUNT_FILE,
-    OCR_ERROR_FILE,
 )
 
 # Import file operations from local modules
 from .review import load_review_queue, save_review_queue
 from .error import (
-    load_ocr_error_counts,
-    save_ocr_error_counts,
     increment_ocr_error,
     reset_ocr_error,
     load_ocr_error_list,
     save_ocr_error_list,
-    get_ocr_error_ids,
 )
 from .ignore import load_ocr_ignore_list, save_ocr_ignore_list, get_ocr_ignored_ids
 
@@ -69,6 +65,7 @@ class OcrService:
         model: str = DEFAULT_OCR_MODEL,
         max_image_size: int = 2048,
         state: OcrState | None = None,
+        llm_service: LLMService | None = None,
     ):
         self.ollama_urls: List[str] = [s.strip() for s in ollama_url.split(",")]
         self.url_index: int = 0
@@ -77,6 +74,7 @@ class OcrService:
         self._config_lock = asyncio.Lock()
         self._configured = False
         self.state: OcrState = state or OcrState()
+        self.llm_service = llm_service
 
     def get_current_url(self) -> str:
         return self.ollama_urls[self.url_index % len(self.ollama_urls)]
@@ -519,7 +517,7 @@ class OcrService:
                 with open(stats_file, "r") as f:
                     try:
                         stats = json.load(f)
-                    except:
+                    except Exception:
                         pass
 
             stats.append(entry)
@@ -537,7 +535,7 @@ class OcrService:
             try:
                 with open(stats_file, "r") as f:
                     return json.load(f)
-            except:
+            except Exception:
                 pass
         return []
 
@@ -798,7 +796,7 @@ class OcrService:
                     if attempt == 0:
                         logger.warning(f"PDF conversion timeout for doc {document_id}, retrying at lower DPI")
                         continue
-                    raise ValueError(f"PDF-Konvertierung nach 10 Minuten abgebrochen – Dokument übersprungen.")
+                    raise ValueError("PDF-Konvertierung nach 10 Minuten abgebrochen – Dokument übersprungen.")
                 except Exception as e:
                     error_str = str(e).lower()
                     if "password" in error_str or "encrypted" in error_str:
@@ -943,7 +941,7 @@ class OcrService:
         duration = time.time() - start_time
         try:
             self.save_stats(document_id, duration, 0, len(new_content), success=tag_success)
-        except:
+        except Exception:
             pass
 
         return {"success": tag_success, "document_id": document_id}
@@ -1020,7 +1018,7 @@ class OcrService:
                             await asyncio.sleep(wait_sec)
                         else:
                             self.state.batch.log.append(
-                                f"❌ Paperless nach 3 Versuchen nicht erreichbar – Batch abgebrochen."
+                                "❌ Paperless nach 3 Versuchen nicht erreichbar – Batch abgebrochen."
                             )
                             logger.error(f"batch_ocr: get_documents failed after 3 attempts: {fetch_err}")
                             return
@@ -1224,7 +1222,7 @@ class OcrService:
 
                             try:
                                 self.save_stats(doc_id, ocr_duration, ocr_pages, new_len, success=tag_success)
-                            except:
+                            except Exception:
                                 pass
 
                             if not tag_success:
@@ -1238,7 +1236,7 @@ class OcrService:
                 except Exception as e:
                     try:
                         self.save_stats(doc_id, 0, 0, 0, success=False)
-                    except:
+                    except Exception:
                         pass
                     error_msg = f"❌ {doc_title}: Fehler - {str(e)}"
                     self.state.batch.log.append(error_msg)

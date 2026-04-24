@@ -11,7 +11,6 @@ from app.database import async_session
 from app.models.rag import RagConfig, RagIndexingState
 from app.services.rag.embedding_service import EmbeddingService
 from app.services.rag.chunking import ChunkingService
-from app.services.rag.search_engine import SearchEngine
 from app.services.llm import llm_completion
 
 logger = logging.getLogger(__name__)

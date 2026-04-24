@@ -13,7 +13,7 @@ from app.services.classifier.base_provider import (
     BaseClassifierProvider, ClassificationResult, DocumentContext,
 )
 from app.services.classifier.tool_definitions import (
-    CLASSIFIER_TOOLS, CLASSIFICATION_RESULT_SCHEMA,
+    CLASSIFIER_TOOLS,
 )
 from app.services.classifier.tool_executor import ToolExecutor
 from app.services.classifier.prompts import (
@@ -490,7 +490,7 @@ class LitellmOllamaProvider(BaseClassifierProvider):
                 )
 
             # Extract first 3 non-empty lines as prominent header hint
-            first_lines = [l.strip() for l in content.split("\n") if l.strip()][:3]
+            first_lines = [line.strip() for line in content.split("\n") if line.strip()][:3]
             header_hint = "\n".join(first_lines)
 
             analyze_user_msg = (

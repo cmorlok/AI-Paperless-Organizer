@@ -1,7 +1,7 @@
 import asyncio
 import json
 import logging
-from typing import List, Optional
+from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
@@ -200,17 +200,17 @@ async def get_import_log(
     logs = result.scalars().all()
     return [
         {
-            "id": l.id,
-            "source_id": l.source_id,
-            "source_name": l.source_name,
-            "file_name": l.file_name,
-            "file_path": l.file_path,
-            "paperless_doc_id": l.paperless_doc_id,
-            "import_status": l.import_status,
-            "error_message": l.error_message,
-            "imported_at": l.imported_at.isoformat() if l.imported_at else None,
+            "id": log_entry.id,
+            "source_id": log_entry.source_id,
+            "source_name": log_entry.source_name,
+            "file_name": log_entry.file_name,
+            "file_path": log_entry.file_path,
+            "paperless_doc_id": log_entry.paperless_doc_id,
+            "import_status": log_entry.import_status,
+            "error_message": log_entry.error_message,
+            "imported_at": log_entry.imported_at.isoformat() if log_entry.imported_at else None,
         }
-        for l in logs
+        for log_entry in logs
     ]
 
 
