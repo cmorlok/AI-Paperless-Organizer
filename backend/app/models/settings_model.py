@@ -37,10 +37,6 @@ class LLMProvider(Base):
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
 
-    @property
-    def is_ollama(self) -> bool:
-        return self.name == "ollama"
-
 
 class CustomPrompt(Base):
     """Custom prompts for different entity types."""
@@ -102,7 +98,7 @@ class AppSettings(Base):
     sidebar_compact = Column(Boolean, default=False)
 
     # NOTE: classifier_provider column is deprecated; use LLM_KEY_CLASSIFIER_PROVIDER KV entry
-    classifier_provider = Column(String(100), default="ollama")
+    classifier_provider = Column(String(100), nullable=True, default=None)
 
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
 

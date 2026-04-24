@@ -13,7 +13,7 @@ class RagConfig(Base):
     __tablename__ = "rag_config"
 
     id = Column(Integer, primary_key=True, default=1)
-    embedding_provider = Column(String(100), default="ollama")
+    embedding_provider = Column(String(100), default=None)
     embedding_model = Column(String(200), default="mxbai-embed-large")
     chunk_size = Column(Integer, default=500)
     chunk_overlap = Column(Integer, default=50)
@@ -21,7 +21,7 @@ class RagConfig(Base):
     semantic_weight = Column(Float, default=0.7)
     max_sources = Column(Integer, default=8)
     max_context_tokens = Column(Integer, default=4000)
-    chat_model_provider = Column(String(100), default="ollama")
+    chat_model_provider = Column(String(100), default=None)
     chat_model = Column(String(200), default="qwen3.5:4b")
     chat_system_prompt = Column(Text, default="Du bist ein hilfreicher Assistent, der Fragen zu Dokumenten beantwortet. Antworte basierend auf dem bereitgestellten Kontext. Wenn du die Antwort nicht im Kontext findest, sage das ehrlich.")
     auto_index_enabled = Column(Boolean, default=False)

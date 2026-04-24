@@ -25,10 +25,6 @@ class ClassifierConfig(Base):
     openrouter_api_key = Column(String(500), default="")
     openrouter_model = Column(String(200), default="mistral/mistral-small-3.1-24b-instruct")
 
-    # Separate Ollama config (independent from OCR Ollama)
-    ollama_host = Column(String(500), default="http://localhost:11434")
-    ollama_model = Column(String(200), default="qwen2.5:8b")
-
     # Which fields to classify
     enable_title = Column(Boolean, default=True)
     enable_tags = Column(Boolean, default=True)
