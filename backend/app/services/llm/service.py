@@ -189,7 +189,7 @@ async def _resolve_provider_credentials(provider: str) -> Dict[str, Any]:
     return creds
 
 
-def build_ollama_params(
+def _build_ollama_extra_body(
     temperature: float = 0.0,
     top_p: float = 0.1,
     num_ctx: int = 16384,
@@ -263,7 +263,7 @@ async def llm_completion(
     }
 
     if provider == "ollama" and "extra_body" not in kwargs:
-        litellm_kwargs["extra_body"] = build_ollama_params(
+        litellm_kwargs["extra_body"] = _build_ollama_extra_body(
             temperature=temperature,
             top_p=top_p,
             num_ctx=num_ctx or 16384,
@@ -588,6 +588,7 @@ class LitellmService:
         stream: bool = False,
         temperature: float = 0.0,
         provider: Optional[str] = None,
+        api_base: Optional[str] = None,
         **kwargs
     ) -> Any:
         """
@@ -620,6 +621,10 @@ class LitellmService:
 
         # Prefix model with provider if needed for LiteLLM routing
         model_name = model if "/" in model else f"{provider}/{model}"
+
+        # Merge api_base into kwargs for litellm.acompletion
+        if api_base is not None:
+            kwargs = {**kwargs, "api_base": api_base}
 
         # Cloud LLMs don't contend for GPU memory — no lock needed (D-17)
         if not self._is_local_provider(provider):
@@ -715,6 +720,50 @@ class LitellmService:
             "model": self.model,
             "response": response
         }
+
+    async def check_provider_health(self, provider: str) -> bool:
+        """Returns True if the provider at its configured URL is reachable.
+
+        Resolves URL from LLMProvider.api_base_url. Checks /api/tags or equivalent endpoint.
+        """
+        creds = await _resolve_provider_credentials(provider)
+        url = creds.get("api_base")
+        if not url:
+            return False
+        endpoint = _derive_openai_compatible_url(url, provider)
+        try:
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                r = await client.get(endpoint)
+                return r.status_code == 200
+        except Exception:
+            return False
+
+    async def unload_local_model(self, provider: str, model: str) -> bool:
+        """Unload a local LLM model from GPU memory.
+
+        Returns True if the unload request was accepted, False if not supported or failed.
+        Credentials (api_key) are read from LLMProvider table via _resolve_provider_credentials.
+        """
+        creds = await _resolve_provider_credentials(provider)
+        url = (creds.get("api_base") or "").rstrip("/")
+        api_key = creds.get("api_key")
+        headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                if provider in ("ollama", "ollama_chat"):
+                    await client.post(f"{url}/api/chat",
+                        json={"model": model, "messages": [], "keep_alive": 0}, headers=headers)
+                elif provider in ("lm_studio", "lm_studio_chat"):
+                    await client.post(f"{url}/api/v1/models/unload",
+                        json={"instance_id": model}, headers=headers)
+                elif provider in ("llama.cpp", "llama-cpp", "llamafile"):
+                    await client.post(f"{url}/models/unload",
+                        json={"model": model}, headers=headers)
+                else:
+                    return False  # vllm and "local" have no standard unload API
+            return True
+        except Exception:
+            return False
 
     def estimate_tokens(self, text: str, model: Optional[str] = None) -> int:
         """Estimate token count using LiteLLM's token counter.

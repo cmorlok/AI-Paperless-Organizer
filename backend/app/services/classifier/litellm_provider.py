@@ -26,7 +26,7 @@ from app.services.classifier.prompts import (
 logger = logging.getLogger(__name__)
 MAX_TOOL_ROUNDS = 10
 MAX_CONTENT_CHARS = 10000
-OLLAMA_CALL_TIMEOUT = 180.0
+LOCAL_LLM_CALL_TIMEOUT = 180.0
 THINKING_MODEL_PREFIXES = ("qwen3", "deepseek-r1", "qwq")
 _STRICT_SCHEMA_MODELS = ("mistral",)
 
@@ -928,7 +928,7 @@ class LitellmOllamaProvider(BaseClassifierProvider):
                 seed=random.randint(1, 2**31 - 1),
                 json_schema=json_schema,
                 json_output=True,
-                timeout=OLLAMA_CALL_TIMEOUT,
+                timeout=LOCAL_LLM_CALL_TIMEOUT,
             )
             content = response.choices[0].message.content or ""
             if response.usage:
@@ -951,7 +951,7 @@ class LitellmOllamaProvider(BaseClassifierProvider):
                     keep_alive=keep_alive,
                     seed=random.randint(1, 2**31 - 1),
                     json_output=True,
-                    timeout=OLLAMA_CALL_TIMEOUT,
+                    timeout=LOCAL_LLM_CALL_TIMEOUT,
                 )
                 content = response.choices[0].message.content or ""
                 if response.usage:
@@ -997,7 +997,7 @@ class LitellmOllamaProvider(BaseClassifierProvider):
                 think=False,
                 json_schema=json_schema,
                 json_output=True,
-                timeout=OLLAMA_CALL_TIMEOUT,
+                timeout=LOCAL_LLM_CALL_TIMEOUT,
             )
             content = response.choices[0].message.content or ""
             if response.usage:
@@ -1017,7 +1017,7 @@ class LitellmOllamaProvider(BaseClassifierProvider):
                         keep_alive=keep_alive,
                         think=False,
                         json_output=True,
-                        timeout=OLLAMA_CALL_TIMEOUT,
+                        timeout=LOCAL_LLM_CALL_TIMEOUT,
                     )
                     content = response.choices[0].message.content or ""
                     if response.usage:

@@ -24,6 +24,7 @@ class LLMService(Protocol):
         stream: bool = False,
         temperature: float = 0.0,
         provider: Optional[str] = None,
+        api_base: Optional[str] = None,
         **kwargs
     ) -> Any: ...
 
