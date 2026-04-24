@@ -10,13 +10,6 @@ from app.models.classifier import ClassificationHistory
 # Internal imports from same package — keep deep to avoid circular imports
 from app.services.classifier.protocol import DocumentClassifierService
 from app.services.classifier.state import AutoClassifyState
-# Cross-service imports — use package-level
-from app.services.llm import (
-    acquire as ollama_acquire,
-    current_holder as ollama_holder,
-    is_locked as ollama_is_locked,
-    release as ollama_release,
-)
 from app.services.paperless import PaperlessClient
 
 logger = get_logger(__name__)
@@ -57,7 +50,6 @@ async def _run_classification_cycle(state: AutoClassifyState, container: AsyncCo
 
         try:
             config = await service.get_config()
-            uses_ollama = config.active_provider == "ollama"
             mode = getattr(config, "auto_classify_mode", "review") or "review"
             interval = getattr(config, "auto_classify_interval", 5) or 5
 
@@ -99,21 +91,6 @@ async def _run_classification_cycle(state: AutoClassifyState, container: AsyncCo
                             classified_ids.add(doc_id)
                             continue
 
-                    if uses_ollama:
-                        if ollama_is_locked():
-                            holder = ollama_holder()
-                            logger.info(f"Auto-classify doc {doc_id}: Ollama belegt durch {holder}, warte...")
-                            state.current_doc = None
-                            while ollama_is_locked() and state.enabled:
-                                await asyncio.sleep(5)
-                            if not state.enabled:
-                                break
-                        got_lock = await ollama_acquire("classifier", timeout=300)
-                        if not got_lock:
-                            logger.warning(f"Auto-classify doc {doc_id}: Lock-Timeout, ueberspringe")
-                            await asyncio.sleep(10)
-                            continue
-
                     found_any = True
                     state.running = True
                     state.current_doc = doc_id
@@ -136,8 +113,6 @@ async def _run_classification_cycle(state: AutoClassifyState, container: AsyncCo
                         classified_ids.add(doc_id)
                         logger.error(f"Auto-classify doc {doc_id} failed: {e}")
                     finally:
-                        if uses_ollama:
-                            ollama_release("classifier")
                         state.running = False
                         state.current_doc = None
 

@@ -15,15 +15,6 @@ from typing import Optional, Dict, List, Any
 from PIL import Image
 from pdf2image import convert_from_bytes
 
-from app.services.llm import (
-    llm_completion,
-)
-from app.services.llm.lock import (
-    acquire as ollama_acquire,
-    release as ollama_release,
-    is_locked as ollama_is_locked,
-    current_holder as ollama_holder,
-)
 from app.services.llm.protocol import LLMService
 
 from .state import (
@@ -413,6 +404,8 @@ class OcrService:
 
     async def _run_ollama_ocr(self, image_b64: str, prompt_text: str, model_params: dict, timeout: float) -> dict | str | None:
         """Execute a single Ollama OCR request via LiteLLM."""
+        if self.llm_service is None:
+            raise RuntimeError("OcrService.llm_service not injected - cannot perform OCR")
         name_lower = (self.model or "").lower()
         use_think_param = "qwen3" in name_lower
 
@@ -450,19 +443,19 @@ class OcrService:
                 if use_think_param:
                     extra_body["think"] = False
 
-                response = await llm_completion(
+                response = await self.llm_service.complete_llm(
                     model=self.model,
-                    provider="ollama",
                     messages=[
                         {"role": "system", "content": system_msg},
                         {"role": "user",   "content": user_content},
                     ],
+                    provider="ollama",
                     api_base=url,
                     extra_body=extra_body,
                     timeout=timeout,
                 )
 
-                text_content = (response.choices[0].message.content or "").strip()
+                text_content = (response or "").strip()
                 text_content = self._strip_reasoning(text_content)
                 text_content = self._strip_ocr_commentary(text_content)
 
@@ -475,11 +468,7 @@ class OcrService:
                 if raw_len != cleaned_len:
                     print(f"[OCR] Repetition cleanup: {raw_len} -> {cleaned_len} chars ({loop_ratio:.0%} removed)")
 
-                eval_count = 0
-                if response.usage:
-                    eval_count = response.usage.completion_tokens or 0
-                if eval_count >= 8000:
-                    print(f"[OCR] WARNING: Token limit likely hit ({eval_count} tokens)")
+                print(f"[OCR] WARNING: Token count estimation unavailable with complete_llm")
 
                 return {
                     "_cleaned": text_content,
@@ -965,18 +954,7 @@ class OcrService:
         self.state.batch.mode = mode
         self.state.batch.paused = False
 
-        lock_acquired = False
         try:
-            if ollama_is_locked():
-                holder = ollama_holder()
-                self.state.batch.log.append(f"⏳ Warte auf {holder} (Ollama belegt)...")
-                logger.info(f"[OCR-Batch] Ollama belegt durch {holder}, warte...")
-            lock_acquired = await ollama_acquire("ocr-batch", timeout=600)
-            if not lock_acquired:
-                self.state.batch.log.append("❌ Ollama-Lock nicht erhalten nach 10 Min – Abbruch.")
-                self.state.batch.running = False
-                return
-
             ocrfinish_tag = await paperless_client.get_or_create_tag(TAG_OCR_FINISH)
             ocrfinish_tag_id = ocrfinish_tag.get("id")
 
@@ -1291,8 +1269,6 @@ class OcrService:
             self.state.batch.log.append(f"Traceback: {error_details}")
             logger.error(f"Batch OCR critical error: {e}\n{error_details}")
         finally:
-            if lock_acquired:
-                ollama_release("ocr-batch")
             self.state.batch.running = False
             self.state.batch.current_document = None
 
@@ -1327,8 +1303,8 @@ class OcrService:
             try:
                 self.state.watchdog.running = True
 
-                if self.state.batch.running or self.state.is_locked() or ollama_is_locked():
-                    reason = "Batch" if self.state.batch.running else "Single-OCR" if self.state.is_locked() else f"Ollama belegt ({ollama_holder()})"
+                if self.state.batch.running or self.state.is_locked():
+                    reason = "Batch" if self.state.batch.running else "Single-OCR"
                     logger.info(f"Watchdog: {reason} aktiv, ueberspringe diesen Zyklus")
                 else:
                     logger.info("Watchdog checking for new documents...")
