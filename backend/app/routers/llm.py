@@ -2,10 +2,11 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from typing import Optional
 from app.services.llm.protocol import LLMService as LLMProviderService
+from app.services.llm.service import LitellmService
 from dishka.integrations.fastapi import inject
 from dishka import FromDishka
 
-router = APIRouter()
+router = APIRouter(tags=["llm"])
 
 
 class TestPromptRequest(BaseModel):
@@ -39,4 +40,17 @@ async def test_prompt(
         return {"success": True, "response": response}
     except Exception as e:
         return {"success": False, "error": str(e)}
+
+
+@router.get("/status")
+@inject
+async def get_llm_status(
+    llm_service: FromDishka[LLMProviderService] = None,
+) -> dict[str, dict]:
+    """Get current LLM lock status for all local providers.
+
+    Returns lock status for each provider that has an active lock,
+    e.g. {"ollama": {"locked": true}}."""
+
+    return llm_service.get_lock_status()
 

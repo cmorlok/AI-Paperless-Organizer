@@ -11,8 +11,8 @@ from app.services.rag.embedding_service import EmbeddingService
 from app.services.rag.search_engine import SearchEngine, SearchResult
 from app.services.rag.indexer import Indexer
 from app.services.rag.rerank_service import RerankService
-from app.services.llm.lock import acquire as ollama_acquire, release as ollama_release, is_locked as ollama_is_locked, current_holder as ollama_holder
-from app.services.llm.service import llm_completion
+from app.services.llm.service import LLMLockTimeoutError
+from app.services.llm.protocol import LLMService
 
 logger = logging.getLogger(__name__)
 
@@ -20,12 +20,13 @@ logger = logging.getLogger(__name__)
 class RAGService:
     """Orchestrates RAG chat: retrieves context, generates answers with source attribution."""
 
-    def __init__(self, session_factory, paperless_client):
+    def __init__(self, session_factory, paperless_client, llm_service: LLMService):
         self.search_engine = SearchEngine()
         self.indexer = Indexer(self.search_engine, paperless_client=paperless_client)
         self._initialized = False
         self.session_factory = session_factory or async_session
         self.paperless_client = paperless_client
+        self.llm_service = llm_service
 
     async def initialize(self):
         if self._initialized:
@@ -63,16 +64,8 @@ class RAGService:
 
         embed_service = await self._get_embedding_service(config)
 
-        # Use Ollama lock for query embedding so OCR doesn't block us indefinitely
-        if embed_service.provider == "ollama":
-            acquired = await ollama_acquire("rag_embed", timeout=180)
-            try:
-                query_embeddings = await embed_service.generate([query])
-            finally:
-                if acquired:
-                    ollama_release("rag_embed")
-        else:
-            query_embeddings = await embed_service.generate([query])
+        # No lock needed for embeddings — LiteLLM handles Ollama concurrency internally
+        query_embeddings = await embed_service.generate([query])
 
         if not query_embeddings or not query_embeddings[0]:
             return []
@@ -417,8 +410,10 @@ class RAGService:
         yield json.dumps({"type": "sources", "sources": sources})
 
         # Signal that LLM is generating (show lock state if busy)
-        if ollama_is_locked() and ollama_holder() != "rag_chat":
-            yield json.dumps({"type": "status", "message": f"Warte auf Ollama (läuft: {ollama_holder()})..."})
+        lock_status = self.llm_service.get_lock_status()
+        is_locked = any(s["locked"] for s in lock_status.values())
+        if is_locked:
+            yield json.dumps({"type": "status", "message": "Warte auf Ollama (läuft: Klassifizierung)..."})
         else:
             yield json.dumps({"type": "status", "message": "Generiere Antwort..."})
 
@@ -460,47 +455,33 @@ class RAGService:
         model_name = config.chat_model or "gpt-4o-mini"
         provider_name = getattr(config, "chat_model_provider", "openai") or "openai"
 
-        is_ollama = provider_name == "ollama"
-
         try:
-            if is_ollama:
-                # CRITICAL REVIEW FEEDBACK HIGH: ollama_lock MUST be acquired BEFORE llm_completion
-                acquired = await ollama_acquire("rag_chat", timeout=120)
-                if not acquired:
-                    logger.warning("RAG chat: OllamaLock timeout – Classifier läuft noch, bitte erneut versuchen")
-                    yield "\n\n[Ollama ist gerade belegt (Klassifizierung läuft). Bitte in 30 Sekunden erneut versuchen.]"
-                    return
+            # D-18: 30s timeout for RAG — fail fast with clear error to user
+            stream_response = await self.llm_service.complete_llm(
+                model=model_name,
+                messages=messages,
+                timeout=30.0,  # D-18: fail fast for RAG
+                stream=True,   # Streaming MUST be preserved
+                temperature=0.2,
+                num_ctx=max(8192, (getattr(config, "max_context_tokens", 4000) or 4000) * 2),
+                keep_alive="10m",
+                think=False,
+                provider=provider_name,
+            )
 
-            try:
-                stream = await llm_completion(
-                    model=model_name,
-                    provider=provider_name,
-                    messages=messages,
-                    stream=True,
-                    temperature=0.2,
-                    num_ctx=max(8192, (getattr(config, "max_context_tokens", 4000) or 4000) * 2),
-                    keep_alive="10m",
-                    think=False,
-                    timeout=300.0,
-                )
+            # stream_response is a LiteLLM response object for iteration
+            async for chunk in stream_response:
+                delta = chunk.choices[0].delta if chunk.choices else None
+                content = getattr(delta, "content", None) or ""
+                finish = getattr(chunk.choices[0], "finish_reason", None)
+                if content:
+                    yield content
+                if finish is not None and finish != "length":
+                    break
 
-                async for chunk in stream:
-                    # LiteLLM returns OpenAI-compatible SSE format:
-                    # {"choices": [{"delta": {"content": "..."}, "finish_reason": null}]}
-                    delta = chunk.choices[0].delta if chunk.choices else None
-                    content = getattr(delta, "content", None) or ""
-                    finish = getattr(chunk.choices[0], "finish_reason", None)
-
-                    if content:
-                        yield content
-
-                    if finish is not None and finish != "length":
-                        break
-
-            finally:
-                if is_ollama:
-                    ollama_release("rag_chat")
-
+        except LLMLockTimeoutError as e:
+            # D-18: fail fast for RAG — return clear error to user
+            yield "\n\n[Ollama ist gerade belegt (Klassifizierung läuft). Bitte in 30 Sekunden erneut versuchen.]"
         except Exception as e:
             logger.warning(f"Streaming error: {e}")
             yield f"\n\n[Fehler: {e}]"
@@ -545,17 +526,20 @@ class RAGService:
         provider_name = getattr(config, "chat_model_provider", "openai") or "openai"
 
         try:
-            result = await llm_completion(
+            result = await self.llm_service.complete_llm(
                 model=model_name,
-                provider=provider_name,
                 messages=messages,
+                timeout=30.0,
+                stream=False,
                 temperature=0.0,
                 max_tokens=200,
                 num_ctx=4096,
                 keep_alive="5m",
                 think=False,
+                provider=provider_name,
             )
-            rewritten = (result.choices[0].message.content or "").strip()
+            # complete_llm returns string when stream=False
+            rewritten = result.strip() if isinstance(result, str) else (result.choices[0].message.content or "").strip()
             # Strip any markdown fences or explanatory text
             rewritten = _re.sub(r'^```.*?\n|```$', '', rewritten, flags=_re.DOTALL).strip()
             return rewritten if rewritten else question

@@ -17,11 +17,15 @@ from pdf2image import convert_from_bytes
 
 from app.services.llm import (
     llm_completion,
+)
+from app.services.llm.lock import (
     acquire as ollama_acquire,
     release as ollama_release,
     is_locked as ollama_is_locked,
     current_holder as ollama_holder,
 )
+from app.services.llm.protocol import LLMService
+from app.services.llm.service import LLMLockTimeoutError
 
 from .state import (
     DEFAULT_OLLAMA_URL,
@@ -69,6 +73,7 @@ class OcrService:
         model: str = DEFAULT_OCR_MODEL,
         max_image_size: int = 2048,
         state: OcrState | None = None,
+        llm_service: LLMService | None = None,
     ):
         self.ollama_urls: List[str] = [s.strip() for s in ollama_url.split(",")]
         self.url_index: int = 0
@@ -77,6 +82,7 @@ class OcrService:
         self._config_lock = asyncio.Lock()
         self._configured = False
         self.state: OcrState = state or OcrState()
+        self.llm_service = llm_service
 
     def get_current_url(self) -> str:
         return self.ollama_urls[self.url_index % len(self.ollama_urls)]

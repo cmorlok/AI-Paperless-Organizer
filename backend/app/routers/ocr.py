@@ -456,7 +456,10 @@ async def start_batch_ocr(
 
 @router.get("/batch/status")
 @inject
-async def get_batch_status(state: FromDishka[OcrState] = None):
+async def get_batch_status(
+    state: FromDishka[OcrState] = None,
+    llm_service: FromDishka[LLMProviderService] = None,
+):
     """Get current batch OCR job status, including page-level progress for current document."""
     current_doc = state.batch.current_document
     current_doc_id = current_doc.get("id") if isinstance(current_doc, dict) else None
@@ -475,8 +478,9 @@ async def get_batch_status(state: FromDishka[OcrState] = None):
             "pages": pp.get("pages", []),
         }
 
-    from app.services.llm import is_locked as ollama_is_locked, current_holder as ollama_holder
-    waiting = ollama_holder() if ollama_is_locked() and not state.batch.running else None
+    # Use LLMService lock status instead of direct lock.py imports
+    lock_status = llm_service.get_lock_status() if llm_service else {}
+    waiting = next((p for p, s in lock_status.items() if s["locked"]), None) if not state.batch.running else None
 
     return {
         "running": state.batch.running,
