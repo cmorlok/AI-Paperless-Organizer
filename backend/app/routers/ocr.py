@@ -1,4 +1,4 @@
-"""OCR Router - Endpoints for OCR via Ollama Vision models."""
+"""OCR Router - Endpoints for vision OCR."""
 
 import asyncio
 import json
@@ -783,80 +783,38 @@ async def get_document_thumbnail(
 
 # --- OCR Model Comparison ---
 
-@router.get("/models")
-async def get_ollama_models():
-    """Get all available models from all configured Ollama servers."""
-    urls = ocr_settings.get("ollama_urls", [ocr_settings.get("ollama_url", DEFAULT_OLLAMA_URL)])
-    all_models = set()
-    
-    for url in urls:
-        url = url.rstrip("/")
-        try:
-            async with httpx.AsyncClient(timeout=10.0) as client:
-                response = await client.get(f"{url}/api/tags")
-                if response.status_code == 200:
-                    models = response.json().get("models", [])
-                    for m in models:
-                        name = m.get("name", "")
-                        if name:
-                            all_models.add(name)
-        except Exception as e:
-            logger.warning(f"Could not fetch models from {url}: {e}")
-    
-    sorted_models = sorted(all_models)
-    current_model = ocr_settings.get("model", DEFAULT_OCR_MODEL)
-    
-    return {
-        "models": sorted_models,
-        "current_model": current_model
-    }
-
-
-async def _unload_model_from_vram(model: str):
+async def _unload_model_from_vram(model: str, llm_service):
     """Send keep_alive=0 to Ollama to immediately unload model from VRAM."""
-    urls = ocr_settings.get("ollama_urls", [ocr_settings.get("ollama_url", DEFAULT_OLLAMA_URL)])
-    for url in urls:
-        url = url.rstrip("/")
+    try:
+        await llm_service.unload_local_model("ollama", model)
+        print(f"[Compare] Unloaded {model} from VRAM")
+    except Exception:
+        pass
+
+
+async def _wait_for_provider_ready(provider: str, max_wait: int = 60, llm_service=None) -> bool:
+    """Wait until the provider responds. Returns True if ready."""
+    waited = 0
+    interval = 3
+
+    while waited < max_wait:
         try:
-            async with httpx.AsyncClient(timeout=10.0) as client:
-                await client.post(
-                    f"{url}/api/chat",
-                    json={"model": model, "messages": [], "keep_alive": 0}
-                )
-                print(f"[Compare] Unloaded {model} from VRAM")
-                return
+            if await llm_service.check_provider_health(provider):
+                if waited > 0:
+                    print(f"[Compare] {provider} wieder erreichbar nach {waited}s Wartezeit")
+                return True
         except Exception:
             pass
 
-
-async def _wait_for_ollama_ready(max_wait: int = 60) -> bool:
-    """Wait until at least one Ollama server responds. Returns True if ready."""
-    urls = ocr_settings.get("ollama_urls", [ocr_settings.get("ollama_url", DEFAULT_OLLAMA_URL)])
-    waited = 0
-    interval = 3
-    
-    while waited < max_wait:
-        for url in urls:
-            url = url.rstrip("/")
-            try:
-                async with httpx.AsyncClient(timeout=5.0) as client:
-                    resp = await client.get(f"{url}/api/tags")
-                    if resp.status_code == 200:
-                        if waited > 0:
-                            print(f"[Compare] Ollama wieder erreichbar nach {waited}s Wartezeit ({url})")
-                        return True
-            except Exception:
-                pass
-        
-        print(f"[Compare] Ollama nicht erreichbar, warte {interval}s... ({waited}/{max_wait}s)")
+        print(f"[Compare] {provider} nicht erreichbar, warte {interval}s... ({waited}/{max_wait}s)")
         await asyncio.sleep(interval)
         waited += interval
-    
-    print(f"[Compare] Ollama nach {max_wait}s immer noch nicht erreichbar!")
+
+    print(f"[Compare] {provider} nach {max_wait}s immer noch nicht erreichbar!")
     return False
 
 
-async def _run_compare_job(ocr_service: OcrService, paperless_client, document_id: int, models: list, target_page: int, compare_state: OcrCompareState):
+async def _run_compare_job(ocr_service: OcrService, paperless_client, document_id: int, models: list, target_page: int, compare_state: OcrCompareState, llm_service):
     """Background task that runs the actual model comparison."""
     import io
     from PIL import Image
@@ -921,13 +879,13 @@ async def _run_compare_job(ocr_service: OcrService, paperless_client, document_i
             compare_state.current_page = 0
             compare_state.elapsed_seconds = round(time.time() - job_start, 1)
 
-            # Health check: wait for Ollama to be ready before starting each model
+            # Health check: wait for provider to be ready before starting each model
             compare_state.phase = "health_check"
-            print(f"[Compare] Checking Ollama health before model: {model_name}")
-            ollama_ok = await _wait_for_ollama_ready(max_wait=60)
+            print(f"[Compare] Checking {provider} health before model: {model_name}")
+            ollama_ok = await _wait_for_provider_ready("ollama", max_wait=60, llm_service=llm_service)
             if not ollama_ok:
-                error_msg = f"Ollama nicht erreichbar - überspringe {model_name}"
-                print(f"[Compare] {model_name} SKIPPED: Ollama not reachable")
+                error_msg = f"{provider} nicht erreichbar - überspringe {model_name}"
+                print(f"[Compare] {model_name} SKIPPED: provider not reachable")
                 compare_state.results.append({
                     "model": model_name,
                     "text": "",
@@ -1017,11 +975,11 @@ async def _run_compare_job(ocr_service: OcrService, paperless_client, document_i
             # Unload model from VRAM before loading the next
             compare_state.phase = "unloading"
             compare_state.elapsed_seconds = round(time.time() - job_start, 1)
-            await _unload_model_from_vram(model_name)
+            await _unload_model_from_vram(model_name, llm_service)
 
-            # If model had an error, wait for Ollama to recover before next model
+            # If model had an error, wait for provider to recover before next model
             if error_msg:
-                print("[Compare] Modell hatte Fehler, warte 5s auf Ollama-Recovery...")
+                print("[Compare] Modell hatte Fehler, warte 5s auf Recovery...")
                 await asyncio.sleep(5)
 
         compare_state.phase = "done"
@@ -1047,6 +1005,7 @@ async def start_compare(
     client: FromDishka[PaperlessClient] = None,
     service: FromDishka[OcrService] = None,
     compare_state: FromDishka[OcrCompareState] = None,
+    llm_service: FromDishka[LLMProviderService] = None,
 ):
     """Start OCR model comparison as background task."""
     if compare_state.running:
@@ -1065,7 +1024,7 @@ async def start_compare(
     compare_state.total_models = len(models)
     compare_state.phase = "starting"
 
-    asyncio.create_task(_run_compare_job(service, client, request.document_id, models, request.page, compare_state))
+    asyncio.create_task(_run_compare_job(service, client, request.document_id, models, request.page, compare_state, llm_service))
 
     return {"started": True, "models": len(models)}
 

@@ -45,9 +45,9 @@ export default function DocumentClassifier() {
 
   // Settings tab state
   const [settingsSaving, setSettingsSaving] = useState(false)
-  const [ollamaModels, setOllamaModels] = useState<api.OllamaModelsResponse | null>(null)
+  const [ollamaModels, setOllamaModels] = useState<{ provider: string; models: api.LLMModel[] } | null>(null)
   const [ollamaLoading, setOllamaLoading] = useState(false)
-  const [, setOllamaTestResult] = useState<api.OllamaTestResponse | null>(null)
+  const [, setOllamaTestResult] = useState<{ connected: boolean; model_available: boolean; model: string; message: string } | null>(null)
 
   // Collapsible sections
   const [expandedSections, setExpandedSections] = useState<Record<string, boolean>>({})
@@ -401,11 +401,11 @@ export default function DocumentClassifier() {
     setOllamaLoading(true)
     setOllamaTestResult(null)
     try {
-      const models = await api.getClassifierOllamaModels()
+      const models = await api.getLLMProviderModels("ollama")
       setOllamaModels(models)
     } catch (e) {
       console.error('Failed to load Ollama models:', e)
-      setOllamaModels({ connected: false, ollama_host: '', installed: [], suggestions: [], top_recommendation: null })
+      setOllamaModels(null)
     } finally {
       setOllamaLoading(false)
     }
@@ -1261,18 +1261,14 @@ export default function DocumentClassifier() {
                       <select value={slot.model} onChange={(e) => updateBenchSlot(idx, 'model', e.target.value)} className="input text-sm py-1.5 flex-1">
                         {ollamaLoading ? (
                           <option value="">Lade Modelle...</option>
-                        ) : ollamaModels?.installed && ollamaModels.installed.length > 0 ? (
+                        ) : ollamaModels?.models && ollamaModels.models.length > 0 ? (
                           <>
                             <option value="">Standard</option>
-                            {ollamaModels.installed
-                              .sort((a: any, b: any) => {
-                                if (a.is_thinking && !b.is_thinking) return 1
-                                if (!a.is_thinking && b.is_thinking) return -1
-                                return a.name.localeCompare(b.name)
-                              })
-                              .map((m: any) => (
+                            {ollamaModels.models
+                              .sort((a, b) => a.name.localeCompare(b.name))
+                              .map((m) => (
                               <option key={m.name} value={m.name}>
-                                {m.is_thinking ? '\u26A0 ' : ''}{m.name} ({m.size_gb}GB)
+                                {m.display_name || m.name}
                               </option>
                             ))}
                           </>
@@ -1329,7 +1325,7 @@ export default function DocumentClassifier() {
                 {benchSlots.length} Provider laufen nacheinander -- das kann je nach Anzahl etwas dauern.
               </p>
             )}
-            {!ollamaModels?.connected && (
+            {!ollamaModels && (
               <p className="text-xs text-surface-500 mt-2">
                 Tipp: Lade Ollama-Modelle unter Einstellungen, damit du sie hier auswaehlen kannst.
               </p>

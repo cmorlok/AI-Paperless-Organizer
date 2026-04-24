@@ -50,11 +50,15 @@ export default function OcrCompare() {
     const loadModels = async () => {
         setLoadingModels(true)
         try {
-            const data = await api.getOllamaModels()
-            setAvailableModels(data.models)
-            setCurrentModel(data.current_model)
-            if (data.current_model && data.models.includes(data.current_model)) {
-                setSelectedModels([data.current_model])
+            const [modelsResult, settingsResult] = await Promise.all([
+                api.getLLMProviderModels("ollama"),
+                api.getOcrSettings()
+            ])
+            setAvailableModels(modelsResult.models.map(m => m.name))
+            const current = settingsResult.model
+            setCurrentModel(current)
+            if (current && modelsResult.models.some(m => m.name === current)) {
+                setSelectedModels([current])
             }
         } catch (e: any) {
             setError('Modelle konnten nicht geladen werden: ' + e.message)

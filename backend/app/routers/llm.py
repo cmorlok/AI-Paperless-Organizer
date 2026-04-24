@@ -1,4 +1,4 @@
-from fastapi import APIRouter
+from fastapi import APIRouter, Query
 from pydantic import BaseModel
 from typing import Optional
 from app.services.llm.protocol import LLMService as LLMProviderService
@@ -17,11 +17,16 @@ class TestPromptRequest(BaseModel):
 @router.post("/test")
 @inject
 async def test_llm_connection(
+    provider: Optional[str] = Query(None, description="Provider name to test (e.g. 'ollama')"),
+    model: Optional[str] = Query(None, description="Model name to test (e.g. 'qwen2.5vl:7b')"),
     llm_service: FromDishka[LLMProviderService] = None
 ):
-    """Test the active LLM provider connection."""
+    """Test LLM provider connection. If provider/model given, tests that specific combo; otherwise tests active classifier provider."""
     try:
-        result = await llm_service.test_connection()
+        if provider or model:
+            result = await llm_service.test_connection(provider=provider, model=model)
+        else:
+            result = await llm_service.test_connection()
         return {"success": True, "provider": result["provider"], "model": result["model"]}
     except Exception as e:
         return {"success": False, "error": str(e)}

@@ -28,8 +28,8 @@ export default function OcrSettings() {
     const loadModels = async () => {
         setLoadingModels(true)
         try {
-            const result = await api.getOllamaModels()
-            setAvailableModels(result.models || [])
+            const result = await api.getLLMProviderModels("ollama")
+            setAvailableModels(result.models.map(m => m.name) || [])
         } catch (e) {
             console.error('Failed to load Ollama models', e)
         } finally {

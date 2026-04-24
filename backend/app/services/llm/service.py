@@ -709,16 +709,21 @@ class LitellmService:
         )
         return (response.choices[0].message.content or "").strip()
 
-    async def test_connection(self) -> Dict:
-        """Test connection to the LLM provider."""
-        await self._ensure_config()
-        if not self.provider:
+    async def test_connection(self, provider: str = None, model: str = None) -> Dict:
+        """Test connection to the LLM provider. If provider/model given, tests that specific combo."""
+        test_provider = provider or (self.provider.name if self.provider else None)
+        test_model = model or self.model
+        if not test_provider:
             raise ValueError("No LLM provider configured")
-        response = await self.complete("Antworte nur mit: OK")
+        response = await llm_completion(
+            model=test_model,
+            messages=[{"role": "user", "content": "Antworte nur mit: OK"}],
+            provider=test_provider,
+        )
         return {
-            "provider": self.provider.name,
-            "model": self.model,
-            "response": response
+            "provider": test_provider,
+            "model": test_model,
+            "response": (response.choices[0].message.content or "").strip()
         }
 
     async def check_provider_health(self, provider: str) -> bool:

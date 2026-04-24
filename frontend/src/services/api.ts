@@ -777,9 +777,6 @@ export interface OcrCompareResponse {
   results: OcrModelCompareResult[]
 }
 
-export const getOllamaModels = () =>
-  fetchJson<{ models: string[]; current_model: string }>('/ocr/models')
-
 export const startOcrCompare = (documentId: number, models: string[], page: number = 1) =>
   fetchJson<{ started: boolean; models: number }>('/ocr/compare', {
     method: 'POST',
@@ -1099,17 +1096,6 @@ export const getClassifierCorrespondents = () =>
 
 export const getClassifierDocumentTypes = () =>
   fetchJson<PaperlessDocumentType[]>('/classifier/document-types')
-
-export const getClassifierOllamaModels = () =>
-  fetchJson<OllamaModelsResponse>('/classifier/ollama/models')
-
-export const testClassifierOllama = (model?: string, host?: string) => {
-  const params = new URLSearchParams()
-  if (model) params.set('model', model)
-  if (host) params.set('host', host)
-  const qs = params.toString() ? `?${params.toString()}` : ''
-  return fetchJson<OllamaTestResponse>(`/classifier/ollama/test${qs}`, { method: 'POST' })
-}
 
 export const getStoragePathsFromPaperless = () =>
   fetchJson<any[]>('/classifier/storage-paths')
