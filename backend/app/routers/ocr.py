@@ -147,8 +147,8 @@ class OcrEvaluateRequest(BaseModel):
 async def get_ocr_settings(state: FromDishka[OcrState] = None):
     """Get current OCR settings."""
     settings = ocr_settings.copy()
-    settings["watchdog_enabled"] = state.watchdog.enabled
-    settings["watchdog_interval"] = state.watchdog.interval_minutes
+    settings["processor_enabled"] = state.processor.enabled
+    settings["processor_interval"] = state.processor.interval_minutes
     return settings
 
 
@@ -156,94 +156,74 @@ async def get_ocr_settings(state: FromDishka[OcrState] = None):
 @inject
 async def save_ocr_settings_endpoint(request: OcrSettingsRequest, client: FromDishka[PaperlessClient] = None):
     """Save OCR settings."""
-    ocr_settings["ollama_url"] = request.ollama_url
-    if request.ollama_urls:
-         ocr_settings["ollama_urls"] = request.ollama_urls
-    else:
-         ocr_settings["ollama_urls"] = [request.ollama_url]
-         
     ocr_settings["model"] = request.model
     ocr_settings["max_image_size"] = request.max_image_size
     ocr_settings["smart_skip_enabled"] = request.smart_skip_enabled
-    
-    # Handle watchdog settings if present (need to update Pydantic model first)
-    # For now, we assume they might be in request if we update model
-    
+
     save_ocr_settings_to_file(ocr_settings)
     return {"success": True, **ocr_settings}
 
-# --- Watchdog Endpoints ---
+# --- Processor Endpoints ---
 
-# Persist enabled flag to AppSettings KV store (STATE-08)
+# Persist enabled flag to AppSettings KV store
 
-async def _persist_ocr_watchdog_enabled(enabled: bool, db: AsyncSession) -> None:
-    """Persist ocr_watchdog_enabled flag to AppSettings."""
+async def _persist_ocr_processor_enabled(enabled: bool, db: AsyncSession) -> None:
+    """Persist ocr_processor_enabled flag to AppSettings."""
     from app.routers.settings import set_setting
     await set_setting(
-        "ocr_watchdog_enabled",
+        "ocr_processor_enabled",
         "true" if enabled else "false",
         "bool",
         db
     )
 
 
-class WatchdogSettingsRequest(BaseModel):
+class ProcessorSettingsRequest(BaseModel):
     enabled: bool
     interval_minutes: int = 5
 
-@router.get("/watchdog/status")
+@router.get("/processor/status")
 @inject
-async def get_watchdog_status(state: FromDishka[OcrState] = None):
-    """Get watchdog status."""
+async def get_processor_status(state: FromDishka[OcrState] = None):
+    """Get processor status."""
     return {
-        "enabled": state.watchdog.enabled,
-        "running": state.watchdog.running,
-        "interval_minutes": state.watchdog.interval_minutes,
-        "last_run": state.watchdog.last_run
+        "enabled": state.processor.enabled,
+        "running": state.processor.running,
+        "interval_minutes": state.processor.interval_minutes,
+        "last_run": state.processor.last_run
     }
 
-@router.post("/watchdog/settings")
+@router.post("/processor/settings")
 @inject
-async def set_watchdog_settings(
-    request: WatchdogSettingsRequest,
+async def set_processor_settings(
+    request: ProcessorSettingsRequest,
     background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
     client: FromDishka[PaperlessClient] = None,
     service: FromDishka[OcrService] = None,
     state: FromDishka[OcrState] = None,
 ):
-    """Enable/Disable watchdog and set interval."""
-    state.watchdog.interval_minutes = max(1, request.interval_minutes)
-    
-    # Update persistence to file (backward compatibility)
-    ocr_settings["watchdog_enabled"] = request.enabled
-    ocr_settings["watchdog_interval"] = request.interval_minutes
-    save_ocr_settings_to_file(ocr_settings)
-    
-    # Persist to AppSettings KV store (STATE-08)
+    """Enable/Disable processor and set interval."""
+    state.processor.interval_minutes = max(1, request.interval_minutes)
+
+    # Persist to AppSettings KV store
     try:
-        await _persist_ocr_watchdog_enabled(request.enabled, db)
+        await _persist_ocr_processor_enabled(request.enabled, db)
     except Exception as e:
-        logger.warning(f"Could not persist ocr_watchdog_enabled to KV: {e}")
-    
-    if request.enabled and not state.watchdog.enabled:
-        # Start watchdog
-        state.watchdog.enabled = True
-        # We need to run this as a long-running background task
-        # background_tasks is for one-off. For permanent loop, we need asyncio.create_task?
-        # But we don't have the loop handy easily here? 
-        # Actually background_tasks.add_task works for long running too, but better manage it.
-        
-        # We attach it to the event loop
+        logger.warning(f"Could not persist ocr_processor_enabled to KV: {e}")
+
+    if request.enabled and not state.processor.enabled:
+        # Start processor
+        state.processor.enabled = True
         loop = asyncio.get_running_loop()
-        state.watchdog.task = loop.create_task(service.watchdog_loop(client))
-        
-    elif not request.enabled and state.watchdog.enabled:
-        # Stop watchdog
-        state.watchdog.enabled = False
+        state.processor.task = loop.create_task(service.processor_loop(client))
+
+    elif not request.enabled and state.processor.enabled:
+        # Stop processor
+        state.processor.enabled = False
         # Task will exit on next loop
-        
-    return get_watchdog_status()
+
+    return get_processor_status()
 
 
 # --- Batch Control Endpoints ---

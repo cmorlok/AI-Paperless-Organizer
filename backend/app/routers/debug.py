@@ -349,7 +349,7 @@ async def run_common_tests():
     return {"tests": tests}
 
 
-# --- Service Statuses Endpoint (STATE-08) ---
+# --- Service Statuses Endpoint ---
 
 def _ocr_current_op(state: OcrState) -> str | None:
     """Get current OCR operation text."""
@@ -357,10 +357,8 @@ def _ocr_current_op(state: OcrState) -> str | None:
         doc = state.batch.current_document
         title = doc.get("title", "?") if isinstance(doc, dict) else "?"
         return f"Batch: {title}"
-    if state.watchdog.running:
-        return f"Watchdog (Intervall: {state.watchdog.interval_minutes}min)"
-    if state.is_locked():
-        return f"Einzel-OCR ({state.current_lock_holder()})"
+    if state.processor.running:
+        return f"Processor (Intervall: {state.processor.interval_minutes}min)"
     return None
 
 
@@ -378,10 +376,10 @@ async def get_service_statuses(
             {
                 "name": "ocr",
                 "label": "OCR",
-                "enabled": ocr_state.watchdog.enabled,
-                "running": ocr_state.watchdog.running or ocr_state.batch.running,
+                "enabled": ocr_state.processor.enabled,
+                "running": ocr_state.processor.running or ocr_state.batch.running,
                 "current_op": _ocr_current_op(ocr_state),
-                "detail": ocr_state.watchdog.model_dump() if ocr_state.watchdog.running else ocr_state.batch.model_dump(),
+                "detail": ocr_state.processor.model_dump() if ocr_state.processor.running else ocr_state.batch.model_dump(),
             },
             {
                 "name": "classifier",

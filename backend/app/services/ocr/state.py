@@ -64,7 +64,7 @@ class OcrBatchProgress(BaseModel):
         return getattr(self, key, default)
 
 
-class OcrWatchdogProgress(BaseModel):
+class OcrProcessorProgress(BaseModel):
     enabled: bool = False
     running: bool = False
     interval_minutes: int = Field(ge=1, default=5)
@@ -123,14 +123,14 @@ class OcrCompareState(BaseModel):
 
 class OcrState(BaseState, CancelMixin):
     batch: OcrBatchProgress = Field(default_factory=OcrBatchProgress)
-    watchdog: OcrWatchdogProgress = Field(default_factory=OcrWatchdogProgress)
+    processor: OcrProcessorProgress = Field(default_factory=OcrProcessorProgress)
     page_progress: dict[int, OcrDocumentProgress] = Field(default_factory=dict)
 
     _lock: asyncio.Lock = PrivateAttr(default_factory=asyncio.Lock)
 
     def _reset_fields(self) -> None:
         self.batch = OcrBatchProgress()
-        self.watchdog = OcrWatchdogProgress()
+        self.processor = OcrProcessorProgress()
         self.page_progress.clear()
         self.clear_cancel()
 

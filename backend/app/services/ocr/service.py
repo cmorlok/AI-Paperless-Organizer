@@ -1290,12 +1290,12 @@ class OcrService:
             self.state.batch.running = False
             self.state.batch.current_document = None
 
-    async def watchdog_loop(self, paperless_client):
+    async def processor_loop(self, paperless_client):
         """Continuous background loop to check for new documents."""
         from datetime import datetime
 
-        logger.info("Watchdog started")
-        print("[OCR] Watchdog started")
+        logger.info("Processor started")
+        print("[OCR] Processor started")
 
         _ocrfinish_tag = None
         _ocrpruefen_tag = None
@@ -1317,16 +1317,15 @@ class OcrService:
             except Exception:
                 return []
 
-        while self.state.watchdog.enabled:
+        while self.state.processor.enabled:
             try:
-                self.state.watchdog.running = True
+                self.state.processor.running = True
 
-                if self.state.batch.running or self.state.is_locked():
-                    reason = "Batch" if self.state.batch.running else "Single-OCR"
-                    logger.info(f"Watchdog: {reason} aktiv, ueberspringe diesen Zyklus")
+                if self.state.batch.running:
+                    logger.info("Processor: Batch aktiv, ueberspringe diesen Zyklus")
                 else:
-                    logger.info("Watchdog checking for new documents...")
-                    print(f"[OCR] Watchdog check at {datetime.now().isoformat()}")
+                    logger.info("Processor checking for new documents...")
+                    print(f"[OCR] Processor check at {datetime.now().isoformat()}")
 
                     should_run = True
                     try:
@@ -1336,12 +1335,12 @@ class OcrService:
                                 tags_id_none=exclude_ids
                             )
                             if pending_count == 0:
-                                logger.info("Watchdog: Keine neuen Dokumente – überspringe diesen Zyklus")
+                                logger.info("Processor: Keine neuen Dokumente – überspringe diesen Zyklus")
                                 should_run = False
                             else:
-                                logger.info(f"Watchdog: ~{pending_count} Dokument(e) ohne OCR gefunden, starte Batch...")
+                                logger.info(f"Processor: ~{pending_count} Dokument(e) ohne OCR gefunden, starte Batch...")
                     except Exception as check_err:
-                        logger.warning(f"Watchdog: Pre-Check fehlgeschlagen, starte Batch trotzdem: {check_err}")
+                        logger.warning(f"Processor: Pre-Check fehlgeschlagen, starte Batch trotzdem: {check_err}")
 
                     if should_run:
                         await self.batch_ocr(
@@ -1351,19 +1350,19 @@ class OcrService:
                             remove_runocr_tag=True
                         )
 
-                self.state.watchdog.last_run = datetime.now().isoformat()
+                self.state.processor.last_run = datetime.now().isoformat()
 
             except Exception as e:
-                logger.error(f"Watchdog error: {e}")
-                print(f"[OCR] Watchdog error: {e}")
+                logger.error(f"Processor error: {e}")
+                print(f"[OCR] Processor error: {e}")
 
-            self.state.watchdog.running = False
-            interval_min = self.state.watchdog.get("interval_minutes", 1)
+            self.state.processor.running = False
+            interval_min = self.state.processor.get("interval_minutes", 1)
             for _ in range(interval_min * 60):
-                if not self.state.watchdog.enabled:
+                if not self.state.processor.enabled:
                     break
                 await asyncio.sleep(1)
 
-        self.state.watchdog.running = False
-        logger.info("Watchdog stopped")
-        print("[OCR] Watchdog stopped")
+        self.state.processor.running = False
+        logger.info("Processor stopped")
+        print("[OCR] Processor stopped")
