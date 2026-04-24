@@ -809,7 +809,19 @@ class DocumentClassifierService:
                     break
 
         async def run_single(name: str, model: Optional[str]) -> Dict[str, Any]:
-            actual_model = model or (config.openai_model if name == "openai" else config.ollama_model)
+            # Resolve actual model for display: use provided model, or fetch from KV store
+            if model:
+                actual_model = model
+            elif name == "openai":
+                actual_model = config.openai_model
+            else:
+                # Fetch from KV store (LLM_KEY_CLASSIFIER_MODEL) for non-openai providers
+                actual_model = None
+                if self.session_factory is not None:
+                    async with self.session_factory() as db:
+                        actual_model = await get_setting(LLM_KEY_CLASSIFIER_MODEL, db)
+                if not actual_model:
+                    actual_model = f"{name}:default"
             try:
                 provider = await self._build_provider_by_name(name, config, model)
                 result = await provider.classify(document, config_dict)
