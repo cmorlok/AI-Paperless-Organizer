@@ -10,12 +10,6 @@ from app.services.llm.service import (
     LLMLockTimeoutError,
     LitellmService,
 )
-from app.services.llm.lock import (
-    acquire,
-    release,
-    is_locked,
-    current_holder,
-)
 
 __all__ = [
     "LLMService",
@@ -26,8 +20,4 @@ __all__ = [
     "PROVIDER_DISPLAY_NAMES",
     "LLMLockTimeoutError",
     "LitellmService",
-    "acquire",
-    "release",
-    "is_locked",
-    "current_holder",
 ]

@@ -4,13 +4,15 @@ import json
 import logging
 import re
 from collections import defaultdict
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, TYPE_CHECKING
 
 from sqlalchemy import select as sa_select, text
 
 from app.models.duplicates import DuplicateInvoiceCache
 from app.models.rag import RagConfig
-from app.services.llm import acquire as ollama_acquire, release as ollama_release, llm_completion
+
+if TYPE_CHECKING:
+    from app.services.llm.service import LitellmService
 
 logger = logging.getLogger(__name__)
 
@@ -19,6 +21,7 @@ async def scan_invoices(
     paperless_client,
     session_factory,
     scan_state,
+    llm_service: "LitellmService | None" = None,
 ) -> List[Dict]:
     """Find duplicate invoices by extracting invoice number + amount via LLM.
 
@@ -90,7 +93,7 @@ async def scan_invoices(
         # Truncate content to avoid huge prompts
         content_trimmed = content[:3000]
 
-        extraction = await _extract_invoice_data(content_trimmed, chat_model)
+        extraction = await _extract_invoice_data(content_trimmed, chat_model, llm_service)
         if extraction:
             extractions[doc_id] = extraction
             # Cache result
@@ -153,39 +156,43 @@ async def _get_chat_model(session_factory) -> str:
     return "qwen3.5:4b"
 
 
-async def _extract_invoice_data(content: str, model: str) -> Optional[Dict]:
+async def _extract_invoice_data(content: str, model: str, llm_service: "LitellmService | None" = None) -> Optional[Dict]:
     """Extract invoice number and amount from document content via LiteLLM."""
-    got = await ollama_acquire("duplicates", timeout=120)
-    if not got:
-        logger.warning("Could not acquire OllamaLock for invoice extraction")
-        return None
+    prompt = (
+        "Extrahiere aus dem folgenden Dokumenttext die Rechnungsnummer und den Gesamtbetrag.\n"
+        "Antworte NUR mit einem JSON-Objekt im Format:\n"
+        '{"invoice_number": "...", "amount": "..."}\n'
+        "Wenn du keine Rechnungsnummer findest, setze den Wert auf einen leeren String.\n"
+        "Wenn du keinen Betrag findest, sette den Wert auf einen leeren String.\n\n"
+        f"Dokumenttext:\n{content}"
+    )
 
     try:
-        prompt = (
-            "Extrahiere aus dem folgenden Dokumenttext die Rechnungsnummer und den Gesamtbetrag.\n"
-            "Antworte NUR mit einem JSON-Objekt im Format:\n"
-            '{"invoice_number": "...", "amount": "..."}\n'
-            "Wenn du keine Rechnungsnummer findest, setze den Wert auf einen leeren String.\n"
-            "Wenn du keinen Betrag findest, setze den Wert auf einen leeren String.\n\n"
-            f"Dokumenttext:\n{content}"
-        )
-
-        response = await llm_completion(
-            model=model,
-            provider="ollama",
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0,
-            num_ctx=4096,
-            timeout=60.0,
-        )
-        reply = response.choices[0].message.content or ""
+        if llm_service is not None:
+            reply = await llm_service.complete_llm(
+                model=model,
+                messages=[{"role": "user", "content": prompt}],
+                provider="ollama",
+                temperature=0,
+                timeout=60.0,
+            )
+        else:
+            # Fallback: should not happen in production
+            from app.services.llm import llm_completion
+            response = await llm_completion(
+                model=model,
+                provider="ollama",
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0,
+                num_ctx=4096,
+                timeout=60.0,
+            )
+            reply = response.choices[0].message.content or ""
         return _parse_invoice_json(reply)
 
     except Exception as e:
         logger.error(f"Invoice extraction failed: {e}")
         return None
-    finally:
-        ollama_release("duplicates")
 
 
 def _parse_invoice_json(text: str) -> Optional[Dict]:
