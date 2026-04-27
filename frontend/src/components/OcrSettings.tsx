@@ -11,8 +11,8 @@ export default function OcrSettings() {
     const [saving, setSaving] = useState(false)
     const [testing, setTesting] = useState(false)
     const [connectionStatus, setConnectionStatus] = useState<api.OcrConnectionResult | null>(null)
-    const [watchdogEnabled, setWatchdogEnabled] = useState(false)
-    const [watchdogInterval, setWatchdogInterval] = useState(5)
+    const [processorEnabled, setProcessorEnabled] = useState(false)
+    const [processorInterval, setProcessorInterval] = useState(5)
     const [editingIndex, setEditingIndex] = useState<number | null>(null)
     const [editValue, setEditValue] = useState('')
     const [maxImageSize, setMaxImageSize] = useState(1344)
@@ -49,9 +49,9 @@ export default function OcrSettings() {
             setMaxImageSize(settings.max_image_size || 1344)
             setSmartSkipEnabled(settings.smart_skip_enabled !== undefined ? settings.smart_skip_enabled : true)
 
-            if (settings.watchdog_enabled !== undefined) {
-                setWatchdogEnabled(settings.watchdog_enabled)
-                setWatchdogInterval(settings.watchdog_interval || 5)
+            if (settings.processor_enabled !== undefined) {
+                setProcessorEnabled(settings.processor_enabled)
+                setProcessorInterval(settings.processor_interval || 5)
             }
         } catch (e) {
             console.error('Failed to load settings', e)
@@ -130,7 +130,7 @@ export default function OcrSettings() {
                 smart_skip_enabled: smartSkipEnabled
             })
             // Save processor settings separately
-            await api.setProcessorSettings(watchdogEnabled, watchdogInterval)
+            await api.setProcessorSettings(processorEnabled, processorInterval)
         } catch (e) {
             console.error('Failed to save settings', e)
         } finally {
@@ -350,11 +350,11 @@ export default function OcrSettings() {
                     </div>
                 </div>
 
-                {/* Watchdog / Continuous Mode */}
+                {/* Processor / Continuous Mode */}
                 <div className="pt-6 border-t border-surface-700/50">
                     <h3 className="text-lg font-bold text-white mb-4 flex items-center gap-2">
                         <Clock className="w-5 h-5 text-purple-400" />
-                        Dauerhafter Hintergrund-Modus (Watchdog)
+                        Dauerhafter Hintergrund-Modus (Processor)
                     </h3>
 
                     <div className="bg-surface-900/30 rounded-xl p-4 border border-surface-700/50 space-y-4">
@@ -367,14 +367,14 @@ export default function OcrSettings() {
                                 <input
                                     type="checkbox"
                                     className="sr-only peer"
-                                    checked={watchdogEnabled}
-                                    onChange={(e) => setWatchdogEnabled(e.target.checked)}
+                                    checked={processorEnabled}
+                                    onChange={(e) => setProcessorEnabled(e.target.checked)}
                                 />
                                 <div className="w-11 h-6 bg-surface-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-purple-600"></div>
                             </label>
                         </div>
 
-                        {watchdogEnabled && (
+                        {processorEnabled && (
                             <div className="animate-in slide-in-from-top-2">
                                 <label className="block text-sm font-medium text-surface-300 mb-2">
                                     Prüf-Intervall (Minuten)
@@ -383,8 +383,8 @@ export default function OcrSettings() {
                                     type="number"
                                     min="1"
                                     max="60"
-                                    value={watchdogInterval}
-                                    onChange={(e) => setWatchdogInterval(parseInt(e.target.value) || 5)}
+                                    value={processorInterval}
+                                    onChange={(e) => setProcessorInterval(parseInt(e.target.value) || 5)}
                                     className="w-full input bg-surface-900/50 border-surface-700 focus:border-purple-500 font-mono text-sm"
                                 />
                             </div>

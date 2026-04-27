@@ -152,14 +152,17 @@ async def get_ocr_settings(state: FromDishka[OcrState] = None):
 
 @router.post("/settings")
 @inject
-async def save_ocr_settings_endpoint(request: OcrSettingsRequest, client: FromDishka[PaperlessClient] = None):
-    """Save OCR settings."""
-    ocr_settings["model"] = request.model
-    ocr_settings["max_image_size"] = request.max_image_size
-    ocr_settings["smart_skip_enabled"] = request.smart_skip_enabled
+async def save_ocr_settings_endpoint(request: OcrSettingsRequest, db: AsyncSession = Depends(get_db), client: FromDishka[PaperlessClient] = None):
+    """Save OCR settings to KV store."""
+    from app.routers.settings import set_setting
+    from app.models.settings_model import LLM_KEY_OCR_MODEL
 
-    save_ocr_settings_to_file(ocr_settings)
-    return {"success": True, **ocr_settings}
+    await set_setting("ocr_model", request.model, "str", db)
+    await set_setting("max_image_size", str(request.max_image_size), "int", db)
+    await set_setting("smart_skip_enabled", str(request.smart_skip_enabled).lower(), "bool", db)
+    await db.commit()
+
+    return {"success": True, "model": request.model, "max_image_size": request.max_image_size, "smart_skip_enabled": request.smart_skip_enabled}
 
 # --- Processor Endpoints ---
 
