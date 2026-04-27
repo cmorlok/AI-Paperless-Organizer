@@ -2,7 +2,7 @@
 
 Verifies:
 - _persist_auto_classify_enabled writes correct key/value to AppSettings
-- _persist_ocr_watchdog_enabled writes correct key/value to AppSettings
+- _persist_ocr_processor_enabled writes correct key/value to AppSettings
 - _persist_cloud_sync_enabled writes correct key/value to AppSettings
 - set_setting creates a row when key does not exist
 - set_setting updates an existing row when key already exists
@@ -129,33 +129,33 @@ class TestPersistAutoClassifyEnabled:
         assert row.key == "auto_classify_enabled"
 
 
-# ── Tests for _persist_ocr_watchdog_enabled ───────────────────────────────────
+# ── Tests for _persist_ocr_processor_enabled ───────────────────────────────────
 
-class TestPersistOcrWatchdogEnabled:
+class TestPersistOcrProcessorEnabled:
     @pytest.mark.asyncio
     async def test_persist_true_writes_true_string(self, db_session):
-        from app.routers.ocr import _persist_ocr_watchdog_enabled
-        await _persist_ocr_watchdog_enabled(True, db_session)
-        stored = await _read_key(db_session, "ocr_watchdog_enabled")
+        from app.routers.ocr import _persist_ocr_processor_enabled
+        await _persist_ocr_processor_enabled(True, db_session)
+        stored = await _read_key(db_session, "ocr_processor_enabled")
         assert stored == "true"
 
     @pytest.mark.asyncio
     async def test_persist_false_writes_false_string(self, db_session):
-        from app.routers.ocr import _persist_ocr_watchdog_enabled
-        await _persist_ocr_watchdog_enabled(False, db_session)
-        stored = await _read_key(db_session, "ocr_watchdog_enabled")
+        from app.routers.ocr import _persist_ocr_processor_enabled
+        await _persist_ocr_processor_enabled(False, db_session)
+        stored = await _read_key(db_session, "ocr_processor_enabled")
         assert stored == "false"
 
     @pytest.mark.asyncio
-    async def test_persist_key_is_ocr_watchdog_enabled(self, db_session):
-        from app.routers.ocr import _persist_ocr_watchdog_enabled
-        await _persist_ocr_watchdog_enabled(True, db_session)
+    async def test_persist_key_is_ocr_processor_enabled(self, db_session):
+        from app.routers.ocr import _persist_ocr_processor_enabled
+        await _persist_ocr_processor_enabled(True, db_session)
         result = await db_session.execute(
-            select(AppSettings).where(AppSettings.key == "ocr_watchdog_enabled")
+            select(AppSettings).where(AppSettings.key == "ocr_processor_enabled")
         )
         row = result.scalar_one_or_none()
         assert row is not None
-        assert row.key == "ocr_watchdog_enabled"
+        assert row.key == "ocr_processor_enabled"
 
 
 # ── Tests for _persist_cloud_sync_enabled ─────────────────────────────────────

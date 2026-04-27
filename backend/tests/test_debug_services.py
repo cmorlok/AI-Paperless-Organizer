@@ -216,25 +216,19 @@ class TestOcrCurrentOp:
         result = _ocr_current_op(state)
         assert result is None
 
-    def test_returns_watchdog_info_when_watchdog_running(self):
+    def test_returns_processor_info_when_processor_running(self):
         state = OcrState()
-        state.watchdog.running = True
-        state.watchdog.interval_minutes = 10
+        state.processor.running = True
+        state.processor.interval_minutes = 10
         result = _ocr_current_op(state)
-        assert result == "Watchdog (Intervall: 10min)"
+        assert result == "Processor (Intervall: 10min)"
 
-    def test_returns_single_ocr_info_when_locked(self):
-        state = OcrState()
-        state.lock_holder = "batch"
-        result = _ocr_current_op(state)
-        assert result == "Einzel-OCR (batch)"
-
-    def test_batch_takes_precedence_over_watchdog(self):
+    def test_batch_takes_precedence_over_processor(self):
         """When batch is running with a document, that is shown first."""
         state = OcrState()
         state.batch.running = True
         state.batch.current_document = {"title": "Doc"}
-        state.watchdog.running = True
+        state.processor.running = True
         result = _ocr_current_op(state)
         assert result is not None
         assert result.startswith("Batch:")

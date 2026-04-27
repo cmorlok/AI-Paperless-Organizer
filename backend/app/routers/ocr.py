@@ -11,8 +11,6 @@ from fastapi.responses import Response
 from pydantic import BaseModel
 from typing import Optional, List
 
-import httpx
-
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import get_db
 from dishka.integrations.fastapi import inject
@@ -820,6 +818,7 @@ async def _run_compare_job(ocr_service: OcrService, paperless_client, document_i
     from PIL import Image
     from pdf2image import convert_from_bytes
 
+    provider = "ollama"
     job_start = time.time()
     compare_state.job_start = job_start
 
