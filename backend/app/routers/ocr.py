@@ -219,12 +219,8 @@ async def ensure_ocr_tags(
 @router.post("/test-connection")
 @inject
 async def test_ocr_connection(service: FromDishka[OcrService] = None):
-    """Test connection to Ollama."""
-    result = await service.test_connection()
-    # Add model name to result for UI feedback
-    result["model"] = service.model
-    result["url"] = service.get_current_url()
-    return result
+    """Test connection to OCR provider."""
+    return await service.test_connection()
 
 
 @router.get("/stats")

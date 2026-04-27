@@ -906,6 +906,22 @@ class OcrService:
             logger.error(f"Legacy ocr_image failed: {e}")
             raise
 
+    async def test_connection(self) -> Dict[str, Any]:
+        """Test OCR provider connection and return status."""
+        try:
+            provider = await self._get_provider()
+            model = await self._get_model()
+            api_base = self.llm_service._resolve_provider_credentials(provider).get("api_base_url", "")
+
+            connected = await self.llm_service.check_provider_health(provider)
+            return {
+                "connected": connected,
+                "model": model,
+                "url": api_base,
+            }
+        except Exception as e:
+            return {"connected": False, "error": str(e)}
+
     async def apply_ocr_result(
         self,
         paperless_client,

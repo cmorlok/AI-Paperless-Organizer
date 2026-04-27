@@ -1201,6 +1201,7 @@ export default function DocumentClassifier() {
                     <ProviderModelSelector
                       value={slot}
                       onChange={(newValue) => updateBenchSlot(idx, newValue)}
+                      configuredOnly={true}
                     />
                     {benchSlots.length > 2 && (
                       <button onClick={() => removeBenchSlot(idx)} className="p-1 text-surface-500 hover:text-red-400 transition-colors" title="Entfernen">

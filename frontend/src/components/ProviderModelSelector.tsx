@@ -13,6 +13,7 @@ export interface ProviderModelSelectorProps {
   onChange: (value: ProviderModelValue) => void
   label?: string
   disabled?: boolean
+  configuredOnly?: boolean
 }
 
 export default function ProviderModelSelector({
@@ -20,6 +21,7 @@ export default function ProviderModelSelector({
   onChange,
   label,
   disabled = false,
+  configuredOnly = false,
 }: ProviderModelSelectorProps) {
   const [providers, setProviders] = useState<{ name: string; display_name: string }[]>([])
   const [models, setModels] = useState<api.LLMModel[]>([])
@@ -32,7 +34,9 @@ export default function ProviderModelSelector({
     const loadProviders = async () => {
       setLoadingProviders(true)
       try {
-        const provs = await api.getLLMProviders()
+        const provs = configuredOnly
+          ? await api.getLLMProvidersFromDB()
+          : await api.getLLMProviders()
         setProviders(provs || [])
       } catch (e) {
         console.error('Failed to load providers', e)
@@ -42,7 +46,7 @@ export default function ProviderModelSelector({
       }
     }
     loadProviders()
-  }, [])
+  }, [configuredOnly])
 
   // Fetch models when provider changes
   useEffect(() => {
@@ -84,7 +88,7 @@ export default function ProviderModelSelector({
       )}
       <div className="flex gap-2">
         {/* Provider Select */}
-        <div className="flex-1 min-w-0">
+        <div className="flex-1 min-w-[140px]">
           {loadingProviders ? (
             <div className="flex items-center gap-2 px-3 py-2 bg-surface-800 border border-surface-700 rounded-lg">
               <Loader2 className="w-4 h-4 animate-spin text-surface-500" />
@@ -111,7 +115,7 @@ export default function ProviderModelSelector({
         </div>
 
         {/* Model Select */}
-        <div className="flex-1 min-w-0">
+        <div className="flex-1 min-w-[140px]">
           {loadingModels ? (
             <div className="flex items-center gap-2 px-3 py-2 bg-surface-800 border border-surface-700 rounded-lg">
               <Loader2 className="w-4 h-4 animate-spin text-surface-500" />
