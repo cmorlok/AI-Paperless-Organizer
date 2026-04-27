@@ -18,17 +18,6 @@ from app.core.logging import get_logger
 from app.database import async_session
 from app.models import LLMProvider
 
-# Local LLM providers that need GPU lock serialization
-LOCAL_LLM_PROVIDERS = frozenset({
-    "ollama", "ollama_chat", "lm_studio", "lm_studio_chat",
-    "vllm", "llama.cpp", "llama-cpp", "local"
-})
-
-# Static extra headers injected per provider on every call.
-_PROVIDER_EXTRA_HEADERS: Dict[str, Dict[str, str]] = {
-    "openrouter": {"HTTP-Referer": "https://github.com/syberx/AI-Paperless-Organizer"},
-}
-
 
 class LLMLockTimeoutError(Exception):
     """Raised when a local LLM is busy and times out waiting for the lock."""
@@ -278,6 +267,15 @@ async def get_setting(key: str, db: AsyncSession) -> Optional[str]:
 class LitellmService:
     """Service for interacting with various LLM providers via LiteLLM."""
 
+    _LOCAL_LLM_PROVIDERS = frozenset({
+        "ollama", "ollama_chat", "lm_studio", "lm_studio_chat",
+        "vllm", "llama.cpp", "llama-cpp", "local"
+    })
+
+    _PROVIDER_EXTRA_HEADERS: Dict[str, Dict[str, str]] = {
+        "openrouter": {"HTTP-Referer": "https://github.com/syberx/AI-Paperless-Organizer"},
+    }
+
     def __init__(self, provider: Optional[LLMProvider] = None, model: Optional[str] = None, session_factory: Optional[Any] = None):
         # Register LiteLLM callbacks on construction (idempotent)
         _register_litellm_callbacks()
@@ -295,7 +293,7 @@ class LitellmService:
         if not provider:
             return False
         provider_lower = provider.lower().split("/")[0]
-        return provider_lower in LOCAL_LLM_PROVIDERS
+        return provider_lower in self._LOCAL_LLM_PROVIDERS
 
     @staticmethod
     def _extract_litellm_error(exc: Exception) -> str:
@@ -342,8 +340,8 @@ class LitellmService:
                 if provider in ("lm_studio", "vllm") and not api_base.endswith("/v1"):
                     api_base = f"{api_base}/v1"
                 creds["api_base"] = api_base
-        if provider in _PROVIDER_EXTRA_HEADERS:
-            creds["extra_headers"] = _PROVIDER_EXTRA_HEADERS[provider]
+        if provider in self._PROVIDER_EXTRA_HEADERS:
+            creds["extra_headers"] = self._PROVIDER_EXTRA_HEADERS[provider]
         return creds
 
     def _build_ollama_extra_body(
