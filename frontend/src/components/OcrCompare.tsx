@@ -178,7 +178,7 @@ export default function OcrCompare() {
             case 'download': return 'Dokument herunterladen...'
             case 'convert': return 'PDF in Bilder konvertieren...'
             case 'health_check': return 'Provider Health-Check...'
-            case 'waiting_ollama': return 'Warte auf Provider-Neustart...'
+            case 'restarting': return 'Provider wird neu gestartet...'
             case 'model_loading': return 'Modell wird geladen...'
             case 'ocr_page': return 'OCR läuft...'
             case 'unloading': return 'Modell wird entladen...'
