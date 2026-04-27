@@ -116,7 +116,7 @@ async def get_config(
     from app.models import AppSettings as _AppSettings
     app_s = await db.execute(select(_AppSettings).where(_AppSettings.id == 1))
     app_settings = app_s.scalar_one_or_none()
-    active_provider = (getattr(app_settings, "classifier_provider", None) or "ollama") if app_settings else "ollama"
+    active_provider = getattr(app_settings, "classifier_provider", None) or ""
 
     # Read model from AppSettings key-value store (LLM-09)
     active_model = await get_setting(LLM_KEY_CLASSIFIER_MODEL, db) or ""

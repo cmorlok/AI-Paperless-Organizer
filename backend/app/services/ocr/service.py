@@ -67,7 +67,10 @@ class OcrService:
         if self._provider is None:
             from app.routers.settings import get_setting
             async with self.session_factory() as db:
-                self._provider = await get_setting("ocr_provider", db) or "ollama"
+                provider = await get_setting("ocr_provider", db)
+                if not provider:
+                    raise ValueError("ocr_provider is not configured")
+                self._provider = provider
         return self._provider
 
     async def _get_model(self) -> str:
@@ -453,7 +456,7 @@ class OcrService:
                     {"role": "system", "content": system_msg},
                     {"role": "user",   "content": user_content},
                 ],
-                provider="ollama",
+                provider=await self._get_provider(),
                 api_base=api_base,
                 extra_body=extra_body,
                 timeout=timeout,

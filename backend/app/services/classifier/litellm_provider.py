@@ -392,9 +392,11 @@ class LitellmOllamaProvider(BaseClassifierProvider):
     def __init__(
         self,
         model: str = "qwen2.5:7b",
+        provider: str = "ollama",
         tool_executor: Optional[ToolExecutor] = None,
     ):
         self.model = model
+        self.provider = provider
         self.tool_executor = tool_executor
         self._is_thinking = any(
             k in self.model.lower() for k in THINKING_MODEL_PREFIXES
@@ -414,7 +416,7 @@ class LitellmOllamaProvider(BaseClassifierProvider):
         try:
             await llm_completion(
                 model=self.model,
-                provider="ollama",
+                provider=self.provider,
                 messages=[{"role": "user", "content": "Ping"}],
                 max_tokens=5,
             )
@@ -921,7 +923,7 @@ class LitellmOllamaProvider(BaseClassifierProvider):
         try:
             response = await llm_completion(
                 model=self.model,
-                provider="ollama",
+                provider=self.provider,
                 messages=messages,
                 num_predict=max_tokens,
                 keep_alive=keep_alive,
@@ -945,7 +947,7 @@ class LitellmOllamaProvider(BaseClassifierProvider):
                 logger.warning(f"Ollama schema enforcement rejected, retrying without schema: {e}")
                 response = await llm_completion(
                     model=self.model,
-                    provider="ollama",
+                    provider=self.provider,
                     messages=messages,
                     num_predict=max_tokens,
                     keep_alive=keep_alive,
@@ -989,7 +991,7 @@ class LitellmOllamaProvider(BaseClassifierProvider):
         try:
             response = await llm_completion(
                 model=self.model,
-                provider="ollama",
+                provider=self.provider,
                 messages=messages,
                 num_predict=max(max_tokens, 1500),
                 keep_alive=keep_alive,
@@ -1011,7 +1013,7 @@ class LitellmOllamaProvider(BaseClassifierProvider):
                     logger.warning(f"Ollama schema enforcement rejected in generate, retrying without schema: {e}")
                     response = await llm_completion(
                         model=self.model,
-                        provider="ollama",
+                        provider=self.provider,
                         messages=messages,
                         num_predict=max(max_tokens, 1500),
                         keep_alive=keep_alive,
@@ -1095,7 +1097,7 @@ class LitellmOllamaProvider(BaseClassifierProvider):
         try:
             await llm_completion(
                 model=self.model,
-                provider="ollama",
+                provider=self.provider,
                 messages=[{"role": "user", "content": ""}],
                 extra_body={"keep_alive": 0},
                 max_tokens=1,

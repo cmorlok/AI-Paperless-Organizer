@@ -763,7 +763,7 @@ async def _run_compare_job(ocr_service: OcrService, paperless_client, document_i
     from PIL import Image
     from pdf2image import convert_from_bytes
 
-    provider = "ollama"
+    provider = await ocr_service._get_provider()
     job_start = time.time()
     compare_state.job_start = job_start
 
@@ -826,7 +826,7 @@ async def _run_compare_job(ocr_service: OcrService, paperless_client, document_i
             # Health check: wait for provider to be ready before starting each model
             compare_state.phase = "health_check"
             print(f"[Compare] Checking {provider} health before model: {model_name}")
-            ollama_ok = await _wait_for_provider_ready("ollama", max_wait=60, llm_service=llm_service)
+            ollama_ok = await _wait_for_provider_ready(provider, max_wait=60, llm_service=llm_service)
             if not ollama_ok:
                 error_msg = f"{provider} nicht erreichbar - überspringe {model_name}"
                 print(f"[Compare] {model_name} SKIPPED: provider not reachable")

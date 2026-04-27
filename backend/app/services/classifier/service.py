@@ -250,7 +250,7 @@ class DocumentClassifierService:
     async def _get_classifier_provider_name(self) -> str:
         """Get the classifier provider name from AppSettings key-value store (LLM-08)."""
         if self.session_factory is None:
-            return "ollama"
+            raise ValueError("classifier_provider is not configured")
         # Try key-value store first
         from app.routers.settings import get_setting
         async with self.session_factory() as db:
@@ -263,7 +263,7 @@ class DocumentClassifierService:
             app_settings = result.scalar_one_or_none()
             if app_settings and getattr(app_settings, "classifier_provider", None):
                 return app_settings.classifier_provider
-            return "ollama"
+            raise ValueError("classifier_provider is not configured")
 
     async def _build_provider(self, config: ClassifierConfig) -> BaseClassifierProvider:
         """Build the appropriate provider based on central LLM settings."""
@@ -286,7 +286,7 @@ class DocumentClassifierService:
             model = model_override
 
         if provider_name == "ollama":
-            return LitellmOllamaProvider(model=model, tool_executor=tool_executor)
+            return LitellmOllamaProvider(model=model, provider=provider_name, tool_executor=tool_executor)
 
         from app.services.llm.service import PROVIDER_DISPLAY_NAMES
         label = PROVIDER_DISPLAY_NAMES.get(provider_name, provider_name.replace("_", " ").title())
