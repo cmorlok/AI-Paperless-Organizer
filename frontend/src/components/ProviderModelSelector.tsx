@@ -86,9 +86,9 @@ export default function ProviderModelSelector({
           {label}
         </label>
       )}
-      <div className="flex gap-2">
+      <div className="grid grid-cols-2 gap-2">
         {/* Provider Select */}
-        <div className="flex-1 min-w-[140px]">
+        <div>
           {loadingProviders ? (
             <div className="flex items-center gap-2 px-3 py-2 bg-surface-800 border border-surface-700 rounded-lg">
               <Loader2 className="w-4 h-4 animate-spin text-surface-500" />
@@ -115,7 +115,7 @@ export default function ProviderModelSelector({
         </div>
 
         {/* Model Select */}
-        <div className="flex-1 min-w-[140px]">
+        <div>
           {loadingModels ? (
             <div className="flex items-center gap-2 px-3 py-2 bg-surface-800 border border-surface-700 rounded-lg">
               <Loader2 className="w-4 h-4 animate-spin text-surface-500" />
@@ -155,11 +155,6 @@ export default function ProviderModelSelector({
       </div>
       {modelsError && (
         <p className="text-xs text-amber-400">{modelsError}</p>
-      )}
-      {!loadingModels && !modelsError && models.length === 0 && value.provider && (
-        <p className="text-xs text-surface-500">
-          Keine Modelle für {value.provider} gefunden. Modellname manuell eingeben.
-        </p>
       )}
     </div>
   )

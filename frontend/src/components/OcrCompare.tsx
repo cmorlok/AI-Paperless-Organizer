@@ -50,10 +50,9 @@ export default function OcrCompare() {
     const loadModels = async () => {
         setLoadingModels(true)
         try {
-            const [modelsResult, settingsResult] = await Promise.all([
-                api.getLLMProviderModels("ollama"),
-                api.getOcrSettings()
-            ])
+            const settingsResult = await api.getOcrSettings()
+            const provider = settingsResult.provider || 'ollama'
+            const modelsResult = await api.getLLMProviderModels(provider)
             setAvailableModels(modelsResult.models.map(m => m.name))
             const current = settingsResult.model
             setCurrentModel(current)
