@@ -108,6 +108,7 @@ export default function OcrSettings() {
                         value={providerModel}
                         onChange={handleProviderModelChange}
                         label="OCR Provider & Modell"
+                        configuredOnly={true}
                     />
                 </div>
 
