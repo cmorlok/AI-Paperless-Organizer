@@ -133,28 +133,6 @@ def _register_litellm_callbacks() -> None:
     litellm.logging_callback_manager.add_litellm_failure_callback(_llm_failure_callback)
 
 
-def _derive_openai_compatible_url(base_url: str, provider: str) -> str:
-    """Derive the OpenAI-compatible /models endpoint URL for a provider.
-
-    Ollama:     http://host:11434 → http://host:11434/api/tags
-    LM Studio:  http://host:1234  → http://host:1234/v1/models
-    vLLM:       http://host:8000  → http://host:8000/v1/models
-    Other:      use as-is ( LiteLLM handles standard OpenAI-compatible endpoints)
-    """
-    base = base_url.rstrip("/")
-    if provider == "ollama":
-        return f"{base}/api/tags"
-    elif provider in ("lm_studio", "vllm"):
-        return f"{base}/v1/models"
-    return f"{base}/v1/models"
-
-
-def _format_model_display_name(model_name: str) -> str:
-    """Format model name for display in dropdown."""
-    name = model_name.replace("-", " ").replace("_", " ")
-    return " ".join(word.capitalize() for word in name.split()) if name else model_name
-
-
 PROVIDER_DISPLAY_NAMES: Dict[str, str] = {
     "a2a": "A2A",
     "a2a_agent": "A2A Agent",
@@ -642,7 +620,7 @@ class LitellmService:
 
         if api_base:
             try:
-                model_url = _derive_openai_compatible_url(api_base, provider)
+                model_url = self._derive_openai_compatible_url(api_base, provider)
                 headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
                 async with httpx.AsyncClient(timeout=10.0) as client:
                     response = await client.get(
@@ -658,7 +636,7 @@ class LitellmService:
                     {
                         "id": m.get("name") or m.get("id"),
                         "name": m.get("name") or m.get("id"),
-                        "display_name": _format_model_display_name(
+                        "display_name": self._format_model_display_name(
                             m.get("name") or m.get("id", "")
                         ),
                     }
@@ -674,7 +652,7 @@ class LitellmService:
             {
                 "id": name,
                 "name": name,
-                "display_name": _format_model_display_name(name),
+                "display_name": self._format_model_display_name(name),
             }
             for name in sorted(provider_models)
         ]
@@ -741,13 +719,29 @@ class LitellmService:
             self.model = await get_setting(LLM_KEY_CLASSIFIER_MODEL, db) or self.model
         self._config_loaded = True
 
+    @staticmethod
+    def _derive_openai_compatible_url(base_url: str, provider: str) -> str:
+        """Derive the OpenAI-compatible /models endpoint URL for a provider."""
+        base = base_url.rstrip("/")
+        if provider == "ollama":
+            return f"{base}/api/tags"
+        elif provider in ("lm_studio", "vllm"):
+            return f"{base}/v1/models"
+        return f"{base}/v1/models"
+
+    @staticmethod
+    def _format_model_display_name(model_name: str) -> str:
+        """Format model name for display in dropdown."""
+        name = model_name.replace("-", " ").replace("_", " ")
+        return " ".join(word.capitalize() for word in name.split()) if name else model_name
+
     async def check_provider_health(self, provider: str) -> bool:
         """Returns True if the provider at its configured URL is reachable."""
         creds = await self._resolve_credentials(provider)
         url = creds.get("api_base")
         if not url:
             return False
-        endpoint = _derive_openai_compatible_url(url, provider)
+        endpoint = self._derive_openai_compatible_url(url, provider)
         try:
             async with httpx.AsyncClient(timeout=5.0) as client:
                 r = await client.get(endpoint)
