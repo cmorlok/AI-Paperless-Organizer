@@ -70,8 +70,8 @@ class AppProvider(Provider):
         return PaperlessClientImpl(session_factory=session_factory)
 
     @provide(scope=Scope.APP)
-    def llm_service(self, session_factory: async_sessionmaker) -> LLMService:
-        return LitellmService(session_factory=session_factory)
+    def llm_service(self) -> LLMService:
+        return LitellmService()
 
     @provide(scope=Scope.APP)
     def similarity_service(

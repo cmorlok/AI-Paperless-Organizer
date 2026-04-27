@@ -7,10 +7,12 @@ import re
 import fnmatch
 from typing import Dict, List, Optional, Any
 from sqlalchemy import select
-from app.models import CustomPrompt, IgnoredTag
+from app.models import CustomPrompt, IgnoredTag, LLMProvider
+from app.models.settings_model import LLM_KEY_CLASSIFIER_PROVIDER, LLM_KEY_CLASSIFIER_MODEL
 from app.services.paperless.protocol import PaperlessClient
 from app.services.llm.protocol import LLMService
 from app.prompts.default_prompts import DEFAULT_PROMPTS
+from app.routers.settings import get_setting as gs
 
 
 class SimilarityService:
@@ -52,7 +54,18 @@ class SimilarityService:
             result = await db.execute(select(IgnoredTag))
             ignored = result.scalars().all()
             return [{"pattern": i.pattern, "is_regex": i.is_regex, "reason": i.reason} for i in ignored]
-    
+
+    async def _get_llm_config(self) -> tuple[str, str]:
+        """Get the configured LLM provider and model from KV store."""
+        if self.session_factory is None:
+            raise ValueError("session_factory required to look up LLM config")
+        async with self.session_factory() as db:
+            provider = await gs(LLM_KEY_CLASSIFIER_PROVIDER, db)
+            model = await gs(LLM_KEY_CLASSIFIER_MODEL, db)
+        if not provider or not model:
+            raise ValueError("classifier_provider and classifier_model must be configured in settings")
+        return provider, model
+
     def _is_tag_ignored(self, tag_name: str, ignored_patterns: List[Dict]) -> bool:
         """Check if a tag matches any ignored pattern."""
         for pattern_info in ignored_patterns:
@@ -92,7 +105,8 @@ class SimilarityService:
     
     async def _analyze_batch(self, items: List[Dict], prompt_template: str) -> Dict:
         """Analyze a single batch of items."""
-        return await self.llm.analyze_for_similarity(prompt_template, items)
+        provider, model = await self._get_llm_config()
+        return await self.llm.analyze_for_similarity(provider, model, prompt_template, items)
     
     async def _analyze_with_batching(self, all_items: List[Dict], prompt_template: str, batch_size: int = 200) -> Dict:
         """Analyze items - batch only if token limit exceeded."""

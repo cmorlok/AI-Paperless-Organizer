@@ -2,6 +2,8 @@ from fastapi import APIRouter, Query
 from pydantic import BaseModel
 from typing import Optional
 from app.services.llm.protocol import LLMService as LLMProviderService
+from app.models.settings_model import LLM_KEY_CLASSIFIER_PROVIDER, LLM_KEY_CLASSIFIER_MODEL
+from app.routers.settings import get_setting
 from dishka.integrations.fastapi import inject
 from dishka import FromDishka
 
@@ -19,14 +21,17 @@ class TestPromptRequest(BaseModel):
 async def test_llm_connection(
     provider: Optional[str] = Query(None, description="Provider name to test (e.g. 'ollama')"),
     model: Optional[str] = Query(None, description="Model name to test (e.g. 'qwen2.5vl:7b')"),
-    llm_service: FromDishka[LLMProviderService] = None
+    llm_service: FromDishka[LLMProviderService] = None,
+    db=None,
 ):
     """Test LLM provider connection. If provider/model given, tests that specific combo; otherwise tests active classifier provider."""
     try:
-        if provider or model:
-            result = await llm_service.test_connection(provider=provider, model=model)
-        else:
-            result = await llm_service.test_connection()
+        test_provider = provider
+        test_model = model
+        if not test_provider or not test_model:
+            test_provider = test_provider or (await get_setting(LLM_KEY_CLASSIFIER_PROVIDER, db))
+            test_model = test_model or (await get_setting(LLM_KEY_CLASSIFIER_MODEL, db))
+        result = await llm_service.test_connection(provider=test_provider, model=test_model)
         return {"success": True, "provider": result["provider"], "model": result["model"]}
     except Exception as e:
         return {"success": False, "error": str(e)}

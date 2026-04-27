@@ -276,13 +276,9 @@ class LitellmService:
         "openrouter": {"HTTP-Referer": "https://github.com/syberx/AI-Paperless-Organizer"},
     }
 
-    def __init__(self, provider: Optional[LLMProvider] = None, model: Optional[str] = None, session_factory: Optional[Any] = None):
+    def __init__(self):
         # Register LiteLLM callbacks on construction (idempotent)
         _register_litellm_callbacks()
-        self.provider = provider
-        self.model = model
-        self.session_factory = session_factory
-        self._config_loaded = False
         # Per-provider lock dict for local LLM serialization
         self._locks: defaultdict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
 
@@ -655,20 +651,16 @@ class LitellmService:
             for name in sorted(provider_models)
         ]
 
-    async def test_connection(self, provider: str = None, model: str = None) -> dict:
+    async def test_connection(self, provider: str, model: str) -> dict:
         """Test connection to the LLM provider."""
-        test_provider = provider or (self.provider.name if self.provider else None)
-        test_model = model or self.model
-        if not test_provider:
-            raise ValueError("No LLM provider configured")
         result = await self.complete_llm(
-            provider=test_provider,
-            model=test_model,
+            provider=provider,
+            model=model,
             messages=[{"role": "user", "content": "Antworte nur mit: OK"}],
         )
         return {
-            "provider": test_provider,
-            "model": test_model,
+            "provider": provider,
+            "model": model,
             "response": (result.content or "").strip(),
         }
 
@@ -678,24 +670,6 @@ class LitellmService:
         for prov, lock in self._locks.items():
             status[prov] = {"locked": lock.locked()}
         return status
-
-    async def _ensure_config(self) -> None:
-        """Lazy-load provider/model from DB on first use."""
-        if self._config_loaded or self.provider is not None or self.session_factory is None:
-            return
-        from app.models.settings_model import LLM_KEY_CLASSIFIER_PROVIDER, LLM_KEY_CLASSIFIER_MODEL
-        async with self.session_factory() as db:
-            provider_name = await get_setting(LLM_KEY_CLASSIFIER_PROVIDER, db)
-            if provider_name:
-                result = await db.execute(
-                    select(LLMProvider).where(LLMProvider.name == provider_name)
-                )
-                self.provider = result.scalars().first()
-            if not self.provider:
-                result = await db.execute(select(LLMProvider).limit(1))
-                self.provider = result.scalars().first()
-            self.model = await get_setting(LLM_KEY_CLASSIFIER_MODEL, db) or self.model
-        self._config_loaded = True
 
     @staticmethod
     def _derive_openai_compatible_url(base_url: str, provider: str) -> str:
@@ -752,14 +726,18 @@ class LitellmService:
 
     def estimate_tokens(self, text: str, model: Optional[str] = None) -> int:
         """Estimate token count using LiteLLM's token counter."""
-        model_for_count = model or self.model or "gpt-4"
+        model_for_count = model or "gpt-4"
         try:
             return litellm.token_counter(model=model_for_count, text=text)
         except Exception:
             # Fallback to char-based estimation
             return len(text) // 4
 
-    async def analyze_for_similarity(self, prompt_template: str, items: list) -> Dict:
+    def get_token_limit(self) -> int:
+        """Return the context window size for the configured model. Defaults to 128000."""
+        return 128000
+
+    async def analyze_for_similarity(self, provider: str, model: str, prompt_template: str, items: list) -> Dict:
         """Analyze items for similarity using the configured LLM."""
         if not items:
             return {"groups": [], "stats": {"items_count": 0, "estimated_tokens": 0}}
@@ -783,15 +761,8 @@ class LitellmService:
 
         # Get LLM response
         logger.info("[LLM] Sending request to LLM provider...")
-        await self._ensure_config()
-        model = self.model
-        if not model:
-            raise ValueError("No model specified")
-        provider_name = self.provider.name if self.provider else None
-        if not provider_name:
-            raise ValueError("No LLM provider configured")
         result = await self.complete_llm(
-            provider=provider_name,
+            provider=provider,
             model=model,
             messages=[{"role": "user", "content": prompt}],
             temperature=0.0,
