@@ -28,6 +28,7 @@ from app.services.classifier.litellm_provider import (
 )
 from app.services.classifier.tool_executor import ToolExecutor
 from app.services.classifier.state import AutoClassifyState
+from app.services.llm.service import LitellmService
 
 logger = logging.getLogger(__name__)
 
@@ -118,10 +119,12 @@ class DocumentClassifierService:
         paperless: Optional[PaperlessClient] = None,
         session_factory: Optional[Any] = None,
         state: Optional[AutoClassifyState] = None,
+        llm_service: Optional["LitellmService"] = None,
     ):
         self.paperless = paperless
         self.session_factory = session_factory
         self.state = state
+        self.llm_service = llm_service
 
     async def get_config(self) -> ClassifierConfig:
         if self.session_factory is None:
@@ -286,11 +289,11 @@ class DocumentClassifierService:
             model = model_override
 
         if provider_name == "ollama":
-            return LitellmOllamaProvider(model=model, provider=provider_name, tool_executor=tool_executor)
+            return LitellmOllamaProvider(model=model, provider=provider_name, tool_executor=tool_executor, llm_service=self.llm_service)
 
         from app.services.llm.service import PROVIDER_DISPLAY_NAMES
         label = PROVIDER_DISPLAY_NAMES.get(provider_name, provider_name.replace("_", " ").title())
-        return LitellmToolCallingProvider(model=model, provider=provider_name, tool_executor=tool_executor, provider_label=label)
+        return LitellmToolCallingProvider(model=model, provider=provider_name, tool_executor=tool_executor, provider_label=label, llm_service=self.llm_service)
 
     async def _get_active_classifier_provider_name(self) -> str:
         """Alias for backward compat."""

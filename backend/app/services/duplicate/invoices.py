@@ -4,14 +4,12 @@ import json
 import logging
 import re
 from collections import defaultdict
-from typing import Dict, List, Optional, TYPE_CHECKING
+from typing import Dict, List, Optional
 
 from sqlalchemy import select as sa_select, text
 
 from app.models.duplicates import DuplicateInvoiceCache
-
-if TYPE_CHECKING:
-    from app.services.llm.service import LitellmService
+from app.services.llm.service import LitellmService
 
 logger = logging.getLogger(__name__)
 
@@ -20,7 +18,7 @@ async def scan_invoices(
     paperless_client,
     session_factory,
     scan_state,
-    llm_service: "LitellmService | None" = None,
+    llm_service: "LitellmService",
 ) -> List[Dict]:
     """Find duplicate invoices by extracting invoice number + amount via LLM.
 
@@ -154,7 +152,7 @@ async def _get_chat_provider_and_model(session_factory) -> tuple[str, str]:
     return provider, model
 
 
-async def _extract_invoice_data(content: str, model: str, provider: str, llm_service: "LitellmService | None" = None) -> Optional[Dict]:
+async def _extract_invoice_data(content: str, model: str, provider: str, llm_service: "LitellmService") -> Optional[Dict]:
     """Extract invoice number and amount from document content via LiteLLM."""
     prompt = (
         "Extrahiere aus dem folgenden Dokumenttext die Rechnungsnummer und den Gesamtbetrag.\n"
@@ -166,27 +164,14 @@ async def _extract_invoice_data(content: str, model: str, provider: str, llm_ser
     )
 
     try:
-        if llm_service is not None:
-            reply = await llm_service.complete_llm(
-                model=model,
-                messages=[{"role": "user", "content": prompt}],
-                provider=provider,
-                temperature=0,
-                timeout=60.0,
-            )
-        else:
-            # Fallback: should not happen in production
-            from app.services.llm import llm_completion
-            response = await llm_completion(
-                model=model,
-                provider=provider,
-                messages=[{"role": "user", "content": prompt}],
-                temperature=0,
-                num_ctx=4096,
-                timeout=60.0,
-            )
-            reply = response.choices[0].message.content or ""
-        return _parse_invoice_json(reply)
+        result = await llm_service.complete_llm(
+            provider=provider,
+            model=model,
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0,
+            timeout=60.0,
+        )
+        return _parse_invoice_json(result.content or "")
 
     except Exception as e:
         logger.error(f"Invoice extraction failed: {e}")

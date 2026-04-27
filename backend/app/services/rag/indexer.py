@@ -11,7 +11,8 @@ from app.database import async_session
 from app.models.rag import RagConfig, RagIndexingState
 from app.services.rag.embedding_service import EmbeddingService
 from app.services.rag.chunking import ChunkingService
-from app.services.llm import llm_completion
+from app.services.llm import LLMResponse
+from app.services.llm.protocol import LLMService
 
 logger = logging.getLogger(__name__)
 
@@ -25,9 +26,10 @@ _CONTEXTUAL_RETRIEVAL_MAX_CONTENT_LEN = 999_999
 class Indexer:
     """Manages document indexing: fetches from Paperless, chunks, embeds, stores."""
 
-    def __init__(self, search_engine, paperless_client):
+    def __init__(self, search_engine, paperless_client, llm_service: LLMService):
         self.search_engine = search_engine
         self.paperless_client = paperless_client
+        self.llm_service = llm_service
         self._indexing_task: Optional[asyncio.Task] = None
 
     async def _get_config(self, db: AsyncSession) -> Optional[RagConfig]:
@@ -332,15 +334,15 @@ class Indexer:
         )
         try:
             import re as _re
-            response = await llm_completion(
-                model=config.chat_model,
+            result: LLMResponse = await self.llm_service.complete_llm(
                 provider=config.chat_model_provider,
+                model=config.chat_model,
                 messages=[{"role": "user", "content": prompt}],
                 num_predict=80,
                 think=False,
                 timeout=25.0,
             )
-            context = (response.choices[0].message.content or "").strip()
+            context = (result.content or "").strip()
             context = _re.sub(r'<think>.*?</think>', '', context, flags=_re.DOTALL).strip()
             if context:
                 return f"[Kontext: {context}]\n\n"

@@ -136,11 +136,13 @@ class AppProvider(Provider):
         paperless_client: PaperlessClient,
         session_factory: async_sessionmaker,
         state: AutoClassifyState,
+        llm_service: LLMService,
     ) -> DocumentClassifierService:
         return DocumentClassifierServiceImpl(
             paperless=paperless_client,
             session_factory=session_factory,
             state=state,
+            llm_service=llm_service,
         )
 
     @provide(scope=Scope.APP)

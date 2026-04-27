@@ -352,7 +352,6 @@ class OcrService:
         self,
         image_bytes: bytes,
         model: str,
-        api_base: str,
         page_num: int = 0,
         total_pages: int = 0,
         timeout: float = 300.0,
@@ -368,7 +367,7 @@ class OcrService:
 
         # First attempt with standard parameters
         text = await self._run_vision_ocr(
-            image_b64, model, api_base, prompt_text, model_params, timeout
+            image_b64, model, prompt_text, model_params, timeout
         )
 
         if not text:
@@ -391,7 +390,7 @@ class OcrService:
             )
 
             retry_text = await self._run_vision_ocr(
-                image_b64, model, api_base, anti_table_prompt, retry_params, timeout
+                image_b64, model, anti_table_prompt, retry_params, timeout
             )
             if retry_text:
                 retry_cleaned = retry_text["_cleaned"] if isinstance(retry_text, dict) else retry_text
@@ -409,7 +408,6 @@ class OcrService:
         self,
         image_b64: str,
         model: str,
-        api_base: str,
         prompt_text: str,
         model_params: dict,
         timeout: float,
@@ -438,31 +436,23 @@ class OcrService:
                 {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{image_b64}"}},
             ]
 
-            extra_body: dict = {
-                "options": {
-                    "temperature":    model_params["temperature"],
-                    "repeat_penalty": model_params["repeat_penalty"],
-                    "num_ctx":        model_params["num_ctx"],
-                    "num_predict":    model_params["num_predict"],
-                },
-                "keep_alive": "30m",
-            }
-            if use_think_param:
-                extra_body["think"] = False
-
-            response = await self.llm_service.complete_llm(
+            result = await self.llm_service.complete_llm(
+                provider=await self._get_provider(),
                 model=model,
                 messages=[
                     {"role": "system", "content": system_msg},
                     {"role": "user",   "content": user_content},
                 ],
-                provider=await self._get_provider(),
-                api_base=api_base,
-                extra_body=extra_body,
+                temperature=model_params["temperature"],
+                repeat_penalty=model_params["repeat_penalty"],
+                num_ctx=model_params["num_ctx"],
+                num_predict=model_params["num_predict"],
+                keep_alive="30m",
+                think=False if use_think_param else None,
                 timeout=timeout,
             )
 
-            text_content = (response or "").strip()
+            text_content = (result.content or "").strip()
             text_content = self._strip_reasoning(text_content)
             text_content = self._strip_ocr_commentary(text_content)
 
@@ -572,7 +562,6 @@ class OcrService:
         # Fetch provider config at runtime
         provider = await self._get_provider()
         model = await self._get_model()
-        api_base = self.llm_service._resolve_provider_credentials(provider).get("api_base", "")
         max_image_size = await self._get_max_image_size()
         smart_skip_enabled = await self._get_smart_skip_enabled()
 
@@ -703,7 +692,7 @@ class OcrService:
                     print(f"[OCR] {msg}")
 
                     page_text = await self._ocr_single_image(
-                        prepared_bytes, model, api_base, page_num=page_num, total_pages=total_pages
+                        prepared_bytes, model, page_num=page_num, total_pages=total_pages
                     )
 
                     if not page_text or not page_text.strip():
@@ -899,12 +888,10 @@ class OcrService:
         """Legacy method for backward compat or single image bytes."""
         try:
             model = await self._get_model()
-            provider = await self._get_provider()
-            api_base = self.llm_service._resolve_provider_credentials(provider).get("api_base", "")
             max_size = await self._get_max_image_size()
             img = Image.open(io.BytesIO(image_bytes))
             prepared = self._prepare_image(img, max_size=max_size)
-            return await self._ocr_single_image(prepared, model, api_base)
+            return await self._ocr_single_image(prepared, model)
         except Exception as e:
             logger.error(f"Legacy ocr_image failed: {e}")
             raise
@@ -914,7 +901,7 @@ class OcrService:
         try:
             provider = await self._get_provider()
             model = await self._get_model()
-            api_base = self.llm_service._resolve_provider_credentials(provider).get("api_base_url", "")
+            api_base = (await self.llm_service._resolve_credentials(provider)).get("api_base", "")
 
             connected = await self.llm_service.check_provider_health(provider)
             return {
@@ -938,7 +925,7 @@ class OcrService:
         # Fetch model and api_base for stats
         model = await self._get_model()
         provider = await self._get_provider()
-        api_base = self.llm_service._resolve_provider_credentials(provider).get("api_base", "")
+        api_base = (await self.llm_service._resolve_credentials(provider)).get("api_base", "")
 
         await paperless_client.update_document(document_id, {"content": new_content})
 
@@ -992,7 +979,7 @@ class OcrService:
         # Fetch provider config at runtime
         provider = await self._get_provider()
         model = await self._get_model()
-        api_base = self.llm_service._resolve_provider_credentials(provider).get("api_base", "")
+        api_base = (await self.llm_service._resolve_credentials(provider)).get("api_base", "")
 
         try:
             ocrfinish_tag = await paperless_client.get_or_create_tag(TAG_OCR_FINISH)

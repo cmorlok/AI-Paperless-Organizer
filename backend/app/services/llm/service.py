@@ -7,7 +7,7 @@ import json
 import re
 import traceback
 from collections import defaultdict
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any, List, AsyncGenerator
 
 import httpx
 import litellm
@@ -24,6 +24,11 @@ LOCAL_LLM_PROVIDERS = frozenset({
     "vllm", "llama.cpp", "llama-cpp", "local"
 })
 
+# Static extra headers injected per provider on every call.
+_PROVIDER_EXTRA_HEADERS: Dict[str, Dict[str, str]] = {
+    "openrouter": {"HTTP-Referer": "https://github.com/syberx/AI-Paperless-Organizer"},
+}
+
 
 class LLMLockTimeoutError(Exception):
     """Raised when a local LLM is busy and times out waiting for the lock."""
@@ -35,7 +40,6 @@ logger = get_logger("llm")
 # =========================================================================
 # LiteLLM callback-based request/response logging
 # =========================================================================
-
 
 
 def _log_llm(msg: str, data: dict[str, Any]) -> None:
@@ -129,191 +133,9 @@ def _register_litellm_callbacks() -> None:
     litellm.logging_callback_manager.add_litellm_failure_callback(_llm_failure_callback)
 
 
-# Register callbacks on module load
-_register_litellm_callbacks()
-
-
-def extract_litellm_error(exc: Exception) -> str:
-    """Extract full error details from a litellm exception (response body, headers, etc.)."""
-    parts = [str(exc)]
-    resp = getattr(exc, "response", None)
-    if resp is not None:
-        try:
-            body = resp.text if hasattr(resp, "text") else ""
-            if body:
-                parts.append(f"Response body: {body[:2000]}")
-        except Exception:
-            pass
-        try:
-            status = resp.status_code if hasattr(resp, "status_code") else ""
-            parts.append(f"Response status: {status}")
-        except Exception:
-            pass
-    for attr in ("llm_provider", "model", "status_code", "body", "litellm_debug_info"):
-        val = getattr(exc, attr, None)
-        if val is not None:
-            parts.append(f"{attr}: {val}")
-    return " | ".join(parts)
-
-
-def log_llm_error(msg: str, exc: Exception):
-    """Log error with full details + traceback via print() (bypasses uvicorn logging suppression)."""
-    detail = extract_litellm_error(exc)
-    tb = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
-    print(f"ERROR app.services.llm.service: {msg}: {detail}\n{tb}", flush=True)
-    logger.error("%s: %s", msg, detail, exc_info=True)
-
-# Static extra headers injected per provider on every call.
-_PROVIDER_EXTRA_HEADERS: Dict[str, Dict[str, str]] = {
-    "openrouter": {"HTTP-Referer": "https://github.com/syberx/AI-Paperless-Organizer"},
-}
-
-
-async def _resolve_provider_credentials(provider: str) -> Dict[str, Any]:
-    """Look up api_key, api_base, and extra_headers for a provider from llm_providers table."""
-    async with async_session() as db:
-        result = await db.execute(select(LLMProvider).where(LLMProvider.name == provider))
-        llm = result.scalar_one_or_none()
-
-    creds: Dict[str, Any] = {}
-    if llm:
-        if llm.api_key:
-            creds["api_key"] = llm.api_key
-        if llm.api_base_url:
-            api_base = llm.api_base_url.rstrip("/")
-            if provider in ("lm_studio", "vllm") and not api_base.endswith("/v1"):
-                api_base = f"{api_base}/v1"
-            creds["api_base"] = api_base
-    if provider in _PROVIDER_EXTRA_HEADERS:
-        creds["extra_headers"] = _PROVIDER_EXTRA_HEADERS[provider]
-    return creds
-
-
-def _build_ollama_extra_body(
-    temperature: float = 0.0,
-    top_p: float = 0.1,
-    num_ctx: int = 16384,
-    num_predict: Optional[int] = None,
-    keep_alive: Optional[str] = None,
-    think: Optional[bool] = None,
-    json_schema: Optional[Dict[str, Any]] = None,
-    json_output: bool = False,
-    seed: Optional[int] = None,
-    repeat_penalty: Optional[float] = None,
-) -> Dict[str, Any]:
-    """Build the extra_body dict for Ollama calls via LiteLLM (private — use via llm_completion).
-
-    Per D-01: model params go in extra_body['options'].
-    'keep_alive' and 'think' are top-level keys.
-    'format' carries a JSON schema or the string "json" for structured output.
-    """
-    options: Dict[str, Any] = {"temperature": temperature, "top_p": top_p, "num_ctx": num_ctx}
-    if num_predict is not None:
-        options["num_predict"] = num_predict
-    if seed is not None:
-        options["seed"] = seed
-    if repeat_penalty is not None:
-        options["repeat_penalty"] = repeat_penalty
-
-    body: Dict[str, Any] = {"options": options}
-    if keep_alive is not None:
-        body["keep_alive"] = keep_alive
-    if think is not None:
-        body["think"] = think
-    if json_schema is not None:
-        body["format"] = json_schema
-    elif json_output:
-        body["format"] = "json"
-    return body
-
-
-async def llm_completion(
-    model: str,
-    messages: List[Dict[str, Any]],
-    provider: Optional[str] = None,
-    temperature: float = 0.0,
-    top_p: float = 0.1,
-    stream: bool = False,
-    keep_alive: Optional[str] = None,
-    json_schema: Optional[Dict[str, Any]] = None,
-    json_output: bool = False,
-    num_ctx: Optional[int] = None,
-    num_predict: Optional[int] = None,
-    seed: Optional[int] = None,
-    repeat_penalty: Optional[float] = None,
-    think: Optional[bool] = None,
-    **kwargs,
-):
-    """Wrapper around litellm.acompletion.
-
-    For provider="ollama" calls, applies sensible defaults internally:
-      num_ctx=16384, json_output=True, keep_alive as specified (or None).
-    Callers only need to override what differs from the default.
-    """
-    if provider and not model.startswith(f"{provider}/"):
-        model = f"{provider}/{model}"
-
-    litellm_kwargs: Dict[str, Any] = {
-        "model": model,
-        "messages": messages,
-        "temperature": temperature,
-        "top_p": top_p,
-        "stream": stream,
-        **kwargs,
-    }
-
-    if provider == "ollama" and "extra_body" not in kwargs:
-        litellm_kwargs["extra_body"] = _build_ollama_extra_body(
-            temperature=temperature,
-            top_p=top_p,
-            num_ctx=num_ctx or 16384,
-            num_predict=num_predict,
-            keep_alive=keep_alive,
-            think=think,
-            json_schema=json_schema,
-            json_output=json_output,
-            seed=seed,
-            repeat_penalty=repeat_penalty,
-        )
-
-    if provider:
-        for k, v in (await _resolve_provider_credentials(provider)).items():
-            litellm_kwargs.setdefault(k, v)
-    try:
-        return await litellm.acompletion(**litellm_kwargs)
-    except Exception as e:
-        log_llm_error(f"llm_completion failed (model={model}, provider={provider})", e)
-        raise
-
-
-async def llm_embedding(
-    model: str,
-    input: List[str],
-    provider: Optional[str] = None,
-    **kwargs,
-) -> List[List[float]]:
-    """Wrapper around litellm.aembedding. Resolves credentials from llm_providers table."""
-    if provider and not model.startswith(f"{provider}/"):
-        model = f"{provider}/{model}"
-    litellm_kwargs: Dict[str, Any] = {
-        "model": model,
-        "input": input,
-        **kwargs,
-    }
-    if provider:
-        for k, v in (await _resolve_provider_credentials(provider)).items():
-            litellm_kwargs.setdefault(k, v)
-    try:
-        response = await litellm.aembedding(**litellm_kwargs)
-        return [item.embedding for item in response.data]
-    except Exception as e:
-        log_llm_error(f"llm_embedding failed (model={model}, provider={provider})", e)
-        raise
-
-
 def _derive_openai_compatible_url(base_url: str, provider: str) -> str:
     """Derive the OpenAI-compatible /models endpoint URL for a provider.
-    
+
     Ollama:     http://host:11434 → http://host:11434/api/tags
     LM Studio:  http://host:1234  → http://host:1234/v1/models
     vLLM:       http://host:8000  → http://host:8000/v1/models
@@ -327,83 +149,13 @@ def _derive_openai_compatible_url(base_url: str, provider: str) -> str:
     return f"{base}/v1/models"
 
 
-async def list_llm_models(provider: str, db: Optional[AsyncSession] = None) -> List[Dict[str, str]]:
-    """List available models for a provider.
-    
-    1. Look up provider config (base_url, api_key) from DB if db session provided.
-    2. For local providers (ollama, lm_studio, vllm): query the /models endpoint
-       using the derived OpenAI-compatible URL.
-    3. Fall back to litellm.model_list if the API call fails or no db session.
-    """
-    db_provider = None
-    if db:
-        result = await db.execute(select(LLMProvider).where(LLMProvider.name == provider))
-        db_provider = result.scalar_one_or_none()
-
-    api_base = None
-    api_key = None
-    if db_provider:
-        api_base = db_provider.api_base_url
-        api_key = db_provider.api_key
-
-    # Try live fetch from the provider's API if base_url is configured
-    if api_base:
-        try:
-            model_url = _derive_openai_compatible_url(api_base, provider)
-            headers = {}
-            if api_key:
-                headers["Authorization"] = f"Bearer {api_key}"
-
-            async with httpx.AsyncClient(timeout=10.0) as client:
-                response = await client.get(model_url, headers=headers if headers else None)
-                response.raise_for_status()
-                data = response.json()
-
-            # Normalize different response formats
-            if provider == "ollama":
-                models_data = data.get("models", [])
-            else:
-                # OpenAI-compatible /v1/models format
-                models_data = data.get("data", data.get("models", []))
-
-            return [
-                {
-                    "id": m.get("name") or m.get("id"),
-                    "name": m.get("name") or m.get("id"),
-                    "display_name": _format_model_display_name(m.get("name") or m.get("id", "")),
-                }
-                for m in models_data
-            ]
-        except Exception as e:
-            logger.info("Failed to fetch live models from %s for %s, falling back: %s", api_base, provider, e)
-
-    # Fall back to LiteLLM registry
-    return _list_models_from_litellm(provider)
-
-
-def _list_models_from_litellm(provider: str) -> List[Dict[str, str]]:
-    """Get models from LiteLLM registry using models_by_provider."""
-    if provider == "ollama":
-        return []  # Ollama not tracked in models_by_provider
-
-    provider_models = litellm.models_by_provider.get(provider, set())
-    return [
-        {
-            "id": model_name,
-            "name": model_name,
-            "display_name": _format_model_display_name(model_name),
-        }
-        for model_name in sorted(provider_models)
-    ]
-
-
 def _format_model_display_name(model_name: str) -> str:
     """Format model name for display in dropdown."""
     name = model_name.replace("-", " ").replace("_", " ")
     return " ".join(word.capitalize() for word in name.split()) if name else model_name
 
 
-PROVIDER_DISPLAY_NAMES = {
+PROVIDER_DISPLAY_NAMES: Dict[str, str] = {
     "a2a": "A2A",
     "a2a_agent": "A2A Agent",
     "ai21": "AI21 Labs",
@@ -539,22 +291,6 @@ PROVIDER_DISPLAY_NAMES = {
 }
 
 
-def list_llm_providers() -> List[Dict[str, str]]:
-    """List all available LLM providers from LiteLLM registry."""
-    try:
-        providers = []
-        for provider_enum in litellm.provider_list:
-            provider_name = provider_enum.value
-            providers.append({
-                "name": provider_name,
-                "display_name": PROVIDER_DISPLAY_NAMES.get(provider_name, provider_name.title()),
-            })
-        providers.sort(key=lambda x: x["display_name"])
-        return providers
-    except Exception:
-        return []
-
-
 async def get_setting(key: str, db: AsyncSession) -> Optional[str]:
     """Get a setting value from the key-value store."""
     from app.routers.settings import get_setting as gs
@@ -565,12 +301,16 @@ class LitellmService:
     """Service for interacting with various LLM providers via LiteLLM."""
 
     def __init__(self, provider: Optional[LLMProvider] = None, model: Optional[str] = None, session_factory: Optional[Any] = None):
+        # Register LiteLLM callbacks on construction (idempotent)
+        _register_litellm_callbacks()
         self.provider = provider
         self.model = model
         self.session_factory = session_factory
         self._config_loaded = False
         # Per-provider lock dict for local LLM serialization
         self._locks: defaultdict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
+
+    # ── Private helpers ────────────────────────────────────────────────────────
 
     def _is_local_provider(self, provider: str) -> bool:
         """Check if provider is a local LLM (needs GPU lock serialization)."""
@@ -579,93 +319,405 @@ class LitellmService:
         provider_lower = provider.lower().split("/")[0]
         return provider_lower in LOCAL_LLM_PROVIDERS
 
-    async def complete_llm(
+    @staticmethod
+    def _extract_litellm_error(exc: Exception) -> str:
+        """Extract full error details from a litellm exception."""
+        parts = [str(exc)]
+        resp = getattr(exc, "response", None)
+        if resp is not None:
+            try:
+                body = resp.text if hasattr(resp, "text") else ""
+                if body:
+                    parts.append(f"Response body: {body[:2000]}")
+            except Exception:
+                pass
+            try:
+                status = resp.status_code if hasattr(resp, "status_code") else ""
+                parts.append(f"Response status: {status}")
+            except Exception:
+                pass
+        for attr in ("llm_provider", "model", "status_code", "body", "litellm_debug_info"):
+            val = getattr(exc, attr, None)
+            if val is not None:
+                parts.append(f"{attr}: {val}")
+        return " | ".join(parts)
+
+    @staticmethod
+    def _log_llm_error(msg: str, exc: Exception) -> None:
+        """Log error with full details + traceback via print() (bypasses uvicorn log suppression)."""
+        detail = LitellmService._extract_litellm_error(exc)
+        tb = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
+        print(f"ERROR app.services.llm.service: {msg}: {detail}\n{tb}", flush=True)
+        logger.error("%s: %s", msg, detail, exc_info=True)
+
+    async def _resolve_credentials(self, provider: str) -> dict:
+        """Look up api_key, api_base, and extra_headers for a provider from llm_providers table."""
+        async with async_session() as db:
+            result = await db.execute(select(LLMProvider).where(LLMProvider.name == provider))
+            llm = result.scalar_one_or_none()
+        creds: dict = {}
+        if llm:
+            if llm.api_key:
+                creds["api_key"] = llm.api_key
+            if llm.api_base_url:
+                api_base = llm.api_base_url.rstrip("/")
+                if provider in ("lm_studio", "vllm") and not api_base.endswith("/v1"):
+                    api_base = f"{api_base}/v1"
+                creds["api_base"] = api_base
+        if provider in _PROVIDER_EXTRA_HEADERS:
+            creds["extra_headers"] = _PROVIDER_EXTRA_HEADERS[provider]
+        return creds
+
+    def _build_ollama_extra_body(
         self,
+        temperature: float = 0.0,
+        top_p: float = 0.1,
+        num_ctx: int = 16384,
+        num_predict: Optional[int] = None,
+        keep_alive: Optional[str] = None,
+        think: Optional[bool] = None,
+        json_schema: Optional[Dict[str, Any]] = None,
+        json_output: bool = False,
+        seed: Optional[int] = None,
+        repeat_penalty: Optional[float] = None,
+    ) -> Dict[str, Any]:
+        """Build the extra_body dict for Ollama calls via LiteLLM.
+
+        Per D-01: model params go in extra_body['options'].
+        'keep_alive' and 'think' are top-level keys.
+        'format' carries a JSON schema or the string "json" for structured output.
+        """
+        options: Dict[str, Any] = {"temperature": temperature, "top_p": top_p, "num_ctx": num_ctx}
+        if num_predict is not None:
+            options["num_predict"] = num_predict
+        if seed is not None:
+            options["seed"] = seed
+        if repeat_penalty is not None:
+            options["repeat_penalty"] = repeat_penalty
+
+        body: Dict[str, Any] = {"options": options}
+        if keep_alive is not None:
+            body["keep_alive"] = keep_alive
+        if think is not None:
+            body["think"] = think
+        if json_schema is not None:
+            body["format"] = json_schema
+        elif json_output:
+            body["format"] = "json"
+        return body
+
+    async def _prepare_kwargs(
+        self,
+        provider: str,
         model: str,
         messages: list,
         *,
-        timeout: float = 30.0,
-        stream: bool = False,
         temperature: float = 0.0,
-        provider: Optional[str] = None,
-        api_base: Optional[str] = None,
-        **kwargs
-    ) -> Any:
-        """
-        Call LiteLLM with transparent per-provider lock serialization for local LLMs.
-
-        D-05: Lock acquisition is TRANSPARENT inside this method — no separate
-        lock method call needed by callers. Cloud LLMs bypass lock entirely.
-
-        Args:
-            model: Model name (e.g. "ollama/llama3", "qwen2.5vl:7b")
-            messages: List of message dicts [{"role": "user", "content": "..."}]
-            timeout: Max seconds to wait for lock + LLM response
-                D-18: RAG = 30s (fail fast)
-                D-19: OCR = 600s (skip cycle, watchdog retries)
-                D-20: Auto-classify = 300s (skip document, process next)
-            stream: If True, returns LiteLLM response object for streaming iteration
-            provider: Explicit provider name (e.g. "ollama"). If not provided, extracted from model.
-            **kwargs: Passed directly to litellm.acompletion (e.g., api_base, extra_body)
-
-        Returns:
-            If stream=False: str response content
-            If stream=True: LiteLLM response object (for async iteration)
-
-        Raises:
-            LLMLockTimeoutError: If local LLM is busy and lock times out
-        """
-        # Extract provider from model name if not explicitly provided
-        if provider is None:
-            provider = model.split("/")[0] if "/" in model else model
-
-        # Prefix model with provider if needed for LiteLLM routing
+        top_p: float = 0.1,
+        timeout: float = 30.0,
+        tools: list | None = None,
+        num_ctx: int | None = None,
+        num_predict: int | None = None,
+        keep_alive: str | None = None,
+        think: bool | None = None,
+        seed: int | None = None,
+        repeat_penalty: float | None = None,
+        json_output: bool = False,
+        json_schema: dict | None = None,
+        stream: bool = False,
+        **kwargs,
+    ) -> dict:
+        """Build complete litellm.acompletion kwargs dict."""
         model_name = model if "/" in model else f"{provider}/{model}"
-
-        # Merge api_base into kwargs for litellm.acompletion
-        if api_base is not None:
-            kwargs = {**kwargs, "api_base": api_base}
-
-        # Cloud LLMs don't contend for GPU memory — no lock needed (D-17)
-        if not self._is_local_provider(provider):
-            response = await litellm.acompletion(
-                model=model_name,
-                messages=messages,
+        litellm_kwargs: dict = {
+            "model": model_name,
+            "messages": messages,
+            "temperature": temperature,
+            "top_p": top_p,
+            "timeout": timeout,
+            "stream": stream,
+            **kwargs,
+        }
+        if tools:
+            litellm_kwargs["tools"] = tools
+        # Ollama-specific extra_body (only when provider is ollama variant)
+        if provider in ("ollama", "ollama_chat") and "extra_body" not in kwargs:
+            litellm_kwargs["extra_body"] = self._build_ollama_extra_body(
                 temperature=temperature,
-                stream=stream,
-                **kwargs
+                top_p=top_p,
+                num_ctx=num_ctx or 16384,
+                num_predict=num_predict,
+                keep_alive=keep_alive,
+                think=think,
+                json_schema=json_schema,
+                json_output=json_output,
+                seed=seed,
+                repeat_penalty=repeat_penalty,
             )
-            if stream:
-                return response
-            return response.choices[0].message.content
+        # Merge provider credentials (api_key, api_base, extra_headers)
+        for k, v in (await self._resolve_credentials(provider)).items():
+            litellm_kwargs.setdefault(k, v)
+        return litellm_kwargs
 
-        # Local LLMs need serialization (D-17)
-        lock = self._locks[provider]
-        async with lock:
+    async def _execute_completion(self, provider: str, litellm_kwargs: dict):
+        """Acquire per-provider GPU lock for local providers, then call litellm.acompletion."""
+        timeout = litellm_kwargs.get("timeout", 30.0)
+        if not self._is_local_provider(provider):
             try:
-                async with asyncio.timeout(timeout):
-                    response = await litellm.acompletion(
-                        model=model_name,
-                        messages=messages,
-                        temperature=temperature,
-                        stream=stream,
-                        **kwargs
-                    )
-                    if stream:
-                        return response
-                    return response.choices[0].message.content
-            except asyncio.TimeoutError:
-                raise LLMLockTimeoutError(
+                return await litellm.acompletion(**litellm_kwargs)
+            except Exception as e:
+                LitellmService._log_llm_error(
+                    f"_execute_completion failed (provider={provider})", e)
+                raise
+        lock = self._locks[provider]
+        try:
+            async with asyncio.timeout(timeout):
+                async with lock:
+                    try:
+                        return await litellm.acompletion(**litellm_kwargs)
+                    except Exception as e:
+                        LitellmService._log_llm_error(
+                            f"_execute_completion failed (provider={provider})", e)
+                        raise
+        except asyncio.TimeoutError:
+            raise LLMLockTimeoutError(
                 f"Local LLM {provider} busy (held by another background job). "
-                f"Try again in a moment."
+                "Try again in a moment."
             )
+
+    def _build_response(self, raw) -> "LLMResponse":
+        """Convert raw litellm response into LLMResponse."""
+        from app.services.llm.types import LLMResponse, ToolCall
+        choice = raw.choices[0]
+        usage = raw.usage
+        input_tokens = (usage.prompt_tokens or 0) if usage else 0
+        output_tokens = (usage.completion_tokens or 0) if usage else 0
+        finish_reason = choice.finish_reason
+
+        if finish_reason == "tool_calls" and choice.message.tool_calls:
+            tool_calls = [
+                ToolCall(id=tc.id, name=tc.function.name, arguments=tc.function.arguments)
+                for tc in choice.message.tool_calls
+            ]
+            raw_msg = choice.message.model_dump(exclude_none=True)
+            clean_msg: dict = {"role": raw_msg["role"]}
+            if raw_msg.get("content"):
+                clean_msg["content"] = raw_msg["content"]
+            if raw_msg.get("tool_calls"):
+                clean_msg["tool_calls"] = raw_msg["tool_calls"]
+            return LLMResponse(
+                content=None,
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+                finish_reason=finish_reason,
+                tool_calls=tool_calls,
+                assistant_message=clean_msg,
+            )
+        return LLMResponse(
+            content=choice.message.content,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            finish_reason=finish_reason,
+        )
+
+    # ── Public API ─────────────────────────────────────────────────────────────
+
+    async def complete_llm(
+        self,
+        provider: str,
+        model: str,
+        messages: list,
+        *,
+        temperature: float = 0.0,
+        top_p: float = 0.1,
+        timeout: float = 30.0,
+        tools: list | None = None,
+        num_ctx: int | None = None,
+        num_predict: int | None = None,
+        keep_alive: str | None = None,
+        think: bool | None = None,
+        seed: int | None = None,
+        repeat_penalty: float | None = None,
+        json_output: bool = False,
+        json_schema: dict | None = None,
+        **kwargs,
+    ) -> "LLMResponse":
+        """Call LLM and return LLMResponse. GPU lock is acquired transparently for local providers."""
+        litellm_kwargs = await self._prepare_kwargs(
+            provider, model, messages,
+            temperature=temperature, top_p=top_p, timeout=timeout, tools=tools,
+            num_ctx=num_ctx, num_predict=num_predict, keep_alive=keep_alive,
+            think=think, seed=seed, repeat_penalty=repeat_penalty,
+            json_output=json_output, json_schema=json_schema,
+            stream=False,
+            **kwargs,
+        )
+        raw = await self._execute_completion(provider, litellm_kwargs)
+        return self._build_response(raw)
+
+    async def stream_llm(
+        self,
+        provider: str,
+        model: str,
+        messages: list,
+        *,
+        temperature: float = 0.0,
+        top_p: float = 0.1,
+        timeout: float = 30.0,
+        num_ctx: int | None = None,
+        keep_alive: str | None = None,
+        think: bool | None = None,
+        **kwargs,
+    ) -> AsyncGenerator[str, None]:
+        """Stream LLM response as str chunks. GPU lock acquired transparently for local providers."""
+        litellm_kwargs = await self._prepare_kwargs(
+            provider, model, messages,
+            temperature=temperature, top_p=top_p, timeout=timeout,
+            num_ctx=num_ctx, keep_alive=keep_alive, think=think,
+            stream=True,
+            **kwargs,
+        )
+        raw_stream = await self._execute_completion(provider, litellm_kwargs)
+
+        async def _generate():
+            async for chunk in raw_stream:
+                delta = chunk.choices[0].delta if chunk.choices else None
+                content = getattr(delta, "content", None) or ""
+                finish = getattr(chunk.choices[0], "finish_reason", None) if chunk.choices else None
+                if content:
+                    yield content
+                if finish is not None and finish != "length":
+                    break
+
+        return _generate()
+
+    async def embed(
+        self,
+        provider: str,
+        model: str,
+        input: list[str],
+        *,
+        timeout: float = 30.0,
+        **kwargs,
+    ) -> list[list[float]]:
+        """Generate embeddings via litellm.aembedding. No GPU lock needed."""
+        model_name = model if "/" in model else f"{provider}/{model}"
+        litellm_kwargs: dict = {"model": model_name, "input": input, "timeout": timeout, **kwargs}
+        for k, v in (await self._resolve_credentials(provider)).items():
+            litellm_kwargs.setdefault(k, v)
+        try:
+            response = await litellm.aembedding(**litellm_kwargs)
+            return [item.embedding for item in response.data]
+        except Exception as e:
+            LitellmService._log_llm_error(f"embed failed (provider={provider}, model={model})", e)
+            raise
+
+    def list_providers(self) -> list[dict]:
+        """List all LiteLLM-supported providers."""
+        try:
+            providers = []
+            for provider_enum in litellm.provider_list:
+                provider_name = provider_enum.value
+                providers.append({
+                    "name": provider_name,
+                    "display_name": PROVIDER_DISPLAY_NAMES.get(
+                        provider_name, provider_name.title()
+                    ),
+                })
+            providers.sort(key=lambda x: x["display_name"])
+            return providers
+        except Exception:
+            return []
+
+    async def list_models(self, provider: str) -> list[dict]:
+        """List available models for a provider. Uses own session_factory for DB lookup."""
+        async with async_session() as db:
+            result = await db.execute(
+                select(LLMProvider).where(LLMProvider.name == provider)
+            )
+            db_provider = result.scalar_one_or_none()
+
+        api_base = db_provider.api_base_url if db_provider else None
+        api_key = db_provider.api_key if db_provider else None
+
+        if api_base:
+            try:
+                model_url = _derive_openai_compatible_url(api_base, provider)
+                headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
+                async with httpx.AsyncClient(timeout=10.0) as client:
+                    response = await client.get(
+                        model_url, headers=headers if headers else None
+                    )
+                    response.raise_for_status()
+                    data = response.json()
+                if provider == "ollama":
+                    models_data = data.get("models", [])
+                else:
+                    models_data = data.get("data", data.get("models", []))
+                return [
+                    {
+                        "id": m.get("name") or m.get("id"),
+                        "name": m.get("name") or m.get("id"),
+                        "display_name": _format_model_display_name(
+                            m.get("name") or m.get("id", "")
+                        ),
+                    }
+                    for m in models_data
+                ]
+            except Exception as e:
+                logger.info("Failed to fetch live models for %s, falling back: %s", provider, e)
+
+        if provider == "ollama":
+            return []
+        provider_models = litellm.models_by_provider.get(provider, set())
+        return [
+            {
+                "id": name,
+                "name": name,
+                "display_name": _format_model_display_name(name),
+            }
+            for name in sorted(provider_models)
+        ]
+
+    # ── Existing public methods (updated) ───────────────────────────────────────
+
+    async def complete(self, prompt: str, model_override=None) -> str:
+        """Send a completion request to the LLM provider via LiteLLM."""
+        await self._ensure_config()
+        model = model_override or self.model
+        if not model:
+            raise ValueError("No model specified")
+        provider_name = self.provider.name if self.provider else None
+        if not provider_name:
+            raise ValueError("No LLM provider configured")
+        result = await self.complete_llm(
+            provider=provider_name,
+            model=model,
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.0,
+            top_p=0.1,
+        )
+        return (result.content or "").strip()
+
+    async def test_connection(self, provider: str = None, model: str = None) -> dict:
+        """Test connection to the LLM provider."""
+        test_provider = provider or (self.provider.name if self.provider else None)
+        test_model = model or self.model
+        if not test_provider:
+            raise ValueError("No LLM provider configured")
+        result = await self.complete_llm(
+            provider=test_provider,
+            model=test_model,
+            messages=[{"role": "user", "content": "Antworte nur mit: OK"}],
+        )
+        return {
+            "provider": test_provider,
+            "model": test_model,
+            "response": (result.content or "").strip(),
+        }
 
     def get_lock_status(self) -> dict[str, dict]:
-        """Get current lock status for all local LLM providers.
-
-        Returns:
-            Dict mapping provider name to {"locked": bool}
-        """
+        """Get current lock status for all local LLM providers."""
         status = {}
         for prov, lock in self._locks.items():
             status[prov] = {"locked": lock.locked()}
@@ -689,49 +741,9 @@ class LitellmService:
             self.model = await get_setting(LLM_KEY_CLASSIFIER_MODEL, db) or self.model
         self._config_loaded = True
 
-    async def complete(self, prompt: str, model_override: Optional[str] = None) -> str:
-        """Send a completion request to the LLM provider via LiteLLM.
-
-        LiteLLM handles provider routing internally based on model name prefix
-        (e.g., 'anthropic/claude-3-5-sonnet', 'ollama/llama3').
-        """
-        await self._ensure_config()
-        model = model_override or self.model
-        if not model:
-            raise ValueError("No model specified")
-
-        response = await llm_completion(
-            model=model,
-            messages=[{"role": "user", "content": prompt}],
-            provider=self.provider.name if self.provider else None,
-            temperature=0.0,
-            top_p=0.1,
-        )
-        return (response.choices[0].message.content or "").strip()
-
-    async def test_connection(self, provider: str = None, model: str = None) -> Dict:
-        """Test connection to the LLM provider. If provider/model given, tests that specific combo."""
-        test_provider = provider or (self.provider.name if self.provider else None)
-        test_model = model or self.model
-        if not test_provider:
-            raise ValueError("No LLM provider configured")
-        response = await llm_completion(
-            model=test_model,
-            messages=[{"role": "user", "content": "Antworte nur mit: OK"}],
-            provider=test_provider,
-        )
-        return {
-            "provider": test_provider,
-            "model": test_model,
-            "response": (response.choices[0].message.content or "").strip()
-        }
-
     async def check_provider_health(self, provider: str) -> bool:
-        """Returns True if the provider at its configured URL is reachable.
-
-        Resolves URL from LLMProvider.api_base_url. Checks /api/tags or equivalent endpoint.
-        """
-        creds = await _resolve_provider_credentials(provider)
+        """Returns True if the provider at its configured URL is reachable."""
+        creds = await self._resolve_credentials(provider)
         url = creds.get("api_base")
         if not url:
             return False
@@ -744,12 +756,8 @@ class LitellmService:
             return False
 
     async def unload_local_model(self, provider: str, model: str) -> bool:
-        """Unload a local LLM model from GPU memory.
-
-        Returns True if the unload request was accepted, False if not supported or failed.
-        Credentials (api_key) are read from LLMProvider table via _resolve_provider_credentials.
-        """
-        creds = await _resolve_provider_credentials(provider)
+        """Unload a local LLM model from GPU memory."""
+        creds = await self._resolve_credentials(provider)
         url = (creds.get("api_base") or "").rstrip("/")
         api_key = creds.get("api_key")
         headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
@@ -771,12 +779,7 @@ class LitellmService:
             return False
 
     def estimate_tokens(self, text: str, model: Optional[str] = None) -> int:
-        """Estimate token count using LiteLLM's token counter.
-        
-        Args:
-            text: Text to count tokens for
-            model: Model to use for tokenization (uses self.model if not specified)
-        """
+        """Estimate token count using LiteLLM's token counter."""
         model_for_count = model or self.model or "gpt-4"
         try:
             return litellm.token_counter(model=model_for_count, text=text)

@@ -2,17 +2,16 @@ import asyncio
 import logging
 from typing import List
 
-from app.services.llm import llm_embedding
-
 logger = logging.getLogger(__name__)
 
 
 class EmbeddingService:
     """Generates text embeddings via any LiteLLM-supported provider."""
 
-    def __init__(self, provider: str, model: str):
+    def __init__(self, provider: str, model: str, llm_service=None):
         self.provider = provider
         self.model = model
+        self.llm_service = llm_service
 
     # Most Ollama embedding models (mxbai-embed-large, nomic-embed-text) cap at 512 tokens.
     # 512 tokens * ~1.5 chars/token for German OCR text ≈ 768 chars. Use 750 to be safe.
@@ -33,9 +32,9 @@ class EmbeddingService:
 
             for attempt in range(max_attempts):
                 try:
-                    embeddings = await llm_embedding(
-                        model=self.model,
+                    embeddings = await self.llm_service.embed(
                         provider=self.provider,
+                        model=self.model,
                         input=batch,
                     )
                     all_embeddings.extend(embeddings)

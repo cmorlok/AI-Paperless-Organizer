@@ -5,13 +5,14 @@ import random
 import re
 import time
 import logging
-from typing import Dict, Any, List, Optional
-
-from app.services.llm.service import llm_completion
+from typing import Dict, Any, List, Optional, TYPE_CHECKING
 
 from app.services.classifier.base_provider import (
     BaseClassifierProvider, ClassificationResult, DocumentContext,
 )
+
+if TYPE_CHECKING:
+    from app.services.llm.service import LitellmService
 from app.services.classifier.tool_definitions import (
     CLASSIFIER_TOOLS,
 )
@@ -106,11 +107,13 @@ class LitellmToolCallingProvider(BaseClassifierProvider):
         provider: str,
         tool_executor: Optional[ToolExecutor] = None,
         provider_label: str = "",
+        llm_service: "LitellmService | None" = None,
     ):
         self.model = model
         self.provider = provider
         self.tool_executor = tool_executor
         self._provider_label = provider_label or provider
+        self.llm_service = llm_service
 
     def get_name(self) -> str:
         return f"{self._provider_label} ({self.model})"
@@ -120,9 +123,9 @@ class LitellmToolCallingProvider(BaseClassifierProvider):
 
     async def test_connection(self) -> Dict[str, Any]:
         try:
-            await llm_completion(
-                model=self.model,
+            await self.llm_service.complete_llm(
                 provider=self.provider,
+                model=self.model,
                 messages=[{"role": "user", "content": "Ping"}],
                 max_tokens=5,
             )
@@ -187,41 +190,22 @@ class LitellmToolCallingProvider(BaseClassifierProvider):
 
         try:
             for _round in range(MAX_TOOL_ROUNDS):
-                call_kwargs: Dict[str, Any] = {
-                    "model": self.model,
-                    "messages": messages,
-                    "temperature": 0.2,
-                }
+                result = await self.llm_service.complete_llm(
+                    provider=self.provider,
+                    model=self.model,
+                    messages=messages,
+                    temperature=0.2,
+                    tools=active_tools if active_tools else None,
+                )
+                total_input_tokens += result.input_tokens
+                total_output_tokens += result.output_tokens
 
-                if active_tools:
-                    call_kwargs["tools"] = active_tools
-
-                litellm_kwargs = dict(call_kwargs)
-                litellm_kwargs["provider"] = self.provider
-                response = await llm_completion(**litellm_kwargs)
-
-                usage = response.usage
-                if usage:
-                    total_input_tokens += usage.prompt_tokens or 0
-                    total_output_tokens += usage.completion_tokens or 0
-
-                choice = response.choices[0]
-
-                if choice.finish_reason == "tool_calls" and choice.message.tool_calls:
-                    # Only keep standard fields – Mistral/OpenRouter reject OpenAI-only
-                    # extras like 'refusal', 'annotations', 'audio', 'function_call'
-                    raw = choice.message.model_dump(exclude_none=True)
-                    clean_msg: Dict[str, Any] = {"role": raw["role"]}
-                    if raw.get("content"):
-                        clean_msg["content"] = raw["content"]
-                    if raw.get("tool_calls"):
-                        clean_msg["tool_calls"] = raw["tool_calls"]
-                    messages.append(clean_msg)
-
-                    for tool_call in choice.message.tool_calls:
+                if result.finish_reason == "tool_calls" and result.tool_calls:
+                    messages.append(result.assistant_message)
+                    for tool_call in result.tool_calls:
                         total_tool_calls += 1
-                        fn_name = tool_call.function.name
-                        fn_args = json.loads(tool_call.function.arguments)
+                        fn_name = tool_call.name
+                        fn_args = json.loads(tool_call.arguments)
 
                         logger.info(f"Tool call: {fn_name}({fn_args})")
 
@@ -235,7 +219,7 @@ class LitellmToolCallingProvider(BaseClassifierProvider):
                     continue
 
                 # No more tool calls -- parse final response
-                raw = choice.message.content or "{}"
+                raw = result.content or "{}"
                 raw = raw.strip()
                 if "```" in raw:
                     import re as _re
@@ -394,10 +378,12 @@ class LitellmOllamaProvider(BaseClassifierProvider):
         model: str = "qwen2.5:7b",
         provider: str = "ollama",
         tool_executor: Optional[ToolExecutor] = None,
+        llm_service: "LitellmService | None" = None,
     ):
         self.model = model
         self.provider = provider
         self.tool_executor = tool_executor
+        self.llm_service = llm_service
         self._is_thinking = any(
             k in self.model.lower() for k in THINKING_MODEL_PREFIXES
         )
@@ -414,9 +400,9 @@ class LitellmOllamaProvider(BaseClassifierProvider):
 
     async def test_connection(self) -> Dict[str, Any]:
         try:
-            await llm_completion(
-                model=self.model,
+            await self.llm_service.complete_llm(
                 provider=self.provider,
+                model=self.model,
                 messages=[{"role": "user", "content": "Ping"}],
                 max_tokens=5,
             )
@@ -921,9 +907,9 @@ class LitellmOllamaProvider(BaseClassifierProvider):
             messages.append({"role": "user", "content": user_message})
 
         try:
-            response = await llm_completion(
-                model=self.model,
+            result = await self.llm_service.complete_llm(
                 provider=self.provider,
+                model=self.model,
                 messages=messages,
                 num_predict=max_tokens,
                 keep_alive=keep_alive,
@@ -932,10 +918,9 @@ class LitellmOllamaProvider(BaseClassifierProvider):
                 json_output=True,
                 timeout=LOCAL_LLM_CALL_TIMEOUT,
             )
-            content = response.choices[0].message.content or ""
-            if response.usage:
-                self._total_input_tokens  += response.usage.prompt_tokens or 0
-                self._total_output_tokens += response.usage.completion_tokens or 0
+            content = result.content or ""
+            self._total_input_tokens  += result.input_tokens
+            self._total_output_tokens += result.output_tokens
             logger.info(f"Ollama chat via litellm: {len(content)} chars: {content[:200]}")
             return content
         except Exception as e:
@@ -945,9 +930,9 @@ class LitellmOllamaProvider(BaseClassifierProvider):
             # since LiteLLM normalizes the error.
             if json_schema is not None and ("format" in str(e).lower() or "schema" in str(e).lower()):
                 logger.warning(f"Ollama schema enforcement rejected, retrying without schema: {e}")
-                response = await llm_completion(
-                    model=self.model,
+                result = await self.llm_service.complete_llm(
                     provider=self.provider,
+                    model=self.model,
                     messages=messages,
                     num_predict=max_tokens,
                     keep_alive=keep_alive,
@@ -955,10 +940,9 @@ class LitellmOllamaProvider(BaseClassifierProvider):
                     json_output=True,
                     timeout=LOCAL_LLM_CALL_TIMEOUT,
                 )
-                content = response.choices[0].message.content or ""
-                if response.usage:
-                    self._total_input_tokens  += response.usage.prompt_tokens or 0
-                    self._total_output_tokens += response.usage.completion_tokens or 0
+                content = result.content or ""
+                self._total_input_tokens  += result.input_tokens
+                self._total_output_tokens += result.output_tokens
                 return content
             raise
 
@@ -989,44 +973,41 @@ class LitellmOllamaProvider(BaseClassifierProvider):
         messages = [{"role": "user", "content": raw_prompt}]
 
         try:
-            response = await llm_completion(
-                model=self.model,
+            result = await self.llm_service.complete_llm(
                 provider=self.provider,
+                model=self.model,
                 messages=messages,
-                num_predict=max(max_tokens, 1500),
+                num_predict=max_tokens,
                 keep_alive=keep_alive,
-                seed=random.randint(1, 2**31 - 1),
                 think=False,
                 json_schema=json_schema,
                 json_output=True,
                 timeout=LOCAL_LLM_CALL_TIMEOUT,
             )
-            content = response.choices[0].message.content or ""
-            if response.usage:
-                self._total_input_tokens  += response.usage.prompt_tokens or 0
-                self._total_output_tokens += response.usage.completion_tokens or 0
-            content = self._strip_thinking_text(content)
-            logger.info(f"Ollama generate via litellm: {len(content)} chars: {content[:200]}")
+            content = result.content or ""
+            self._total_input_tokens  += result.input_tokens
+            self._total_output_tokens += result.output_tokens
             return content
+
         except Exception as e:
-                if json_schema is not None and ("format" in str(e).lower() or "schema" in str(e).lower()):
-                    logger.warning(f"Ollama schema enforcement rejected in generate, retrying without schema: {e}")
-                    response = await llm_completion(
-                        model=self.model,
-                        provider=self.provider,
-                        messages=messages,
-                        num_predict=max(max_tokens, 1500),
-                        keep_alive=keep_alive,
-                        think=False,
-                        json_output=True,
-                        timeout=LOCAL_LLM_CALL_TIMEOUT,
-                    )
-                    content = response.choices[0].message.content or ""
-                    if response.usage:
-                        self._total_input_tokens  += response.usage.prompt_tokens or 0
-                        self._total_output_tokens += response.usage.completion_tokens or 0
-                    return self._strip_thinking_text(content)
-                raise
+            # Schema fallback for thinking models too
+            if json_schema is not None and ("format" in str(e).lower() or "schema" in str(e).lower()):
+                logger.warning(f"Ollama generate schema rejected, retrying without schema: {e}")
+                result = await self.llm_service.complete_llm(
+                    provider=self.provider,
+                    model=self.model,
+                    messages=messages,
+                    num_predict=max_tokens,
+                    keep_alive=keep_alive,
+                    think=False,
+                    json_output=True,
+                    timeout=LOCAL_LLM_CALL_TIMEOUT,
+                )
+                content = result.content or ""
+                self._total_input_tokens  += result.input_tokens
+                self._total_output_tokens += result.output_tokens
+                return content
+            raise
 
     @staticmethod
     def _contains_non_latin(text: str) -> bool:
@@ -1095,16 +1076,10 @@ class LitellmOllamaProvider(BaseClassifierProvider):
     async def _unload_model(self):
         """Unload model from GPU memory after classification."""
         try:
-            await llm_completion(
-                model=self.model,
-                provider=self.provider,
-                messages=[{"role": "user", "content": ""}],
-                extra_body={"keep_alive": 0},
-                max_tokens=1,
-            )
-            logger.info(f"Ollama model '{self.model}' unloaded from GPU")
+            await self.llm_service.unload_local_model(self.provider, self.model)
+            logger.info(f"Model '{self.model}' unloaded from GPU")
         except Exception as e:
-            logger.warning(f"Could not unload Ollama model: {e}")
+            logger.warning(f"Could not unload model: {e}")
 
     def _parse_json(self, text: str) -> Any:
         """Extract JSON from LLM response with aggressive fallbacks."""

@@ -23,7 +23,7 @@ class RAGService:
 
     def __init__(self, session_factory, paperless_client, llm_service: LLMService):
         self.search_engine = SearchEngine()
-        self.indexer = Indexer(self.search_engine, paperless_client=paperless_client)
+        self.indexer = Indexer(self.search_engine, paperless_client=paperless_client, llm_service=llm_service)
         self._initialized = False
         self.session_factory = session_factory or async_session
         self.paperless_client = paperless_client
@@ -52,6 +52,7 @@ class RAGService:
         return EmbeddingService(
             provider=config.embedding_provider,
             model=config.embedding_model,
+            llm_service=self.llm_service,
         )
 
     async def search(
@@ -450,36 +451,24 @@ class RAGService:
         yield json.dumps({"type": "done"})
 
     async def _stream_llm(self, config: RagConfig, messages: list) -> AsyncGenerator[str, None]:
-        """Stream LLM response via LiteLLM — unified path for all providers."""
+        """Stream LLM response via stream_llm — yields str chunks directly."""
         model_name = config.chat_model or "gpt-4o-mini"
         provider_name = getattr(config, "chat_model_provider", "openai") or "openai"
 
         try:
-            # D-18: 30s timeout for RAG — fail fast with clear error to user
-            stream_response = await self.llm_service.complete_llm(
+            async for token in await self.llm_service.stream_llm(
+                provider=provider_name,
                 model=model_name,
                 messages=messages,
-                timeout=30.0,  # D-18: fail fast for RAG
-                stream=True,   # Streaming MUST be preserved
+                timeout=30.0,
                 temperature=0.2,
                 num_ctx=max(8192, (getattr(config, "max_context_tokens", 4000) or 4000) * 2),
                 keep_alive="10m",
                 think=False,
-                provider=provider_name,
-            )
-
-            # stream_response is a LiteLLM response object for iteration
-            async for chunk in stream_response:
-                delta = chunk.choices[0].delta if chunk.choices else None
-                content = getattr(delta, "content", None) or ""
-                finish = getattr(chunk.choices[0], "finish_reason", None)
-                if content:
-                    yield content
-                if finish is not None and finish != "length":
-                    break
+            ):
+                yield token
 
         except LLMLockTimeoutError:
-            # D-18: fail fast for RAG — return clear error to user
             yield "\n\n[Ollama ist gerade belegt (Klassifizierung läuft). Bitte in 30 Sekunden erneut versuchen.]"
         except Exception as e:
             logger.warning(f"Streaming error: {e}")
@@ -524,19 +513,17 @@ class RAGService:
 
         try:
             result = await self.llm_service.complete_llm(
+                provider=provider_name,
                 model=model_name,
                 messages=messages,
                 timeout=30.0,
-                stream=False,
                 temperature=0.0,
                 max_tokens=200,
                 num_ctx=4096,
                 keep_alive="5m",
                 think=False,
-                provider=provider_name,
             )
-            # complete_llm returns string when stream=False
-            rewritten = result.strip() if isinstance(result, str) else (result.choices[0].message.content or "").strip()
+            rewritten = (result.content or "").strip()
             # Strip any markdown fences or explanatory text
             rewritten = re.sub(r'^```.*?\n|```$', '', rewritten, flags=re.DOTALL).strip()
             return rewritten if rewritten else question
