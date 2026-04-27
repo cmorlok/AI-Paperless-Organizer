@@ -655,26 +655,6 @@ class LitellmService:
             for name in sorted(provider_models)
         ]
 
-    # ── Existing public methods (updated) ───────────────────────────────────────
-
-    async def complete(self, prompt: str, model_override=None) -> str:
-        """Send a completion request to the LLM provider via LiteLLM."""
-        await self._ensure_config()
-        model = model_override or self.model
-        if not model:
-            raise ValueError("No model specified")
-        provider_name = self.provider.name if self.provider else None
-        if not provider_name:
-            raise ValueError("No LLM provider configured")
-        result = await self.complete_llm(
-            provider=provider_name,
-            model=model,
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.0,
-            top_p=0.1,
-        )
-        return (result.content or "").strip()
-
     async def test_connection(self, provider: str = None, model: str = None) -> dict:
         """Test connection to the LLM provider."""
         test_provider = provider or (self.provider.name if self.provider else None)
@@ -803,7 +783,21 @@ class LitellmService:
 
         # Get LLM response
         logger.info("[LLM] Sending request to LLM provider...")
-        response = await self.complete(prompt)
+        await self._ensure_config()
+        model = self.model
+        if not model:
+            raise ValueError("No model specified")
+        provider_name = self.provider.name if self.provider else None
+        if not provider_name:
+            raise ValueError("No LLM provider configured")
+        result = await self.complete_llm(
+            provider=provider_name,
+            model=model,
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.0,
+            top_p=0.1,
+        )
+        response = (result.content or "").strip()
         logger.info(f"[LLM] Got response, length: {len(response)} chars, first 200: {response[:200]}")
 
         # Estimate output tokens

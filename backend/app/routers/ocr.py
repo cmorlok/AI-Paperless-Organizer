@@ -1138,10 +1138,12 @@ WICHTIG:
         used_model = eval_model or "gpt-4o"
         print(f"[Evaluate] Sending {len(results)} OCR results to {llm_service.provider.name} / {used_model}")
         
-        raw_response = await llm_service.complete(prompt, model_override=eval_model)
-        
-        # Parse JSON from response (handle markdown code blocks)
-        cleaned = raw_response.strip()
+        result = await llm_service.complete_llm(
+            provider=llm_service.provider.name,
+            model=eval_model,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        cleaned = (result.content or "").strip()
         if cleaned.startswith("```"):
             lines = cleaned.split("\n")
             lines = [line for line in lines if not line.strip().startswith("```")]

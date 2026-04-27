@@ -275,7 +275,12 @@ Beispiel: Wenn "1&1" in einer Gruppe ist und "1und1 Internet" ungruppiert, sollt
 Wenn nichts zusammengehört: {{"group_merges": [], "add_to_groups": []}}"""
 
         try:
-            response = await self.llm.complete(cross_batch_prompt)
+            result = await self.llm.complete_llm(
+                provider=self.llm.provider.name,
+                model=self.llm.model,
+                messages=[{"role": "user", "content": cross_batch_prompt}],
+            )
+            response = (result.content or "").strip()
             
             # Parse response
             json_match = re.search(r'\{[\s\S]*\}', response)
@@ -447,7 +452,12 @@ Wenn nichts zusammengehört: {{"group_merges": [], "add_to_groups": []}}"""
             stats["warning"] = f"Prompt sehr groß ({estimated_input_tokens} Tokens)! Könnte Token-Limit ({token_limit}) überschreiten."
         
         try:
-            response = await self.llm.complete(prompt)
+            result = await self.llm.complete_llm(
+                provider=self.llm.provider.name,
+                model=self.llm.model,
+                messages=[{"role": "user", "content": prompt}],
+            )
+            response = (result.content or "").strip()
             stats["estimated_output_tokens"] = self.llm.estimate_tokens(response)
             stats["estimated_total_tokens"] = stats["estimated_input_tokens"] + stats["estimated_output_tokens"]
             
@@ -536,7 +546,12 @@ Wenn nichts zusammengehört: {{"group_merges": [], "add_to_groups": []}}"""
             stats["warning"] = f"Prompt sehr groß ({estimated_input_tokens} Tokens)! Könnte Token-Limit ({token_limit}) überschreiten."
         
         try:
-            response = await self.llm.complete(prompt)
+            result = await self.llm.complete_llm(
+                provider=self.llm.provider.name,
+                model=self.llm.model,
+                messages=[{"role": "user", "content": prompt}],
+            )
+            response = (result.content or "").strip()
             stats["estimated_output_tokens"] = self.llm.estimate_tokens(response)
             stats["estimated_total_tokens"] = stats["estimated_input_tokens"] + stats["estimated_output_tokens"]
             
@@ -629,7 +644,12 @@ Wenn nichts zusammengehört: {{"group_merges": [], "add_to_groups": []}}"""
             stats["warning"] = f"Prompt sehr groß ({estimated_input_tokens} Tokens)! Könnte Token-Limit ({token_limit}) überschreiten."
         
         try:
-            response = await self.llm.complete(prompt)
+            result = await self.llm.complete_llm(
+                provider=self.llm.provider.name,
+                model=self.llm.model,
+                messages=[{"role": "user", "content": prompt}],
+            )
+            response = (result.content or "").strip()
             stats["estimated_output_tokens"] = self.llm.estimate_tokens(response)
             stats["estimated_total_tokens"] = stats["estimated_input_tokens"] + stats["estimated_output_tokens"]
             

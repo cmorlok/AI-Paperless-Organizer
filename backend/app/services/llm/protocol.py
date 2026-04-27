@@ -15,8 +15,6 @@ class LLMService(Protocol):
     @property
     def model(self) -> Optional[str]: ...
 
-    async def complete(self, prompt: str, model_override: Optional[str] = None) -> str: ...
-
     async def complete_llm(
         self,
         provider: str,

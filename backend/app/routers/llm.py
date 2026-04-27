@@ -40,8 +40,13 @@ async def test_prompt(
 ):
     """Test a prompt with the active LLM provider."""
     try:
-        response = await llm_service.complete(request.prompt)
-        return {"success": True, "response": response}
+        provider = llm_service.provider.name if llm_service.provider else None
+        result = await llm_service.complete_llm(
+            provider=provider,
+            model=llm_service.model,
+            messages=[{"role": "user", "content": request.prompt}],
+        )
+        return {"success": True, "response": (result.content or "").strip()}
     except Exception as e:
         return {"success": False, "error": str(e)}
 
