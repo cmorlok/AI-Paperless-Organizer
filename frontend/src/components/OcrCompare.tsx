@@ -24,7 +24,7 @@ import ProviderModelSelector from './ProviderModelSelector'
 export default function OcrCompare() {
     const [docId, setDocId] = useState('')
     const [page, setPage] = useState(1)
-    const [ocrProviderModel, setOcrProviderModel] = useState({ provider: 'ollama', model: '' })
+    const [ocrProviderModel, setOcrProviderModel] = useState({ provider: '', model: '' })
     const [availableModels, setAvailableModels] = useState<string[]>([])
     const [currentModel, setCurrentModel] = useState('')
     const [selectedModels, setSelectedModels] = useState<string[]>([])
@@ -177,8 +177,8 @@ export default function OcrCompare() {
             case 'starting': return 'Starte...'
             case 'download': return 'Dokument herunterladen...'
             case 'convert': return 'PDF in Bilder konvertieren...'
-            case 'health_check': return 'Ollama Health-Check...'
-            case 'waiting_ollama': return 'Warte auf Ollama-Neustart...'
+            case 'health_check': return 'Provider Health-Check...'
+            case 'waiting_ollama': return 'Warte auf Provider-Neustart...'
             case 'model_loading': return 'Modell wird geladen...'
             case 'ocr_page': return 'OCR läuft...'
             case 'unloading': return 'Modell wird entladen...'
@@ -283,7 +283,7 @@ export default function OcrCompare() {
                         <div>
                             <h3 className="font-bold text-lg text-white">OCR Modell-Vergleich</h3>
                             <p className="text-sm text-surface-400">
-                                Teste verschiedene Ollama-Modelle auf demselben Dokument
+                                Teste verschiedene Modelle auf demselben Dokument
                             </p>
                         </div>
                     </div>
@@ -347,7 +347,7 @@ export default function OcrCompare() {
                             </div>
                         ) : availableModels.length === 0 ? (
                             <div className="text-amber-400 text-sm py-2">
-                                Keine Modelle gefunden. Ist Ollama erreichbar?
+                                Keine Modelle gefunden. Ist der Provider erreichbar?
                             </div>
                         ) : (
                             <div>
