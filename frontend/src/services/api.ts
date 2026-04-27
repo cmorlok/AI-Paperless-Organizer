@@ -789,10 +789,10 @@ export interface OcrCompareResponse {
   results: OcrModelCompareResult[]
 }
 
-export const startOcrCompare = (documentId: number, models: string[], page: number = 1) =>
+export const startOcrCompare = (documentId: number, slots: {provider: string; model: string}[], page: number = 1) =>
   fetchJson<{ started: boolean; models: number }>('/ocr/compare', {
     method: 'POST',
-    body: JSON.stringify({ document_id: documentId, models, page })
+    body: JSON.stringify({ document_id: documentId, slots, page })
   })
 
 export interface OcrCompareStatus {

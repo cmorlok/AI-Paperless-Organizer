@@ -115,8 +115,7 @@ export default function OcrCompare() {
         setExpandedResults(new Set())
 
         try {
-            const models = validSlots.map(s => s.model)
-            await api.startOcrCompare(id, models, page)
+            await api.startOcrCompare(id, validSlots, page)
             startPolling()
         } catch (e: any) {
             setError(e.message || 'Vergleich konnte nicht gestartet werden')

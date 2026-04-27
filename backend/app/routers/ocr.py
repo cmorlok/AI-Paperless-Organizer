@@ -70,9 +70,14 @@ class BatchOcrRequest(BaseModel):
     remove_runocr_tag: bool = True
 
 
+class OcrCompareSlot(BaseModel):
+    provider: str
+    model: str
+
+
 class OcrCompareRequest(BaseModel):
     document_id: int
-    models: List[str]
+    slots: List[OcrCompareSlot]
     page: int = 1  # Which page to compare (1-based, 0 = all pages)
 
 
@@ -757,19 +762,19 @@ async def _wait_for_provider_ready(provider: str, max_wait: int = 60, llm_servic
     return False
 
 
-async def _run_compare_job(ocr_service: OcrService, paperless_client, document_id: int, models: list, target_page: int, compare_state: OcrCompareState, llm_service):
+async def _run_compare_job(ocr_service: OcrService, paperless_client, document_id: int, slots: list[OcrCompareSlot], target_page: int, compare_state: OcrCompareState, llm_service):
     """Background task that runs the actual model comparison."""
     import io
     from PIL import Image
     from pdf2image import convert_from_bytes
 
-    provider = await ocr_service._get_provider()
     job_start = time.time()
     compare_state.job_start = job_start
 
     # Save original service settings to restore after job
     original_model = ocr_service.model
     original_max_image_size = ocr_service.max_image_size
+    original_provider = ocr_service._provider
 
     try:
         # Phase: Download
@@ -817,18 +822,23 @@ async def _run_compare_job(ocr_service: OcrService, paperless_client, document_i
         dpi_image_cache = {}
 
         # Run each model with model-specific image preparation
-        for model_idx, model_name in enumerate(models):
+        for model_idx, slot in enumerate(slots):
+            model_name = slot.model
+            provider = slot.provider
             compare_state.current_model = model_name
             compare_state.current_model_index = model_idx
             compare_state.current_page = 0
             compare_state.elapsed_seconds = round(time.time() - job_start, 1)
+
+            # Set provider for this slot (temp override)
+            ocr_service._provider = provider
 
             # Health check: wait for provider to be ready before starting each model
             compare_state.phase = "health_check"
             print(f"[Compare] Checking {provider} health before model: {model_name}")
             ollama_ok = await _wait_for_provider_ready(provider, max_wait=60, llm_service=llm_service)
             if not ollama_ok:
-                error_msg = f"{provider} nicht erreichbar - überspringe {model_name}"
+                error_msg = f"{provider} nicht erreichbar - ueberspringe {model_name}"
                 print(f"[Compare] {model_name} SKIPPED: provider not reachable")
                 compare_state.results.append({
                     "model": model_name,
@@ -940,6 +950,7 @@ async def _run_compare_job(ocr_service: OcrService, paperless_client, document_i
         # Restore original service settings
         ocr_service.model = original_model
         ocr_service.max_image_size = original_max_image_size
+        ocr_service._provider = original_provider
 
 
 @router.post("/compare")
@@ -955,22 +966,22 @@ async def start_compare(
     if compare_state.running:
         raise HTTPException(status_code=409, detail="Ein Vergleich läuft bereits")
 
-    models = request.models
-    if not models or len(models) == 0:
+    slots = request.slots
+    if not slots or len(slots) == 0:
         raise HTTPException(status_code=400, detail="Mindestens ein Modell auswählen")
-    if len(models) > 5:
+    if len(slots) > 5:
         raise HTTPException(status_code=400, detail="Maximal 5 Modelle gleichzeitig")
 
     compare_state.reset()
     compare_state.running = True
     compare_state.document_id = request.document_id
-    compare_state.models = models
-    compare_state.total_models = len(models)
+    compare_state.models = [s.model for s in slots]
+    compare_state.total_models = len(slots)
     compare_state.phase = "starting"
 
-    asyncio.create_task(_run_compare_job(service, client, request.document_id, models, request.page, compare_state, llm_service))
+    asyncio.create_task(_run_compare_job(service, client, request.document_id, slots, request.page, compare_state, llm_service))
 
-    return {"started": True, "models": len(models)}
+    return {"started": True, "models": len(slots)}
 
 
 @router.get("/compare/status")
