@@ -60,27 +60,6 @@ async def lifespan(app: FastAPI):
     logger.info("Logging active — worker process ready")
     await reset_password_if_requested()
 
-    # Migrate old KV keys: ocr_watchdog_* → ocr_processor_*
-    async def _migrate_watchdog_to_processor_kv_keys():
-        """Migrate ocr_watchdog_* KV keys to ocr_processor_* (D-22 rename)."""
-        try:
-            from app.routers.settings import get_setting, set_setting
-            async with async_session() as db_sess:
-                for old_key, new_key in [
-                    ("ocr_watchdog_enabled", "ocr_processor_enabled"),
-                    ("ocr_watchdog_interval", "ocr_processor_interval"),
-                ]:
-                    old_val = await get_setting(old_key, db_sess)
-                    if old_val is not None:
-                        new_val = await get_setting(new_key, db_sess)
-                        if new_val is None:
-                            await set_setting(new_key, old_val, "str", db_sess)
-                            logger.info(f"Migrated KV key {old_key} → {new_key}")
-        except Exception as e:
-            logger.warning(f"KV key migration skipped: {e}")
-
-    await _migrate_watchdog_to_processor_kv_keys()
-
     # Get a database session for reading persisted settings
     db_sess = async_session()
 
