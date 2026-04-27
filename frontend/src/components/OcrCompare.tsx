@@ -1,7 +1,6 @@
-import { useState, useEffect, useRef, useCallback } from 'react'
+import { useState, useRef, useCallback } from 'react'
 import {
     FlaskConical,
-    Play,
     Loader2,
     Clock,
     FileText,
@@ -17,18 +16,19 @@ import {
     ThumbsUp,
     ThumbsDown,
     Minus,
-    Plus
+    Plus,
+    Scale
 } from 'lucide-react'
 import clsx from 'clsx'
 import * as api from '../services/api'
+import ProviderModelSelector from './ProviderModelSelector'
 
 export default function OcrCompare() {
     const [docId, setDocId] = useState('')
     const [page, setPage] = useState(1)
-    const [ocrProvider, setOcrProvider] = useState('')
-    const [modelSlots, setModelSlots] = useState<string[]>([''])
-    const [availableModels, setAvailableModels] = useState<string[]>([])
-    const [loadingModels, setLoadingModels] = useState(false)
+    const [benchSlots, setBenchSlots] = useState<{provider: string; model: string}[]>([
+        { provider: '', model: '' }
+    ])
     const [running, setRunning] = useState(false)
     const [status, setStatus] = useState<api.OcrCompareStatus | null>(null)
     const [result, setResult] = useState<api.OcrCompareResponse | null>(null)
@@ -43,45 +43,19 @@ export default function OcrCompare() {
     const [showEvalWarning, setShowEvalWarning] = useState(false)
     const [evalModel, setEvalModel] = useState('')
 
-    useEffect(() => {
-        loadModels()
-        return () => { if (pollRef.current) clearInterval(pollRef.current) }
-    }, [ocrProvider])
+    const updateBenchSlot = (idx: number, newValue: { provider: string; model: string }) => {
+        setBenchSlots(prev => prev.map((s, i) => i === idx ? newValue : s))
+    }
 
-    const loadModels = async () => {
-        if (!ocrProvider) {
-            setAvailableModels([])
-            return
-        }
-        setLoadingModels(true)
-        try {
-            const modelsResult = await api.getLLMProviderModels(ocrProvider)
-            setAvailableModels(modelsResult.models.map(m => m.name))
-        } catch (e: any) {
-            setError('Modelle konnten nicht geladen werden: ' + e.message)
-        } finally {
-            setLoadingModels(false)
+    const addBenchSlot = () => {
+        if (benchSlots.length < 5) {
+            setBenchSlots(prev => [...prev, { provider: '', model: '' }])
         }
     }
 
-    const handleProviderChange = (provider: string) => {
-        setOcrProvider(provider)
-        setModelSlots([''])
-    }
-
-    const updateModelSlot = (idx: number, model: string) => {
-        setModelSlots(prev => prev.map((m, i) => i === idx ? model : m))
-    }
-
-    const addModelSlot = () => {
-        if (modelSlots.length < 5) {
-            setModelSlots(prev => [...prev, ''])
-        }
-    }
-
-    const removeModelSlot = (idx: number) => {
-        if (modelSlots.length > 1) {
-            setModelSlots(prev => prev.filter((_, i) => i !== idx))
+    const removeBenchSlot = (idx: number) => {
+        if (benchSlots.length > 1) {
+            setBenchSlots(prev => prev.filter((_, i) => i !== idx))
         }
     }
 
@@ -127,9 +101,9 @@ export default function OcrCompare() {
             setError('Bitte eine gültige Dokument-ID eingeben')
             return
         }
-        const validModels = modelSlots.filter(m => m !== '')
-        if (validModels.length === 0) {
-            setError('Bitte mindestens ein Modell auswählen')
+        const validSlots = benchSlots.filter(s => s.provider !== '' && s.model !== '')
+        if (validSlots.length === 0) {
+            setError('Bitte mindestens ein Provider/Modell auswählen')
             return
         }
 
@@ -141,7 +115,8 @@ export default function OcrCompare() {
         setExpandedResults(new Set())
 
         try {
-            await api.startOcrCompare(id, validModels, page)
+            const models = validSlots.map(s => s.model)
+            await api.startOcrCompare(id, models, page)
             startPolling()
         } catch (e: any) {
             setError(e.message || 'Vergleich konnte nicht gestartet werden')
@@ -294,108 +269,71 @@ export default function OcrCompare() {
                 </div>
 
                 <div className="p-6 space-y-5">
-                    {/* Document ID + Page Input */}
-                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-                        <div className="sm:col-span-2">
-                            <label className="text-xs font-medium text-surface-400 ml-1 mb-1 block">
-                                Dokument-ID
-                            </label>
-                            <input
-                                type="number"
-                                value={docId}
-                                onChange={(e) => setDocId(e.target.value)}
-                                placeholder="z.B. 42"
-                                className="w-full input bg-surface-900/50 border-surface-700 focus:border-violet-500 text-lg"
-                                disabled={running}
-                                min={1}
-                            />
-                        </div>
-                        <div>
-                            <label className="text-xs font-medium text-surface-400 ml-1 mb-1 block">
-                                Seite (0 = alle)
-                            </label>
-                            <input
-                                type="number"
-                                value={page}
-                                onChange={(e) => setPage(parseInt(e.target.value) || 0)}
-                                placeholder="1"
-                                className="w-full input bg-surface-900/50 border-surface-700 focus:border-violet-500 text-lg"
-                                disabled={running}
-                                min={0}
-                            />
-                        </div>
-                    </div>
-
-                    {/* Provider Selection */}
-                    <div>
-                        <label className="text-xs font-medium text-surface-400 ml-1 mb-2 block">
-                            OCR Provider
-                        </label>
-                        {loadingModels && !availableModels.length ? (
-                            <div className="flex items-center gap-2 text-surface-400 text-sm py-2">
-                                <Loader2 className="w-4 h-4 animate-spin" />
-                                Lade Provider...
-                            </div>
-                        ) : (
-                            <select
-                                value={ocrProvider}
-                                onChange={(e) => handleProviderChange(e.target.value)}
-                                disabled={running}
-                                className="w-full input bg-surface-900/50 border-surface-700 focus:border-violet-500 text-sm"
-                            >
-                                <option value="">-- Provider --</option>
-                                {availableModels.length > 0 && availableModels.map((m) => (
-                                    <option key={m} value={m}>{m}</option>
-                                ))}
-                            </select>
-                        )}
-                    </div>
-
-                    {/* Model Slots - like classifier benchmark */}
-                    <div>
-                        <div className="flex items-center justify-between mb-2">
-                            <label className="text-xs font-medium text-surface-400 ml-1 block">
-                                Modelle (max. 5)
-                            </label>
-                            <span className="text-xs text-surface-500">{modelSlots.length} Modelle</span>
-                        </div>
-
-                        <div className="space-y-2 mb-3">
-                            {modelSlots.map((model, idx) => (
-                                <div key={idx} className="flex items-center gap-2">
+                    {/* Provider/Model Slots - like classifier benchmark */}
+                    <div className="space-y-2 mb-4">
+                        {benchSlots.map((slot, idx) => {
+                            const colors = ['violet', 'emerald', 'sky', 'amber', 'rose', 'teal']
+                            const c = colors[idx % colors.length]
+                            return (
+                                <div key={idx} className="flex items-center gap-2 p-2 rounded-lg border bg-surface-800/50 border-surface-700"
+                                    style={{ borderColor: `var(--color-${c}-500, #8b5cf6)` }}
+                                >
                                     <span className="text-xs font-bold text-surface-400 w-5 shrink-0">{idx + 1}</span>
-                                    <select
-                                        value={model}
-                                        onChange={(e) => updateModelSlot(idx, e.target.value)}
-                                        disabled={running || !ocrProvider}
-                                        className="flex-1 input bg-surface-900/50 border-surface-700 focus:border-violet-500 text-sm font-mono"
-                                    >
-                                        <option value="">-- Modell --</option>
-                                        {availableModels.map((m) => (
-                                            <option key={m} value={m}>{m}</option>
-                                        ))}
-                                    </select>
-                                    {modelSlots.length > 1 && (
-                                        <button
-                                            onClick={() => removeModelSlot(idx)}
-                                            className="p-1 text-surface-500 hover:text-red-400 transition-colors"
-                                            title="Entfernen"
-                                        >
+                                    <ProviderModelSelector
+                                        value={slot}
+                                        onChange={(newValue) => updateBenchSlot(idx, newValue)}
+                                        configuredOnly={true}
+                                    />
+                                    {benchSlots.length > 1 && (
+                                        <button onClick={() => removeBenchSlot(idx)} className="p-1 text-surface-500 hover:text-red-400 transition-colors" title="Entfernen">
                                             <Minus className="w-4 h-4" />
                                         </button>
                                     )}
                                 </div>
-                            ))}
-                        </div>
-
-                        {modelSlots.length < 5 && ocrProvider && (
+                            )
+                        })}
+                        {benchSlots.length < 5 && (
                             <button
-                                onClick={addModelSlot}
+                                onClick={addBenchSlot}
                                 className="flex items-center gap-2 text-sm text-surface-400 hover:text-violet-400 transition-colors p-2 w-full rounded-lg border border-dashed border-surface-700/50 hover:border-violet-500/30"
                             >
                                 <Plus className="w-4 h-4" /> Modell hinzufuegen
                             </button>
                         )}
+                    </div>
+
+                    {/* Document + Page + Start */}
+                    <div className="flex gap-3">
+                        <input
+                            type="number"
+                            value={docId}
+                            onChange={(e) => setDocId(e.target.value)}
+                            placeholder="Dokument-ID eingeben..."
+                            className="input flex-1"
+                            min={1}
+                            disabled={running}
+                        />
+                        <input
+                            type="number"
+                            value={page}
+                            onChange={(e) => setPage(parseInt(e.target.value) || 0)}
+                            placeholder="Seite (0=alle)"
+                            className="input w-32"
+                            min={0}
+                            disabled={running}
+                        />
+                        <button
+                            onClick={startCompare}
+                            disabled={running || !docId || benchSlots.filter(s => s.provider && s.model).length === 0}
+                            className="btn btn-primary flex items-center gap-2"
+                        >
+                            {running ? (
+                                <Loader2 className="w-4 h-4 animate-spin" />
+                            ) : (
+                                <Scale className="w-4 h-4" />
+                            )}
+                            {running ? 'Laeuft...' : 'Vergleichen'}
+                        </button>
                     </div>
 
                     {/* Error */}
@@ -405,25 +343,6 @@ export default function OcrCompare() {
                             {error}
                         </div>
                     )}
-
-                    {/* Start Button */}
-                    <button
-                        onClick={startCompare}
-                        disabled={running || modelSlots.filter(m => m !== '').length === 0 || !docId || !ocrProvider}
-                        className="w-full btn py-4 flex justify-center items-center gap-2 shadow-lg text-lg font-medium bg-violet-600 hover:bg-violet-700 text-white border-0 disabled:opacity-50 disabled:cursor-not-allowed"
-                    >
-                        {running ? (
-                            <>
-                                <Loader2 className="w-5 h-5 animate-spin" />
-                                Vergleich läuft...
-                            </>
-                        ) : (
-                            <>
-                                <Play className="w-5 h-5 fill-current" />
-                                Vergleich starten ({modelSlots.filter(m => m !== '').length} Modell{modelSlots.filter(m => m !== '').length !== 1 ? 'e' : ''})
-                            </>
-                        )}
-                    </button>
 
                     {/* Live Progress */}
                     {running && status && (
