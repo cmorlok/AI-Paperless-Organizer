@@ -129,8 +129,8 @@ export default function OcrSettings() {
                 max_image_size: maxImageSize,
                 smart_skip_enabled: smartSkipEnabled
             })
-            // Save watchdog settings separately
-            await api.setWatchdogSettings(watchdogEnabled, watchdogInterval)
+            // Save processor settings separately
+            await api.setProcessorSettings(watchdogEnabled, watchdogInterval)
         } catch (e) {
             console.error('Failed to save settings', e)
         } finally {

@@ -109,7 +109,7 @@ export default function Layout({ children }: LayoutProps) {
     })
   }, [location.pathname])
   const [batchOcrStatus, setBatchOcrStatus] = useState<api.BatchOcrStatus | null>(null)
-  const [watchdogStatus, setWatchdogStatus] = useState<api.WatchdogStatus | null>(null)
+  const [processorStatus, setProcessorStatus] = useState<api.ProcessorStatus | null>(null)
   const [autoClassifyStatus, setAutoClassifyStatus] = useState<any>(null)
   const [ragIndexStatus, setRagIndexStatus] = useState<any>(null)
   const jobPollRef = useRef<ReturnType<typeof setInterval> | null>(null)
@@ -117,14 +117,14 @@ export default function Layout({ children }: LayoutProps) {
   // Poll active jobs (faster when something is running)
   const pollJobs = async () => {
     try {
-      const [batch, watchdog, autoClassify, ragIdx] = await Promise.all([
+      const [batch, processor, autoClassify, ragIdx] = await Promise.all([
         api.getBatchOcrStatus().catch(() => null),
-        api.getWatchdogStatus().catch(() => null),
+        api.getProcessorStatus().catch(() => null),
         api.fetchJson<any>('/classifier/auto-classify/status').catch(() => null),
         api.fetchJson<any>('/rag/index/status').catch(() => null),
       ])
       setBatchOcrStatus(batch)
-      setWatchdogStatus(watchdog)
+      setProcessorStatus(processor)
       setAutoClassifyStatus(autoClassify)
       setRagIndexStatus(ragIdx)
     } catch {
@@ -136,12 +136,12 @@ export default function Layout({ children }: LayoutProps) {
     pollJobs()
     const schedule = () => {
       if (jobPollRef.current) clearInterval(jobPollRef.current)
-      const isActive = batchOcrStatus?.running || watchdogStatus?.running || autoClassifyStatus?.running
-      jobPollRef.current = setInterval(pollJobs, isActive ? 8000 : 30000)
+    const isActive = batchOcrStatus?.running || processorStatus?.running || autoClassifyStatus?.running
+    jobPollRef.current = setInterval(pollJobs, isActive ? 8000 : 30000)
     }
     schedule()
     return () => { if (jobPollRef.current) clearInterval(jobPollRef.current) }
-  }, [batchOcrStatus?.running, watchdogStatus?.running, autoClassifyStatus?.running])
+  }, [batchOcrStatus?.running, processorStatus?.running, autoClassifyStatus?.running])
 
   useEffect(() => {
     // Load app settings and backend statuses
@@ -310,7 +310,7 @@ export default function Layout({ children }: LayoutProps) {
         </div>
 
         {/* Active background jobs */}
-        {(batchOcrStatus?.running || watchdogStatus?.enabled || autoClassifyStatus?.enabled || ragIndexStatus?.status === 'indexing') && (
+        {(batchOcrStatus?.running || processorStatus?.enabled || autoClassifyStatus?.enabled || ragIndexStatus?.status === 'indexing') && (
           <div className="px-4 py-3 border-b border-surface-700/50 space-y-2">
             <div className="flex items-center gap-1.5 mb-1">
               <Activity className="w-3.5 h-3.5 text-surface-400" />
@@ -404,25 +404,25 @@ export default function Layout({ children }: LayoutProps) {
               </Link>
             )}
 
-            {/* Watchdog status */}
-            {watchdogStatus?.enabled && !batchOcrStatus?.running && (
+            {/* Processor status */}
+            {processorStatus?.enabled && !batchOcrStatus?.running && (
               <Link to="/ocr" className="block group">
                 <div className="flex items-center gap-2 text-sm">
-                  {watchdogStatus.running ? (
+                  {processorStatus.running ? (
                     <Scan className="w-4 h-4 text-cyan-400 animate-pulse flex-shrink-0" />
                   ) : (
                     <Eye className="w-4 h-4 text-surface-400 flex-shrink-0" />
                   )}
                   <span className={clsx(
                     'font-medium truncate',
-                    watchdogStatus.running ? 'text-cyan-300' : 'text-surface-400'
+                    processorStatus.running ? 'text-cyan-300' : 'text-surface-400'
                   )}>
-                    {watchdogStatus.running ? 'Watchdog prüft...' : 'Watchdog aktiv'}
+                    {processorStatus.running ? 'Processor prüft...' : 'Processor aktiv'}
                   </span>
                 </div>
-                {watchdogStatus.last_run && !watchdogStatus.running && (
+                {processorStatus.last_run && !processorStatus.running && (
                   <p className="text-xs text-surface-500 ml-6 mt-0.5">
-                    Zuletzt: {new Date(watchdogStatus.last_run).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' })}
+                    Zuletzt: {new Date(processorStatus.last_run).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' })}
                   </p>
                 )}
               </Link>

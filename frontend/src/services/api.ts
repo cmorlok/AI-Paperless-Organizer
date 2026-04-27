@@ -534,7 +534,7 @@ export interface BatchOcrStatus {
   mode?: string
 }
 
-export interface WatchdogStatus {
+export interface ProcessorStatus {
   enabled: boolean
   running: boolean
   interval_minutes: number
@@ -640,12 +640,12 @@ export const pauseBatchOcr = () =>
 export const resumeBatchOcr = () =>
   fetchJson<{ success: boolean }>('/ocr/batch/resume', { method: 'POST' })
 
-// Watchdog
-export const getWatchdogStatus = () =>
-  fetchJson<WatchdogStatus>('/ocr/watchdog/status')
+// Processor
+export const getProcessorStatus = () =>
+  fetchJson<ProcessorStatus>('/ocr/processor/status')
 
-export const setWatchdogSettings = (enabled: boolean, intervalMinutes: number = 1) =>
-  fetchJson<{ success: boolean }>('/ocr/watchdog/settings', {
+export const setProcessorSettings = (enabled: boolean, intervalMinutes: number = 1) =>
+  fetchJson<{ success: boolean }>('/ocr/processor/settings', {
     method: 'POST',
     body: JSON.stringify({ enabled, interval_minutes: intervalMinutes })
   })
