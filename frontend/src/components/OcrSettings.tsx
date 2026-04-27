@@ -1,51 +1,32 @@
 import { useState, useEffect } from 'react'
-import { Plus, Trash2, Save, Wifi, CheckCircle2, XCircle, Loader2, Server, Clock, Zap, RefreshCw } from 'lucide-react'
+import { Save, Wifi, CheckCircle2, XCircle, Loader2, Server, Clock, Zap } from 'lucide-react'
 import * as api from '../services/api'
 import clsx from 'clsx'
+import ProviderModelSelector from './ProviderModelSelector'
 
 export default function OcrSettings() {
-    const [ollamaUrls, setOllamaUrls] = useState<string[]>(['http://localhost:11434'])
-    const [newUrl, setNewUrl] = useState('')
-    const [ocrModel, setOcrModel] = useState('qwen2.5vl:7b')
+    const [providerModel, setProviderModel] = useState({ provider: 'ollama', model: 'qwen2.5vl:7b' })
     const [loading, setLoading] = useState(true)
     const [saving, setSaving] = useState(false)
     const [testing, setTesting] = useState(false)
     const [connectionStatus, setConnectionStatus] = useState<api.OcrConnectionResult | null>(null)
     const [processorEnabled, setProcessorEnabled] = useState(false)
     const [processorInterval, setProcessorInterval] = useState(5)
-    const [editingIndex, setEditingIndex] = useState<number | null>(null)
-    const [editValue, setEditValue] = useState('')
     const [maxImageSize, setMaxImageSize] = useState(1344)
     const [smartSkipEnabled, setSmartSkipEnabled] = useState(true)
-    const [availableModels, setAvailableModels] = useState<string[]>([])
-    const [loadingModels, setLoadingModels] = useState(false)
 
     useEffect(() => {
         loadSettings()
-        loadModels()
     }, [])
-
-    const loadModels = async () => {
-        setLoadingModels(true)
-        try {
-            const result = await api.getLLMProviderModels("ollama")
-            setAvailableModels(result.models.map(m => m.name) || [])
-        } catch (e) {
-            console.error('Failed to load Ollama models', e)
-        } finally {
-            setLoadingModels(false)
-        }
-    }
 
     const loadSettings = async () => {
         try {
             const settings = await api.getOcrSettings()
-            if (settings.ollama_urls && settings.ollama_urls.length > 0) {
-                setOllamaUrls(settings.ollama_urls)
-            } else {
-                setOllamaUrls([settings.ollama_url])
-            }
-            setOcrModel(settings.model)
+            // OCR provider/model from backend KV store
+            setProviderModel({
+                provider: settings.provider || 'ollama',
+                model: settings.model || 'qwen2.5vl:7b'
+            })
             setMaxImageSize(settings.max_image_size || 1344)
             setSmartSkipEnabled(settings.smart_skip_enabled !== undefined ? settings.smart_skip_enabled : true)
 
@@ -60,72 +41,19 @@ export default function OcrSettings() {
         }
     }
 
-    const addUrl = async () => {
-        if (newUrl && !ollamaUrls.includes(newUrl)) {
-            const updatedUrls = [...ollamaUrls, newUrl]
-            setOllamaUrls(updatedUrls)
-            setNewUrl('')
-            // Auto-save
-            const primaryUrl = updatedUrls.length > 0 ? updatedUrls[0] : 'http://localhost:11434'
-            await api.saveOcrSettings({
-                ollama_url: primaryUrl,
-                ollama_urls: updatedUrls,
-                model: ocrModel,
-                max_image_size: maxImageSize,
-                smart_skip_enabled: smartSkipEnabled
-            })
-        }
-    }
-
-    const removeUrl = async (url: string) => {
-        const updatedUrls = ollamaUrls.filter(u => u !== url)
-        setOllamaUrls(updatedUrls)
-        // Auto-save
-        const primaryUrl = updatedUrls.length > 0 ? updatedUrls[0] : 'http://localhost:11434'
+    const handleProviderModelChange = async (newValue: { provider: string; model: string }) => {
+        setProviderModel(newValue)
+        // Auto-save to backend
         await api.saveOcrSettings({
-            ollama_url: primaryUrl,
-            ollama_urls: updatedUrls,
-            model: ocrModel,
-            max_image_size: maxImageSize,
-            smart_skip_enabled: smartSkipEnabled
+            model: newValue.model
         })
-    }
-
-    const startEditing = (index: number) => {
-        setEditingIndex(index)
-        setEditValue(ollamaUrls[index])
-    }
-
-    const saveEdit = async () => {
-        if (editingIndex !== null && editValue.trim()) {
-            const updatedUrls = [...ollamaUrls]
-            updatedUrls[editingIndex] = editValue.trim()
-            setOllamaUrls(updatedUrls)
-            setEditingIndex(null)
-            // Auto-save
-            const primaryUrl = updatedUrls.length > 0 ? updatedUrls[0] : 'http://localhost:11434'
-            await api.saveOcrSettings({
-                ollama_url: primaryUrl,
-                ollama_urls: updatedUrls,
-                model: ocrModel,
-                max_image_size: maxImageSize,
-                smart_skip_enabled: smartSkipEnabled
-            })
-        }
-    }
-
-    const cancelEdit = () => {
-        setEditingIndex(null)
     }
 
     const saveSettings = async () => {
         setSaving(true)
         try {
-            const primaryUrl = ollamaUrls.length > 0 ? ollamaUrls[0] : 'http://localhost:11434'
             await api.saveOcrSettings({
-                ollama_url: primaryUrl,
-                ollama_urls: ollamaUrls,
-                model: ocrModel,
+                model: providerModel.model,
                 max_image_size: maxImageSize,
                 smart_skip_enabled: smartSkipEnabled
             })
@@ -167,139 +95,20 @@ export default function OcrSettings() {
                         <Server className="w-5 h-5 text-blue-400" />
                     </div>
                     <div>
-                        <h3 className="font-bold text-lg text-white">OCR Server Konfiguration</h3>
-                        <p className="text-sm text-surface-400">Multi-Server Setup & Failover</p>
+                        <h3 className="font-bold text-lg text-white">OCR Einstellungen</h3>
+                        <p className="text-sm text-surface-400">Provider & Modell Auswahl</p>
                     </div>
                 </div>
             </div>
 
             <div className="p-6 space-y-8">
-                {/* URLs List */}
+                {/* Provider & Model Selection */}
                 <div>
-                    <label className="block text-sm font-medium text-surface-300 mb-3">
-                        Ollama Server URLs (Priorität von oben nach unten)
-                    </label>
-                    <div className="space-y-2 mb-3">
-                        {ollamaUrls.map((url, index) => (
-                            <div key={index} className="group flex items-center gap-2 p-2 rounded-lg bg-surface-900/50 border border-surface-700/50 hover:border-surface-600 transition-colors">
-                                <div className="flex-1 px-2 text-sm text-surface-200 flex items-center justify-between font-mono">
-                                    {editingIndex === index ? (
-                                        <div className="flex-1 flex gap-2">
-                                            <input
-                                                type="text"
-                                                value={editValue}
-                                                onChange={(e) => setEditValue(e.target.value)}
-                                                className="flex-1 bg-surface-900 border-blue-500 rounded px-2 py-0.5 text-sm"
-                                                autoFocus
-                                                onKeyDown={(e) => {
-                                                    if (e.key === 'Enter') saveEdit()
-                                                    if (e.key === 'Escape') cancelEdit()
-                                                }}
-                                            />
-                                            <button onClick={saveEdit} className="text-emerald-400 hover:text-emerald-300">Save</button>
-                                            <button onClick={cancelEdit} className="text-surface-500 hover:text-surface-400">Cancel</button>
-                                        </div>
-                                    ) : (
-                                        <>
-                                            <span className="truncate">{url}</span>
-                                            <div className="flex items-center gap-2">
-                                                {index === 0 && (
-                                                    <span className="text-[10px] uppercase font-bold tracking-wider bg-blue-500/20 text-blue-400 px-2 py-0.5 rounded">
-                                                        Primär
-                                                    </span>
-                                                )}
-                                                <button
-                                                    onClick={() => startEditing(index)}
-                                                    className="opacity-0 group-hover:opacity-100 text-[10px] uppercase font-bold text-surface-500 hover:text-white transition-all"
-                                                >
-                                                    Edit
-                                                </button>
-                                            </div>
-                                        </>
-                                    )}
-                                </div>
-                                <button
-                                    onClick={() => removeUrl(url)}
-                                    className="p-1.5 text-surface-500 hover:text-red-400 hover:bg-red-500/10 rounded transition-colors"
-                                    title="Entfernen"
-                                >
-                                    <Trash2 className="w-4 h-4" />
-                                </button>
-                            </div>
-                        ))}
-                    </div>
-
-                    <div className="flex gap-2">
-                        <input
-                            type="text"
-                            value={newUrl}
-                            onChange={(e) => setNewUrl(e.target.value)}
-                            placeholder="http://192.168.1.x:11434"
-                            className="flex-1 input bg-surface-900/50 border-surface-700 focus:border-blue-500 font-mono text-sm"
-                            onKeyDown={(e) => e.key === 'Enter' && addUrl()}
-                        />
-                        <button
-                            onClick={addUrl}
-                            disabled={!newUrl}
-                            className="btn bg-surface-700 hover:bg-surface-600 text-white border-surface-600 px-4 flex items-center gap-2"
-                        >
-                            <Plus className="w-4 h-4" />
-                            <span className="hidden sm:inline">Hinzufügen</span>
-                        </button>
-                    </div>
-                    <p className="text-xs text-surface-500 mt-2 flex items-center gap-1">
-                        <Wifi className="w-3 h-3" />
-                        Automatisch Failover auf Backup-Server bei Verbindungsproblemen.
-                    </p>
-                </div>
-
-                {/* Model */}
-                <div>
-                    <label className="block text-sm font-medium text-surface-300 mb-2">
-                        OCR Modell
-                    </label>
-                    <div className="flex gap-2">
-                        {availableModels.length > 0 ? (
-                            <select
-                                value={ocrModel}
-                                onChange={(e) => setOcrModel(e.target.value)}
-                                className="flex-1 input bg-surface-900/50 border-surface-700 focus:border-blue-500 font-mono text-sm"
-                            >
-                                {!availableModels.includes(ocrModel) && ocrModel && (
-                                    <option value={ocrModel}>{ocrModel} (nicht installiert)</option>
-                                )}
-                                {availableModels.map(m => (
-                                    <option key={m} value={m}>{m}</option>
-                                ))}
-                            </select>
-                        ) : (
-                            <input
-                                type="text"
-                                value={ocrModel}
-                                onChange={(e) => setOcrModel(e.target.value)}
-                                className="flex-1 input bg-surface-900/50 border-surface-700 focus:border-blue-500 font-mono text-sm"
-                                placeholder="qwen3-vl:4b-instruct"
-                            />
-                        )}
-                        <button
-                            onClick={loadModels}
-                            disabled={loadingModels}
-                            className="btn bg-surface-700 hover:bg-surface-600 text-white border-surface-600 px-3"
-                            title="Modelle neu laden"
-                        >
-                            <RefreshCw className={clsx("w-4 h-4", loadingModels && "animate-spin")} />
-                        </button>
-                    </div>
-                    <p className="text-xs text-surface-500 mt-1">
-                        {availableModels.length > 0 ? (
-                            <span><span className="text-surface-300 font-bold">{availableModels.length}</span> Modelle auf Ollama gefunden.</span>
-                        ) : loadingModels ? (
-                            <span>Lade Modelle von Ollama...</span>
-                        ) : (
-                            <span>Keine Verbindung zu Ollama - Modellname manuell eingeben.</span>
-                        )}
-                        {' '}Empfohlen: <span className="text-surface-300 font-mono">qwen3-vl:4b-instruct</span>
-                    </p>
+                    <ProviderModelSelector
+                        value={providerModel}
+                        onChange={handleProviderModelChange}
+                        label="OCR Provider & Modell"
+                    />
                 </div>
 
                 {/* Performance & Quality Settings */}
