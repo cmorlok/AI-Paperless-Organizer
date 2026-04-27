@@ -8,31 +8,6 @@ def _generate_uuid():
     return str(uuid.uuid4())
 
 
-class RagConfig(Base):
-    """RAG system configuration."""
-    __tablename__ = "rag_config"
-
-    id = Column(Integer, primary_key=True, default=1)
-    embedding_provider = Column(String(100), default=None)
-    embedding_model = Column(String(200), default="mxbai-embed-large")
-    chunk_size = Column(Integer, default=500)
-    chunk_overlap = Column(Integer, default=50)
-    bm25_weight = Column(Float, default=0.3)
-    semantic_weight = Column(Float, default=0.7)
-    max_sources = Column(Integer, default=8)
-    max_context_tokens = Column(Integer, default=4000)
-    chat_model_provider = Column(String(100), default=None)
-    chat_model = Column(String(200), default="qwen3.5:4b")
-    chat_system_prompt = Column(Text, default="Du bist ein hilfreicher Assistent, der Fragen zu Dokumenten beantwortet. Antworte basierend auf dem bereitgestellten Kontext. Wenn du die Antwort nicht im Kontext findest, sage das ehrlich.")
-    auto_index_enabled = Column(Boolean, default=False)
-    auto_index_interval = Column(Integer, default=30)
-    query_rewrite_enabled = Column(Boolean, default=True)
-    contextual_retrieval_enabled = Column(Boolean, default=False)
-    rag_enabled = Column(Boolean, default=False)  # Must be actively enabled by user
-    created_at = Column(DateTime, server_default=func.now())
-    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
-
-
 class RagChatSession(Base):
     """A chat session / conversation."""
     __tablename__ = "rag_chat_sessions"
@@ -66,6 +41,27 @@ class RagIndexingState(Base):
     last_indexed_at = Column(DateTime, nullable=True)
     error_message = Column(Text, default="")
     indexed_doc_ids = Column(Text, default="[]")  # JSON array of indexed Paperless doc IDs
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
+
+
+class RagConfig(Base):
+    """RAG system configuration (non-provider fields only; provider/model migrated to KV)."""
+    __tablename__ = "rag_config"
+
+    id = Column(Integer, primary_key=True, default=1)
+    chunk_size = Column(Integer, default=500)
+    chunk_overlap = Column(Integer, default=50)
+    bm25_weight = Column(Float, default=0.3)
+    semantic_weight = Column(Float, default=0.7)
+    max_sources = Column(Integer, default=8)
+    max_context_tokens = Column(Integer, default=4000)
+    chat_system_prompt = Column(Text, default="Du bist ein hilfreicher Assistent, der Fragen zu Dokumenten beantwortet. Antworte basierend auf dem bereitgestellten Kontext. Wenn du die Antwort nicht im Kontext findest, sage das ehrlich.")
+    auto_index_enabled = Column(Boolean, default=False)
+    auto_index_interval = Column(Integer, default=30)
+    query_rewrite_enabled = Column(Boolean, default=True)
+    contextual_retrieval_enabled = Column(Boolean, default=False)
+    rag_enabled = Column(Boolean, default=False)
+    created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
 
 

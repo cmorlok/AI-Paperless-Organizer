@@ -611,27 +611,25 @@ class RAGService:
 
     async def get_config_dict(self) -> dict:
         config = await self._get_config()
-        
-        # Merge RagConfig DB values with AppSettings key-value overrides (LLM-08)
-        from app.models.settings_model import LLM_KEY_CLASSIFIER_PROVIDER, LLM_KEY_CLASSIFIER_MODEL
 
         async with self.session_factory() as db:
             from app.routers.settings import get_setting
-            chat_provider = await get_setting(LLM_KEY_CLASSIFIER_PROVIDER, db)
-            chat_model = await get_setting(LLM_KEY_CLASSIFIER_MODEL, db)
-        
+            emb_provider = await get_setting("rag_embedding_provider", db)
+            emb_model = await get_setting("rag_embedding_model", db)
+            chat_provider = await get_setting("rag_chat_provider", db)
+            chat_model = await get_setting("rag_chat_model", db)
+
         return {
-            "embedding_provider": config.embedding_provider,
-            "embedding_model": config.embedding_model,
+            "embedding_provider": emb_provider or config.embedding_provider or "",
+            "embedding_model": emb_model or config.embedding_model or "",
             "chunk_size": config.chunk_size,
             "chunk_overlap": config.chunk_overlap,
             "bm25_weight": config.bm25_weight,
             "semantic_weight": config.semantic_weight,
             "max_sources": config.max_sources,
             "max_context_tokens": config.max_context_tokens,
-            # Use key-value store first, fall back to RagConfig (LLM-08)
-            "chat_model_provider": chat_provider or config.chat_model_provider or "openai",
-            "chat_model": chat_model or config.chat_model or "gpt-4o-mini",
+            "chat_model_provider": chat_provider or config.chat_model_provider or "",
+            "chat_model": chat_model or config.chat_model or "",
             "chat_system_prompt": config.chat_system_prompt,
             "auto_index_enabled": config.auto_index_enabled,
             "auto_index_interval": config.auto_index_interval,
@@ -640,6 +638,8 @@ class RAGService:
         }
 
     async def update_config(self, updates: dict) -> dict:
+        from app.routers.settings import set_setting
+
         async with self.session_factory() as db:
             result = await db.execute(sa_select(RagConfig).where(RagConfig.id == 1))
             config = result.scalar_one_or_none()
@@ -647,16 +647,21 @@ class RAGService:
                 config = RagConfig(id=1)
                 db.add(config)
 
-            allowed = {
+            kv_keys = {
                 "embedding_provider", "embedding_model",
-                "chunk_size", "chunk_overlap", "bm25_weight", "semantic_weight",
-                "max_sources", "max_context_tokens", "chat_model_provider",
-                "chat_model", "chat_system_prompt", "auto_index_enabled",
-                "auto_index_interval", "query_rewrite_enabled",
-                "contextual_retrieval_enabled",
+                "chat_model_provider", "chat_model",
             }
+            db_keys = {
+                "chunk_size", "chunk_overlap", "bm25_weight", "semantic_weight",
+                "max_sources", "max_context_tokens", "chat_system_prompt",
+                "auto_index_enabled", "auto_index_interval",
+                "query_rewrite_enabled", "contextual_retrieval_enabled",
+            }
+
             for key, value in updates.items():
-                if key in allowed and hasattr(config, key):
+                if key in kv_keys:
+                    await set_setting(f"rag_{key}", value, db)
+                elif key in db_keys and hasattr(config, key):
                     setattr(config, key, value)
 
             await db.commit()
