@@ -40,73 +40,19 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-# Persistent OCR settings file
-SETTINGS_FILE = Path("/app/data/ocr_settings.json")
-
 
 def load_ocr_settings() -> dict:
-    """Load OCR settings from file + key-value store (LLM-08), or return defaults."""
-    # OCR provider/model now come from KV store at runtime; file kept only for backward compat
-    defaults = {
+    """Load OCR settings defaults."""
+    return {
         "model": DEFAULT_OCR_MODEL,
         "max_image_size": 1344,
         "smart_skip_enabled": True
     }
-    
-    # Load from file (legacy, for migration only)
-    file_settings = {}
-    if SETTINGS_FILE.exists():
-        try:
-            with open(SETTINGS_FILE, "r") as f:
-                file_settings = json.load(f)
-        except Exception:
-            pass
-    
-    return {**defaults, **file_settings}
-
-
-def reload_ocr_settings_with_kv(db) -> dict:
-    """Reload settings with KV store overrides. Call from async context."""
-    import asyncio
-    from app.routers.settings import get_setting
-    from app.models.settings_model import LLM_KEY_OCR_MODEL, LLM_KEY_OCR_PROVIDER
-    
-    settings = load_ocr_settings()
-    
-    async def _load_kv():
-        model = await get_setting(LLM_KEY_OCR_MODEL, db)
-        provider = await get_setting(LLM_KEY_OCR_PROVIDER, db)
-        return model, provider
-    
-    model, provider = asyncio.get_running_loop().run_until_complete(_load_kv())
-    
-    if model:
-        settings["model"] = model
-    if provider:
-        settings["ollama_url"] = provider
-        if "ollama_urls" not in settings:
-            settings["ollama_urls"] = [provider]
-    
-    return settings
-
-
-def save_ocr_settings_to_file(settings: dict):
-    """Save OCR settings to file."""
-    SETTINGS_FILE.parent.mkdir(parents=True, exist_ok=True)
-    with open(SETTINGS_FILE, "w") as f:
-        json.dump(settings, f)
-
-
-# Load on startup
-ocr_settings = load_ocr_settings()
 
 
 # --- Pydantic Models ---
 
 class OcrSettingsRequest(BaseModel):
-    # ollama_url/ollama_urls deprecated - provider comes from KV store now
-    ollama_url: str = ""
-    ollama_urls: Optional[List[str]] = None
     model: str = DEFAULT_OCR_MODEL
     max_image_size: int = 1344
     smart_skip_enabled: bool = True
@@ -144,7 +90,7 @@ class OcrEvaluateRequest(BaseModel):
 @inject
 async def get_ocr_settings(state: FromDishka[OcrState] = None):
     """Get current OCR settings."""
-    settings = ocr_settings.copy()
+    settings = load_ocr_settings()
     settings["processor_enabled"] = state.processor.enabled
     settings["processor_interval"] = state.processor.interval_minutes
     return settings
