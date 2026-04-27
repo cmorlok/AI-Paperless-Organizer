@@ -14,7 +14,8 @@ from app.models.settings_model import (
 from dishka.integrations.fastapi import inject
 from dishka import FromDishka
 
-from app.services.llm.service import LitellmService, PROVIDER_DISPLAY_NAMES
+from app.services.llm.protocol import LLMService
+from app.services.llm.service import PROVIDER_DISPLAY_NAMES
 from app.prompts.default_prompts import DEFAULT_PROMPTS
 
 router = APIRouter()
@@ -167,7 +168,7 @@ async def get_llm_providers_from_db(db: AsyncSession = Depends(get_db)):
 @router.get("/llm-providers")
 @inject
 async def get_llm_providers_from_litellm(
-    llm_service: FromDishka[LitellmService] = None,
+    llm_service: FromDishka[LLMService] = None,
 ):
     """Get all LiteLLM-supported providers."""
     return llm_service.list_providers()
@@ -177,7 +178,7 @@ async def get_llm_providers_from_litellm(
 @inject
 async def get_llm_provider_models(
     provider: str,
-    llm_service: FromDishka[LitellmService] = None,
+    llm_service: FromDishka[LLMService] = None,
 ):
     """Get available models for a specific LiteLLM provider."""
     try:
