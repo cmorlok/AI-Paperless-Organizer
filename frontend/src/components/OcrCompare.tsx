@@ -19,10 +19,12 @@ import {
 } from 'lucide-react'
 import clsx from 'clsx'
 import * as api from '../services/api'
+import ProviderModelSelector from './ProviderModelSelector'
 
 export default function OcrCompare() {
     const [docId, setDocId] = useState('')
     const [page, setPage] = useState(1)
+    const [ocrProviderModel, setOcrProviderModel] = useState({ provider: 'ollama', model: '' })
     const [availableModels, setAvailableModels] = useState<string[]>([])
     const [currentModel, setCurrentModel] = useState('')
     const [selectedModels, setSelectedModels] = useState<string[]>([])
@@ -45,25 +47,29 @@ export default function OcrCompare() {
     useEffect(() => {
         loadModels()
         return () => { if (pollRef.current) clearInterval(pollRef.current) }
-    }, [])
+    }, [ocrProviderModel.provider])
 
     const loadModels = async () => {
         setLoadingModels(true)
         try {
-            const settingsResult = await api.getOcrSettings()
-            const provider = settingsResult.provider || 'ollama'
-            const modelsResult = await api.getLLMProviderModels(provider)
+            const modelsResult = await api.getLLMProviderModels(ocrProviderModel.provider)
             setAvailableModels(modelsResult.models.map(m => m.name))
-            const current = settingsResult.model
-            setCurrentModel(current)
-            if (current && modelsResult.models.some(m => m.name === current)) {
-                setSelectedModels([current])
+            if (ocrProviderModel.model && modelsResult.models.some(m => m.name === ocrProviderModel.model)) {
+                setSelectedModels([ocrProviderModel.model])
+                setCurrentModel(ocrProviderModel.model)
+            } else if (modelsResult.models.length > 0) {
+                setSelectedModels([modelsResult.models[0].name])
+                setCurrentModel(modelsResult.models[0].name)
             }
         } catch (e: any) {
             setError('Modelle konnten nicht geladen werden: ' + e.message)
         } finally {
             setLoadingModels(false)
         }
+    }
+
+    const handleProviderModelChange = (newValue: { provider: string; model: string }) => {
+        setOcrProviderModel(newValue)
     }
 
     const toggleModel = (model: string) => {
@@ -314,6 +320,18 @@ export default function OcrCompare() {
                                 min={0}
                             />
                         </div>
+                    </div>
+
+                    {/* Provider & Model Selection */}
+                    <div>
+                        <label className="text-xs font-medium text-surface-400 ml-1 mb-2 block">
+                            OCR Provider & Modell
+                        </label>
+                        <ProviderModelSelector
+                            value={ocrProviderModel}
+                            onChange={handleProviderModelChange}
+                            configuredOnly={true}
+                        />
                     </div>
 
                     {/* Model Picker */}
