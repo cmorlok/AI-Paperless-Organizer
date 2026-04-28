@@ -436,7 +436,7 @@ class OcrService:
                 {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{image_b64}"}},
             ]
 
-            result = await self.llm_service.complete_llm(
+            result = await self.llm_service.complete(
                 provider=await self._get_provider(),
                 model=model,
                 messages=[

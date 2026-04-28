@@ -451,12 +451,12 @@ class RAGService:
         yield json.dumps({"type": "done"})
 
     async def _stream_llm(self, config: RagConfig, messages: list) -> AsyncGenerator[str, None]:
-        """Stream LLM response via stream_llm — yields str chunks directly."""
+        """Stream LLM response via stream — yields str chunks directly."""
         model_name = config.chat_model or "gpt-4o-mini"
         provider_name = getattr(config, "chat_model_provider", "openai") or "openai"
 
         try:
-            async for token in await self.llm_service.stream_llm(
+            async for token in await self.llm_service.stream(
                 provider=provider_name,
                 model=model_name,
                 messages=messages,
@@ -512,7 +512,7 @@ class RAGService:
         provider_name = getattr(config, "chat_model_provider", "openai") or "openai"
 
         try:
-            result = await self.llm_service.complete_llm(
+            result = await self.llm_service.complete(
                 provider=provider_name,
                 model=model_name,
                 messages=messages,

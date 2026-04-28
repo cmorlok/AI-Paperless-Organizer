@@ -106,13 +106,13 @@ class SimilarityService:
     async def _analyze_batch(self, items: List[Dict], prompt_template: str) -> Dict:
         """Analyze a single batch of items."""
         provider, model = await self._get_llm_config()
-        return await self.llm.analyze_for_similarity(provider, model, prompt_template, items)
+        return await self.llm._analyze_for_similarity(provider, model, prompt_template, items)
     
     async def _analyze_with_batching(self, all_items: List[Dict], prompt_template: str, batch_size: int = 200) -> Dict:
         """Analyze items - batch only if token limit exceeded."""
         
         # Get token limit from LLM provider
-        token_limit = self.llm.get_token_limit()
+        token_limit = self.llm._get_token_limit()
         
         # Estimate tokens for all items
         items_str = json.dumps([item["name"] for item in all_items], ensure_ascii=False)
@@ -289,7 +289,7 @@ Beispiel: Wenn "1&1" in einer Gruppe ist und "1und1 Internet" ungruppiert, sollt
 Wenn nichts zusammengehört: {{"group_merges": [], "add_to_groups": []}}"""
 
         try:
-            result = await self.llm.complete_llm(
+            result = await self.llm.complete(
                 provider=self.llm.provider.name,
                 model=self.llm.model,
                 messages=[{"role": "user", "content": cross_batch_prompt}],
@@ -450,7 +450,7 @@ Wenn nichts zusammengehört: {{"group_merges": [], "add_to_groups": []}}"""
         
         # Token estimation
         estimated_input_tokens = self.llm.estimate_tokens(prompt)
-        token_limit = self.llm.get_token_limit()
+        token_limit = self.llm._get_token_limit()
         safe_limit = int(token_limit * 0.8)
         
         stats = {
@@ -466,7 +466,7 @@ Wenn nichts zusammengehört: {{"group_merges": [], "add_to_groups": []}}"""
             stats["warning"] = f"Prompt sehr groß ({estimated_input_tokens} Tokens)! Könnte Token-Limit ({token_limit}) überschreiten."
         
         try:
-            result = await self.llm.complete_llm(
+            result = await self.llm.complete(
                 provider=self.llm.provider.name,
                 model=self.llm.model,
                 messages=[{"role": "user", "content": prompt}],
@@ -545,7 +545,7 @@ Wenn nichts zusammengehört: {{"group_merges": [], "add_to_groups": []}}"""
         
         # Token estimation
         estimated_input_tokens = self.llm.estimate_tokens(prompt)
-        token_limit = self.llm.get_token_limit()
+        token_limit = self.llm._get_token_limit()
         safe_limit = int(token_limit * 0.8)
         
         stats = {
@@ -560,7 +560,7 @@ Wenn nichts zusammengehört: {{"group_merges": [], "add_to_groups": []}}"""
             stats["warning"] = f"Prompt sehr groß ({estimated_input_tokens} Tokens)! Könnte Token-Limit ({token_limit}) überschreiten."
         
         try:
-            result = await self.llm.complete_llm(
+            result = await self.llm.complete(
                 provider=self.llm.provider.name,
                 model=self.llm.model,
                 messages=[{"role": "user", "content": prompt}],
@@ -643,7 +643,7 @@ Wenn nichts zusammengehört: {{"group_merges": [], "add_to_groups": []}}"""
         
         # Token estimation
         estimated_input_tokens = self.llm.estimate_tokens(prompt)
-        token_limit = self.llm.get_token_limit()
+        token_limit = self.llm._get_token_limit()
         safe_limit = int(token_limit * 0.8)
         
         stats = {
@@ -658,7 +658,7 @@ Wenn nichts zusammengehört: {{"group_merges": [], "add_to_groups": []}}"""
             stats["warning"] = f"Prompt sehr groß ({estimated_input_tokens} Tokens)! Könnte Token-Limit ({token_limit}) überschreiten."
         
         try:
-            result = await self.llm.complete_llm(
+            result = await self.llm.complete(
                 provider=self.llm.provider.name,
                 model=self.llm.model,
                 messages=[{"role": "user", "content": prompt}],

@@ -164,7 +164,7 @@ async def _extract_invoice_data(content: str, model: str, provider: str, llm_ser
     )
 
     try:
-        result = await llm_service.complete_llm(
+        result = await llm_service.complete(
             provider=provider,
             model=model,
             messages=[{"role": "user", "content": prompt}],

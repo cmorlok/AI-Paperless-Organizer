@@ -123,7 +123,7 @@ class LitellmToolCallingProvider(BaseClassifierProvider):
 
     async def test_connection(self) -> Dict[str, Any]:
         try:
-            await self.llm_service.complete_llm(
+            await self.llm_service.complete(
                 provider=self.provider,
                 model=self.model,
                 messages=[{"role": "user", "content": "Ping"}],
@@ -190,7 +190,7 @@ class LitellmToolCallingProvider(BaseClassifierProvider):
 
         try:
             for _round in range(MAX_TOOL_ROUNDS):
-                result = await self.llm_service.complete_llm(
+                result = await self.llm_service.complete(
                     provider=self.provider,
                     model=self.model,
                     messages=messages,
@@ -400,7 +400,7 @@ class LitellmOllamaProvider(BaseClassifierProvider):
 
     async def test_connection(self) -> Dict[str, Any]:
         try:
-            await self.llm_service.complete_llm(
+            await self.llm_service.complete(
                 provider=self.provider,
                 model=self.model,
                 messages=[{"role": "user", "content": "Ping"}],
@@ -907,7 +907,7 @@ class LitellmOllamaProvider(BaseClassifierProvider):
             messages.append({"role": "user", "content": user_message})
 
         try:
-            result = await self.llm_service.complete_llm(
+            result = await self.llm_service.complete(
                 provider=self.provider,
                 model=self.model,
                 messages=messages,
@@ -930,7 +930,7 @@ class LitellmOllamaProvider(BaseClassifierProvider):
             # since LiteLLM normalizes the error.
             if json_schema is not None and ("format" in str(e).lower() or "schema" in str(e).lower()):
                 logger.warning(f"Ollama schema enforcement rejected, retrying without schema: {e}")
-                result = await self.llm_service.complete_llm(
+                result = await self.llm_service.complete(
                     provider=self.provider,
                     model=self.model,
                     messages=messages,
@@ -973,7 +973,7 @@ class LitellmOllamaProvider(BaseClassifierProvider):
         messages = [{"role": "user", "content": raw_prompt}]
 
         try:
-            result = await self.llm_service.complete_llm(
+            result = await self.llm_service.complete(
                 provider=self.provider,
                 model=self.model,
                 messages=messages,
@@ -993,7 +993,7 @@ class LitellmOllamaProvider(BaseClassifierProvider):
             # Schema fallback for thinking models too
             if json_schema is not None and ("format" in str(e).lower() or "schema" in str(e).lower()):
                 logger.warning(f"Ollama generate schema rejected, retrying without schema: {e}")
-                result = await self.llm_service.complete_llm(
+                result = await self.llm_service.complete(
                     provider=self.provider,
                     model=self.model,
                     messages=messages,

@@ -1138,7 +1138,7 @@ WICHTIG:
         used_model = eval_model or "gpt-4o"
         print(f"[Evaluate] Sending {len(results)} OCR results to {llm_service.provider.name} / {used_model}")
         
-        result = await llm_service.complete_llm(
+        result = await llm_service.complete(
             provider=llm_service.provider.name,
             model=eval_model,
             messages=[{"role": "user", "content": prompt}],

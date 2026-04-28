@@ -277,224 +277,12 @@ class LitellmService:
     }
 
     def __init__(self):
-        # Register LiteLLM callbacks on construction (idempotent)
         _register_litellm_callbacks()
-        # Per-provider lock dict for local LLM serialization
         self._locks: defaultdict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
-
-    # ── Private helpers ────────────────────────────────────────────────────────
-
-    def _is_local_provider(self, provider: str) -> bool:
-        """Check if provider is a local LLM (needs GPU lock serialization)."""
-        if not provider:
-            return False
-        provider_lower = provider.lower().split("/")[0]
-        return provider_lower in self._LOCAL_LLM_PROVIDERS
-
-    @staticmethod
-    def _extract_litellm_error(exc: Exception) -> str:
-        """Extract full error details from a litellm exception."""
-        parts = [str(exc)]
-        resp = getattr(exc, "response", None)
-        if resp is not None:
-            try:
-                body = resp.text if hasattr(resp, "text") else ""
-                if body:
-                    parts.append(f"Response body: {body[:2000]}")
-            except Exception:
-                pass
-            try:
-                status = resp.status_code if hasattr(resp, "status_code") else ""
-                parts.append(f"Response status: {status}")
-            except Exception:
-                pass
-        for attr in ("llm_provider", "model", "status_code", "body", "litellm_debug_info"):
-            val = getattr(exc, attr, None)
-            if val is not None:
-                parts.append(f"{attr}: {val}")
-        return " | ".join(parts)
-
-    @staticmethod
-    def _log_llm_error(msg: str, exc: Exception) -> None:
-        """Log error with full details + traceback via print() (bypasses uvicorn log suppression)."""
-        detail = LitellmService._extract_litellm_error(exc)
-        tb = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
-        print(f"ERROR app.services.llm.service: {msg}: {detail}\n{tb}", flush=True)
-        logger.error("%s: %s", msg, detail, exc_info=True)
-
-    async def _resolve_credentials(self, provider: str) -> dict:
-        """Look up api_key, api_base, and extra_headers for a provider from llm_providers table."""
-        async with async_session() as db:
-            result = await db.execute(select(LLMProvider).where(LLMProvider.name == provider))
-            llm = result.scalar_one_or_none()
-        creds: dict = {}
-        if llm:
-            if llm.api_key:
-                creds["api_key"] = llm.api_key
-            if llm.api_base_url:
-                api_base = llm.api_base_url.rstrip("/")
-                if provider in ("lm_studio", "vllm") and not api_base.endswith("/v1"):
-                    api_base = f"{api_base}/v1"
-                creds["api_base"] = api_base
-        if provider in self._PROVIDER_EXTRA_HEADERS:
-            creds["extra_headers"] = self._PROVIDER_EXTRA_HEADERS[provider]
-        return creds
-
-    def _build_ollama_extra_body(
-        self,
-        temperature: float = 0.0,
-        top_p: float = 0.1,
-        num_ctx: int = 16384,
-        num_predict: Optional[int] = None,
-        keep_alive: Optional[str] = None,
-        think: Optional[bool] = None,
-        json_schema: Optional[Dict[str, Any]] = None,
-        json_output: bool = False,
-        seed: Optional[int] = None,
-        repeat_penalty: Optional[float] = None,
-    ) -> Dict[str, Any]:
-        """Build the extra_body dict for Ollama calls via LiteLLM.
-
-        Per D-01: model params go in extra_body['options'].
-        'keep_alive' and 'think' are top-level keys.
-        'format' carries a JSON schema or the string "json" for structured output.
-        """
-        options: Dict[str, Any] = {"temperature": temperature, "top_p": top_p, "num_ctx": num_ctx}
-        if num_predict is not None:
-            options["num_predict"] = num_predict
-        if seed is not None:
-            options["seed"] = seed
-        if repeat_penalty is not None:
-            options["repeat_penalty"] = repeat_penalty
-
-        body: Dict[str, Any] = {"options": options}
-        if keep_alive is not None:
-            body["keep_alive"] = keep_alive
-        if think is not None:
-            body["think"] = think
-        if json_schema is not None:
-            body["format"] = json_schema
-        elif json_output:
-            body["format"] = "json"
-        return body
-
-    async def _prepare_kwargs(
-        self,
-        provider: str,
-        model: str,
-        messages: list,
-        *,
-        temperature: float = 0.0,
-        top_p: float = 0.1,
-        timeout: float = 30.0,
-        tools: list | None = None,
-        num_ctx: int | None = None,
-        num_predict: int | None = None,
-        keep_alive: str | None = None,
-        think: bool | None = None,
-        seed: int | None = None,
-        repeat_penalty: float | None = None,
-        json_output: bool = False,
-        json_schema: dict | None = None,
-        stream: bool = False,
-        **kwargs,
-    ) -> dict:
-        """Build complete litellm.acompletion kwargs dict."""
-        model_name = model if "/" in model else f"{provider}/{model}"
-        litellm_kwargs: dict = {
-            "model": model_name,
-            "messages": messages,
-            "temperature": temperature,
-            "top_p": top_p,
-            "timeout": timeout,
-            "stream": stream,
-            **kwargs,
-        }
-        if tools:
-            litellm_kwargs["tools"] = tools
-        # Ollama-specific extra_body (only when provider is ollama variant)
-        if provider in ("ollama", "ollama_chat") and "extra_body" not in kwargs:
-            litellm_kwargs["extra_body"] = self._build_ollama_extra_body(
-                temperature=temperature,
-                top_p=top_p,
-                num_ctx=num_ctx or 16384,
-                num_predict=num_predict,
-                keep_alive=keep_alive,
-                think=think,
-                json_schema=json_schema,
-                json_output=json_output,
-                seed=seed,
-                repeat_penalty=repeat_penalty,
-            )
-        # Merge provider credentials (api_key, api_base, extra_headers)
-        for k, v in (await self._resolve_credentials(provider)).items():
-            litellm_kwargs.setdefault(k, v)
-        return litellm_kwargs
-
-    async def _execute_completion(self, provider: str, litellm_kwargs: dict):
-        """Acquire per-provider GPU lock for local providers, then call litellm.acompletion."""
-        timeout = litellm_kwargs.get("timeout", 30.0)
-        if not self._is_local_provider(provider):
-            try:
-                return await litellm.acompletion(**litellm_kwargs)
-            except Exception as e:
-                LitellmService._log_llm_error(
-                    f"_execute_completion failed (provider={provider})", e)
-                raise
-        lock = self._locks[provider]
-        try:
-            async with asyncio.timeout(timeout):
-                async with lock:
-                    try:
-                        return await litellm.acompletion(**litellm_kwargs)
-                    except Exception as e:
-                        LitellmService._log_llm_error(
-                            f"_execute_completion failed (provider={provider})", e)
-                        raise
-        except asyncio.TimeoutError:
-            raise LLMLockTimeoutError(
-                f"Local LLM {provider} busy (held by another background job). "
-                "Try again in a moment."
-            )
-
-    def _build_response(self, raw) -> "LLMResponse":
-        """Convert raw litellm response into LLMResponse."""
-        from app.services.llm.types import LLMResponse, ToolCall
-        choice = raw.choices[0]
-        usage = raw.usage
-        input_tokens = (usage.prompt_tokens or 0) if usage else 0
-        output_tokens = (usage.completion_tokens or 0) if usage else 0
-        finish_reason = choice.finish_reason
-
-        if finish_reason == "tool_calls" and choice.message.tool_calls:
-            tool_calls = [
-                ToolCall(id=tc.id, name=tc.function.name, arguments=tc.function.arguments)
-                for tc in choice.message.tool_calls
-            ]
-            raw_msg = choice.message.model_dump(exclude_none=True)
-            clean_msg: dict = {"role": raw_msg["role"]}
-            if raw_msg.get("content"):
-                clean_msg["content"] = raw_msg["content"]
-            if raw_msg.get("tool_calls"):
-                clean_msg["tool_calls"] = raw_msg["tool_calls"]
-            return LLMResponse(
-                content=None,
-                input_tokens=input_tokens,
-                output_tokens=output_tokens,
-                finish_reason=finish_reason,
-                tool_calls=tool_calls,
-                assistant_message=clean_msg,
-            )
-        return LLMResponse(
-            content=choice.message.content,
-            input_tokens=input_tokens,
-            output_tokens=output_tokens,
-            finish_reason=finish_reason,
-        )
 
     # ── Public API ─────────────────────────────────────────────────────────────
 
-    async def complete_llm(
+    async def complete(
         self,
         provider: str,
         model: str,
@@ -527,7 +315,7 @@ class LitellmService:
         raw = await self._execute_completion(provider, litellm_kwargs)
         return self._build_response(raw)
 
-    async def stream_llm(
+    async def stream(
         self,
         provider: str,
         model: str,
@@ -602,7 +390,7 @@ class LitellmService:
             return []
 
     async def list_models(self, provider: str) -> list[dict]:
-        """List available models for a provider. Uses own session_factory for DB lookup."""
+        """List available models for a provider. Queries the provider's API or falls back to LiteLLM registry."""
         async with async_session() as db:
             result = await db.execute(
                 select(LLMProvider).where(LLMProvider.name == provider)
@@ -653,7 +441,7 @@ class LitellmService:
 
     async def test_connection(self, provider: str, model: str) -> dict:
         """Test connection to the LLM provider."""
-        result = await self.complete_llm(
+        result = await self.complete(
             provider=provider,
             model=model,
             messages=[{"role": "user", "content": "Antworte nur mit: OK"}],
@@ -664,6 +452,14 @@ class LitellmService:
             "response": (result.content or "").strip(),
         }
 
+    def estimate_tokens(self, text: str, model: Optional[str] = None) -> int:
+        """Estimate token count using LiteLLM's token counter."""
+        model_for_count = model or "gpt-4"
+        try:
+            return litellm.token_counter(model=model_for_count, text=text)
+        except Exception:
+            return len(text) // 4
+
     def get_lock_status(self) -> dict[str, dict]:
         """Get current lock status for all local LLM providers."""
         status = {}
@@ -671,9 +467,174 @@ class LitellmService:
             status[prov] = {"locked": lock.locked()}
         return status
 
+    # ── Private helpers ────────────────────────────────────────────────────────
+
+    def _is_local_provider(self, provider: str) -> bool:
+        if not provider:
+            return False
+        provider_lower = provider.lower().split("/")[0]
+        return provider_lower in self._LOCAL_LLM_PROVIDERS
+
+    async def _resolve_credentials(self, provider: str) -> dict:
+        async with async_session() as db:
+            result = await db.execute(select(LLMProvider).where(LLMProvider.name == provider))
+            llm = result.scalar_one_or_none()
+        creds: dict = {}
+        if llm:
+            if llm.api_key:
+                creds["api_key"] = llm.api_key
+            if llm.api_base_url:
+                api_base = llm.api_base_url.rstrip("/")
+                if provider in ("lm_studio", "vllm") and not api_base.endswith("/v1"):
+                    api_base = f"{api_base}/v1"
+                creds["api_base"] = api_base
+        if provider in self._PROVIDER_EXTRA_HEADERS:
+            creds["extra_headers"] = self._PROVIDER_EXTRA_HEADERS[provider]
+        return creds
+
+    def _build_ollama_extra_body(
+        self,
+        temperature: float = 0.0,
+        top_p: float = 0.1,
+        num_ctx: int = 16384,
+        num_predict: Optional[int] = None,
+        keep_alive: Optional[str] = None,
+        think: Optional[bool] = None,
+        json_schema: Optional[Dict[str, Any]] = None,
+        json_output: bool = False,
+        seed: Optional[int] = None,
+        repeat_penalty: Optional[float] = None,
+    ) -> Dict[str, Any]:
+        options: Dict[str, Any] = {"temperature": temperature, "top_p": top_p, "num_ctx": num_ctx}
+        if num_predict is not None:
+            options["num_predict"] = num_predict
+        if seed is not None:
+            options["seed"] = seed
+        if repeat_penalty is not None:
+            options["repeat_penalty"] = repeat_penalty
+
+        body: Dict[str, Any] = {"options": options}
+        if keep_alive is not None:
+            body["keep_alive"] = keep_alive
+        if think is not None:
+            body["think"] = think
+        if json_schema is not None:
+            body["format"] = json_schema
+        elif json_output:
+            body["format"] = "json"
+        return body
+
+    async def _prepare_kwargs(
+        self,
+        provider: str,
+        model: str,
+        messages: list,
+        *,
+        temperature: float = 0.0,
+        top_p: float = 0.1,
+        timeout: float = 30.0,
+        tools: list | None = None,
+        num_ctx: int | None = None,
+        num_predict: int | None = None,
+        keep_alive: str | None = None,
+        think: bool | None = None,
+        seed: int | None = None,
+        repeat_penalty: float | None = None,
+        json_output: bool = False,
+        json_schema: dict | None = None,
+        stream: bool = False,
+        **kwargs,
+    ) -> dict:
+        model_name = model if "/" in model else f"{provider}/{model}"
+        litellm_kwargs: dict = {
+            "model": model_name,
+            "messages": messages,
+            "temperature": temperature,
+            "top_p": top_p,
+            "timeout": timeout,
+            "stream": stream,
+            **kwargs,
+        }
+        if tools:
+            litellm_kwargs["tools"] = tools
+        if provider in ("ollama", "ollama_chat") and "extra_body" not in kwargs:
+            litellm_kwargs["extra_body"] = self._build_ollama_extra_body(
+                temperature=temperature,
+                top_p=top_p,
+                num_ctx=num_ctx or 16384,
+                num_predict=num_predict,
+                keep_alive=keep_alive,
+                think=think,
+                json_schema=json_schema,
+                json_output=json_output,
+                seed=seed,
+                repeat_penalty=repeat_penalty,
+            )
+        for k, v in (await self._resolve_credentials(provider)).items():
+            litellm_kwargs.setdefault(k, v)
+        return litellm_kwargs
+
+    async def _execute_completion(self, provider: str, litellm_kwargs: dict):
+        timeout = litellm_kwargs.get("timeout", 30.0)
+        if not self._is_local_provider(provider):
+            try:
+                return await litellm.acompletion(**litellm_kwargs)
+            except Exception as e:
+                LitellmService._log_llm_error(
+                    f"_execute_completion failed (provider={provider})", e)
+                raise
+        lock = self._locks[provider]
+        try:
+            async with asyncio.timeout(timeout):
+                async with lock:
+                    try:
+                        return await litellm.acompletion(**litellm_kwargs)
+                    except Exception as e:
+                        LitellmService._log_llm_error(
+                            f"_execute_completion failed (provider={provider})", e)
+                        raise
+        except asyncio.TimeoutError:
+            raise LLMLockTimeoutError(
+                f"Local LLM {provider} busy (held by another background job). "
+                "Try again in a moment."
+            )
+
+    def _build_response(self, raw) -> "LLMResponse":
+        from app.services.llm.types import LLMResponse, ToolCall
+        choice = raw.choices[0]
+        usage = raw.usage
+        input_tokens = (usage.prompt_tokens or 0) if usage else 0
+        output_tokens = (usage.completion_tokens or 0) if usage else 0
+        finish_reason = choice.finish_reason
+
+        if finish_reason == "tool_calls" and choice.message.tool_calls:
+            tool_calls = [
+                ToolCall(id=tc.id, name=tc.function.name, arguments=tc.function.arguments)
+                for tc in choice.message.tool_calls
+            ]
+            raw_msg = choice.message.model_dump(exclude_none=True)
+            clean_msg: dict = {"role": raw_msg["role"]}
+            if raw_msg.get("content"):
+                clean_msg["content"] = raw_msg["content"]
+            if raw_msg.get("tool_calls"):
+                clean_msg["tool_calls"] = raw_msg["tool_calls"]
+            return LLMResponse(
+                content=None,
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+                finish_reason=finish_reason,
+                tool_calls=tool_calls,
+                assistant_message=clean_msg,
+            )
+        return LLMResponse(
+            content=choice.message.content,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            finish_reason=finish_reason,
+        )
+
     @staticmethod
     def _derive_openai_compatible_url(base_url: str, provider: str) -> str:
-        """Derive the OpenAI-compatible /models endpoint URL for a provider."""
         base = base_url.rstrip("/")
         if provider == "ollama":
             return f"{base}/api/tags"
@@ -683,12 +644,39 @@ class LitellmService:
 
     @staticmethod
     def _format_model_display_name(model_name: str) -> str:
-        """Format model name for display in dropdown."""
         name = model_name.replace("-", " ").replace("_", " ")
         return " ".join(word.capitalize() for word in name.split()) if name else model_name
 
-    async def check_provider_health(self, provider: str) -> bool:
-        """Returns True if the provider at its configured URL is reachable."""
+    @staticmethod
+    def _extract_litellm_error(exc: Exception) -> str:
+        parts = [str(exc)]
+        resp = getattr(exc, "response", None)
+        if resp is not None:
+            try:
+                body = resp.text if hasattr(resp, "text") else ""
+                if body:
+                    parts.append(f"Response body: {body[:2000]}")
+            except Exception:
+                pass
+            try:
+                status = resp.status_code if hasattr(resp, "status_code") else ""
+                parts.append(f"Response status: {status}")
+            except Exception:
+                pass
+        for attr in ("llm_provider", "model", "status_code", "body", "litellm_debug_info"):
+            val = getattr(exc, attr, None)
+            if val is not None:
+                parts.append(f"{attr}: {val}")
+        return " | ".join(parts)
+
+    @staticmethod
+    def _log_llm_error(msg: str, exc: Exception) -> None:
+        detail = LitellmService._extract_litellm_error(exc)
+        tb = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
+        print(f"ERROR app.services.llm.service: {msg}: {detail}\n{tb}", flush=True)
+        logger.error("%s: %s", msg, detail, exc_info=True)
+
+    async def _check_provider_health(self, provider: str) -> bool:
         creds = await self._resolve_credentials(provider)
         url = creds.get("api_base")
         if not url:
@@ -701,8 +689,7 @@ class LitellmService:
         except Exception:
             return False
 
-    async def unload_local_model(self, provider: str, model: str) -> bool:
-        """Unload a local LLM model from GPU memory."""
+    async def _unload_local_model(self, provider: str, model: str) -> bool:
         creds = await self._resolve_credentials(provider)
         url = (creds.get("api_base") or "").rstrip("/")
         api_key = creds.get("api_key")
@@ -719,25 +706,173 @@ class LitellmService:
                     await client.post(f"{url}/models/unload",
                         json={"model": model}, headers=headers)
                 else:
-                    return False  # vllm and "local" have no standard unload API
+                    return False
             return True
         except Exception:
             return False
 
-    def estimate_tokens(self, text: str, model: Optional[str] = None) -> int:
-        """Estimate token count using LiteLLM's token counter."""
-        model_for_count = model or "gpt-4"
-        try:
-            return litellm.token_counter(model=model_for_count, text=text)
-        except Exception:
-            # Fallback to char-based estimation
-            return len(text) // 4
-
-    def get_token_limit(self) -> int:
-        """Return the context window size for the configured model. Defaults to 128000."""
+    def _get_token_limit(self) -> int:
         return 128000
 
-    async def analyze_for_similarity(self, provider: str, model: str, prompt_template: str, items: list) -> Dict:
+    async def _analyze_for_similarity(self, provider: str, model: str, prompt_template: str, items: list) -> Dict:
+        if not items:
+            return {"groups": [], "stats": {"items_count": 0, "estimated_tokens": 0}}
+
+        items_str = json.dumps([item["name"] for item in items], ensure_ascii=False, indent=2)
+        prompt = prompt_template.replace("{items}", items_str)
+        estimated_input_tokens = self.estimate_tokens(prompt)
+
+        logger.info(f"[LLM] Analyzing {len(items)} items, estimated tokens: {estimated_input_tokens}")
+
+        token_warning = None
+        max_recommended = 8000
+        if estimated_input_tokens > max_recommended:
+            token_warning = f"Viele Items ({len(items)})! Geschätzte Tokens: ~{estimated_input_tokens}. Könnte das Limit überschreiten."
+
+        logger.info("[LLM] Sending request to LLM provider...")
+        result = await self.complete(
+            provider=provider,
+            model=model,
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.0,
+            top_p=0.1,
+        )
+        response = (result.content or "").strip()
+        logger.info(f"[LLM] Got response, length: {len(response)} chars, first 200: {response[:200]}")
+
+        estimated_output_tokens = self.estimate_tokens(response)
+
+        stats = {
+            "items_count": len(items),
+            "estimated_input_tokens": estimated_input_tokens,
+            "estimated_output_tokens": estimated_output_tokens,
+            "estimated_total_tokens": estimated_input_tokens + estimated_output_tokens,
+            "warning": token_warning
+        }
+
+        try:
+            json_match = re.search(r'\{[\s\S]*\}', response)
+            if json_match:
+                json_str = json_match.group()
+                json_str = re.sub(r',(\s*[}\]])', r'\1', json_str)
+                json_str = re.sub(r'[\x00-\x1f\x7f-\x9f]', ' ', json_str)
+
+                result_parsed = None
+                parse_error = None
+
+                try:
+                    result_parsed = json.loads(json_str)
+                except json.JSONDecodeError as e:
+                    parse_error = e
+
+                if result_parsed is None:
+                    depth = 0
+                    last_valid = 0
+                    in_string = False
+                    escape_next = False
+                    for i, c in enumerate(json_str):
+                        if escape_next:
+                            escape_next = False
+                            continue
+                        if c == '\\':
+                            escape_next = True
+                            continue
+                        if c == '"':
+                            in_string = not in_string
+                            continue
+                        if in_string:
+                            continue
+                        if c == '{':
+                            depth += 1
+                        elif c == '}':
+                            depth -= 1
+                            if depth == 0:
+                                last_valid = i + 1
+                                break
+                    if last_valid > 0:
+                        json_str = json_str[:last_valid]
+                        result_parsed = json.loads(json_str)
+
+                if result_parsed is None:
+                    try:
+                        groups_match = re.search(r'"groups"\s*:\s*\[([\s\S]*?)\](?=\s*[,}]|$)', json_str)
+                        if groups_match:
+                            groups_content = groups_match.group(1)
+                            group_objects = []
+                            depth = 0
+                            start = -1
+                            in_str = False
+                            esc = False
+                            for i, c in enumerate(groups_content):
+                                if esc:
+                                    esc = False
+                                    continue
+                                if c == '\\':
+                                    esc = True
+                                    continue
+                                if c == '"':
+                                    in_str = not in_str
+                                    continue
+                                if in_str:
+                                    continue
+                                if c == '{':
+                                    if depth == 0:
+                                        start = i
+                                    depth += 1
+                                elif c == '}':
+                                    depth -= 1
+                                    if depth == 0 and start >= 0:
+                                        try:
+                                            obj = json.loads(groups_content[start:i+1])
+                                            group_objects.append(obj)
+                                        except Exception:
+                                            pass
+                                        start = -1
+                            if group_objects:
+                                result_parsed = {"groups": group_objects}
+                    except Exception:
+                        pass
+
+                if result_parsed is None:
+                    raise parse_error or json.JSONDecodeError("Could not parse JSON", json_str, 0)
+
+                items_dict = {item["name"]: item for item in items}
+                items_dict_lower = {item["name"].lower(): item for item in items}
+
+                for group in result_parsed.get("groups", []):
+                    enriched_members = []
+                    for member_name in group.get("members", []):
+                        matched = False
+                        if member_name in items_dict:
+                            enriched_members.append(items_dict[member_name])
+                            matched = True
+                        elif member_name.lower() in items_dict_lower:
+                            enriched_members.append(items_dict_lower[member_name.lower()])
+                            matched = True
+                        else:
+                            for name, item in items_dict.items():
+                                if (member_name.lower() in name.lower() or
+                                    name.lower() in member_name.lower() or
+                                    member_name.lower().replace(" ", "") == name.lower().replace(" ", "")):
+                                    enriched_members.append(item)
+                                    matched = True
+                                    break
+                        if not matched:
+                            logger.warning(f"[LLM] Member '{member_name}' not found in items!")
+
+                    group["members"] = enriched_members
+
+                result_parsed["stats"] = stats
+                return result_parsed
+            else:
+                return {"groups": [], "error": "Keine JSON-Antwort vom LLM erhalten", "stats": stats, "raw_response": response[:500]}
+        except json.JSONDecodeError as e:
+            error_context = response[max(0, e.pos-100):e.pos+100] if hasattr(e, 'pos') else response[:200]
+            return {
+                "groups": [],
+                "error": f"JSON-Fehler: {str(e)}. Kontext: ...{error_context}...",
+                "stats": stats
+            }
         """Analyze items for similarity using the configured LLM."""
         if not items:
             return {"groups": [], "stats": {"items_count": 0, "estimated_tokens": 0}}
@@ -761,7 +896,7 @@ class LitellmService:
 
         # Get LLM response
         logger.info("[LLM] Sending request to LLM provider...")
-        result = await self.complete_llm(
+        result = await self.complete(
             provider=provider,
             model=model,
             messages=[{"role": "user", "content": prompt}],

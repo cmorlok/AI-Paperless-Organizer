@@ -15,7 +15,7 @@ class LLMService(Protocol):
     @property
     def model(self) -> Optional[str]: ...
 
-    async def complete_llm(
+    async def complete(
         self,
         provider: str,
         model: str,
@@ -36,7 +36,7 @@ class LLMService(Protocol):
         **kwargs,
     ) -> LLMResponse: ...
 
-    async def stream_llm(
+    async def stream(
         self,
         provider: str,
         model: str,

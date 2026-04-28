@@ -334,7 +334,7 @@ class Indexer:
         )
         try:
             import re as _re
-            result: LLMResponse = await self.llm_service.complete_llm(
+            result: LLMResponse = await self.llm_service.complete(
                 provider=config.chat_model_provider,
                 model=config.chat_model,
                 messages=[{"role": "user", "content": prompt}],
