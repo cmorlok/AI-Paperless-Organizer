@@ -66,6 +66,198 @@ class SimilarityService:
             raise ValueError("classifier_provider and classifier_model must be configured in settings")
         return provider, model
 
+    async def _parse_similarity_response(self, response: str, items: list) -> dict:
+        """Parse LLM response for similarity analysis and enrich member names with original items.
+        
+        Three-attempt parse chain:
+        1. Direct JSON parse
+        2. Balanced-brace JSON truncation
+        3. Regex extraction of groups array
+        
+        Member enrichment: exact → case-insensitive → substring fuzzy match.
+        """
+        items_dict = {item["name"]: item for item in items}
+        items_dict_lower = {item["name"].lower(): item for item in items}
+
+        try:
+            json_match = re.search(r'\{[\s\S]*\}', response)
+            if json_match:
+                json_str = json_match.group()
+                json_str = re.sub(r',(\s*[}\]])', r'\1', json_str)
+                json_str = re.sub(r'[\x00-\x1f\x7f-\x9f]', ' ', json_str)
+
+                result_parsed = None
+                parse_error = None
+
+                # Attempt 1: Direct parse
+                try:
+                    result_parsed = json.loads(json_str)
+                except json.JSONDecodeError as e:
+                    parse_error = e
+
+                # Attempt 2: Balanced-brace truncation
+                if result_parsed is None:
+                    depth = 0
+                    last_valid = 0
+                    in_string = False
+                    escape_next = False
+                    for i, c in enumerate(json_str):
+                        if escape_next:
+                            escape_next = False
+                            continue
+                        if c == '\\':
+                            escape_next = True
+                            continue
+                        if c == '"':
+                            in_string = not in_string
+                            continue
+                        if in_string:
+                            continue
+                        if c == '{':
+                            depth += 1
+                        elif c == '}':
+                            depth -= 1
+                            if depth == 0:
+                                last_valid = i + 1
+                                break
+                    if last_valid > 0:
+                        json_str = json_str[:last_valid]
+                        result_parsed = json.loads(json_str)
+
+                # Attempt 3: Regex extraction of groups array
+                if result_parsed is None:
+                    try:
+                        groups_match = re.search(r'"groups"\s*:\s*\[([\s\S]*?)\](?=\s*[,}]|$)', json_str)
+                        if groups_match:
+                            groups_content = groups_match.group(1)
+                            group_objects = []
+                            depth = 0
+                            start = -1
+                            in_str = False
+                            esc = False
+                            for i, c in enumerate(groups_content):
+                                if esc:
+                                    esc = False
+                                    continue
+                                if c == '\\':
+                                    esc = True
+                                    continue
+                                if c == '"':
+                                    in_str = not in_str
+                                    continue
+                                if in_str:
+                                    continue
+                                if c == '{':
+                                    if depth == 0:
+                                        start = i
+                                    depth += 1
+                                elif c == '}':
+                                    depth -= 1
+                                    if depth == 0 and start >= 0:
+                                        try:
+                                            obj = json.loads(groups_content[start:i+1])
+                                            group_objects.append(obj)
+                                        except Exception:
+                                            pass
+                                        start = -1
+                            if group_objects:
+                                result_parsed = {"groups": group_objects}
+                    except Exception:
+                        pass
+
+                if result_parsed is None:
+                    raise parse_error or json.JSONDecodeError("Could not parse JSON", json_str, 0)
+
+                # Enrich groups with original items
+                for group in result_parsed.get("groups", []):
+                    enriched_members = []
+                    for member_name in group.get("members", []):
+                        matched = False
+                        # 1. Exact match
+                        if member_name in items_dict:
+                            enriched_members.append(items_dict[member_name])
+                            matched = True
+                        # 2. Case-insensitive match
+                        elif member_name.lower() in items_dict_lower:
+                            enriched_members.append(items_dict_lower[member_name.lower()])
+                            matched = True
+                        else:
+                            # 3. Fuzzy match
+                            for name, item in items_dict.items():
+                                if (member_name.lower() in name.lower() or
+                                    name.lower() in member_name.lower() or
+                                    member_name.lower().replace(" ", "") == name.lower().replace(" ", "")):
+                                    enriched_members.append(item)
+                                    matched = True
+                                    break
+                        if not matched:
+                            import logging
+                            logger = logging.getLogger(__name__)
+                            logger.warning(f"[Similarity] Member '{member_name}' not found in items!")
+
+                    group["members"] = enriched_members
+                    if len(enriched_members) < len(group.get("members", [])):
+                        import logging
+                        logger = logging.getLogger(__name__)
+                        logger.warning(f"[Similarity] Group '{group.get('suggested_name')}': Only {len(enriched_members)} of {len(group.get('members', []))} members matched")
+
+                return result_parsed
+            else:
+                return {"groups": [], "error": "Keine JSON-Antwort vom LLM erhalten", "raw_response": response[:500]}
+        except json.JSONDecodeError as e:
+            error_context = response[max(0, e.pos-100):e.pos+100] if hasattr(e, 'pos') else response[:200]
+            return {
+                "groups": [],
+                "error": f"JSON-Fehler: {str(e)}. Kontext: ...{error_context}...",
+            }
+
+    async def _call_llm_for_similarity(self, provider: str, model: str, prompt_template: str, items: list) -> dict:
+        """Call LLM for similarity analysis and parse the response.
+        
+        Builds prompt by injecting items JSON into {items} placeholder,
+        calls LLM via self.llm.complete(), and parses result.
+        """
+        if not items:
+            return {"groups": [], "stats": {"items_count": 0, "estimated_tokens": 0}}
+
+        items_str = json.dumps([item["name"] for item in items], ensure_ascii=False, indent=2)
+        prompt = prompt_template.replace("{items}", items_str)
+        estimated_input_tokens = self.llm.estimate_tokens(prompt)
+
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.info(f"[Similarity] Analyzing {len(items)} items, estimated tokens: {estimated_input_tokens}")
+
+        token_warning = None
+        max_recommended = 8000
+        if estimated_input_tokens > max_recommended:
+            token_warning = f"Viele Items ({len(items)})! Geschätzte Tokens: ~{estimated_input_tokens}. Könnte das Limit überschreiten."
+
+        logger.info("[Similarity] Sending request to LLM provider...")
+        result = await self.llm.complete(
+            provider=provider,
+            model=model,
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.0,
+            top_p=0.1,
+        )
+        response = (result.content or "").strip()
+        logger.info(f"[Similarity] Got response, length: {len(response)} chars, first 200: {response[:200]}")
+
+        estimated_output_tokens = self.llm.estimate_tokens(response)
+
+        stats = {
+            "items_count": len(items),
+            "estimated_input_tokens": estimated_input_tokens,
+            "estimated_output_tokens": estimated_output_tokens,
+            "estimated_total_tokens": estimated_input_tokens + estimated_output_tokens,
+            "warning": token_warning
+        }
+
+        parsed = await self._parse_similarity_response(response, items)
+        parsed["stats"] = stats
+        return parsed
+
     def _is_tag_ignored(self, tag_name: str, ignored_patterns: List[Dict]) -> bool:
         """Check if a tag matches any ignored pattern."""
         for pattern_info in ignored_patterns:
@@ -106,7 +298,7 @@ class SimilarityService:
     async def _analyze_batch(self, items: List[Dict], prompt_template: str) -> Dict:
         """Analyze a single batch of items."""
         provider, model = await self._get_llm_config()
-        return await self.llm._analyze_for_similarity(provider, model, prompt_template, items)
+        return await self._call_llm_for_similarity(provider, model, prompt_template, items)
     
     async def _analyze_with_batching(self, all_items: List[Dict], prompt_template: str, batch_size: int = 200) -> Dict:
         """Analyze items - batch only if token limit exceeded."""
