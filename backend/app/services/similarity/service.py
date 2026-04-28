@@ -482,9 +482,10 @@ Beispiel: Wenn "1&1" in einer Gruppe ist und "1und1 Internet" ungruppiert, sollt
 Wenn nichts zusammengehört: {{"group_merges": [], "add_to_groups": []}}"""
 
         try:
+            provider, model = await self._get_llm_config()
             result = await self.llm.complete(
-                provider=self.llm.provider.name,
-                model=self.llm.model,
+                provider=provider,
+                model=model,
                 messages=[{"role": "user", "content": cross_batch_prompt}],
             )
             response = (result.content or "").strip()
@@ -660,9 +661,10 @@ Wenn nichts zusammengehört: {{"group_merges": [], "add_to_groups": []}}"""
             stats["warning"] = f"Prompt sehr groß ({estimated_input_tokens} Tokens)! Könnte Token-Limit ({token_limit}) überschreiten."
         
         try:
+            provider, model = await self._get_llm_config()
             result = await self.llm.complete(
-                provider=self.llm.provider.name,
-                model=self.llm.model,
+                provider=provider,
+                model=model,
                 messages=[{"role": "user", "content": prompt}],
             )
             response = (result.content or "").strip()
@@ -755,9 +757,10 @@ Wenn nichts zusammengehört: {{"group_merges": [], "add_to_groups": []}}"""
             stats["warning"] = f"Prompt sehr groß ({estimated_input_tokens} Tokens)! Könnte Token-Limit ({token_limit}) überschreiten."
         
         try:
+            provider, model = await self._get_llm_config()
             result = await self.llm.complete(
-                provider=self.llm.provider.name,
-                model=self.llm.model,
+                provider=provider,
+                model=model,
                 messages=[{"role": "user", "content": prompt}],
             )
             response = (result.content or "").strip()
@@ -854,9 +857,10 @@ Wenn nichts zusammengehört: {{"group_merges": [], "add_to_groups": []}}"""
             stats["warning"] = f"Prompt sehr groß ({estimated_input_tokens} Tokens)! Könnte Token-Limit ({token_limit}) überschreiten."
         
         try:
+            provider, model = await self._get_llm_config()
             result = await self.llm.complete(
-                provider=self.llm.provider.name,
-                model=self.llm.model,
+                provider=provider,
+                model=model,
                 messages=[{"role": "user", "content": prompt}],
             )
             response = (result.content or "").strip()
