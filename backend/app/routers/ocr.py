@@ -18,6 +18,8 @@ from dishka import FromDishka
 
 from app.services.paperless.protocol import PaperlessClient
 from app.services.ocr.protocol import OcrService
+from app.models.settings_model import LLM_KEY_CLASSIFIER_PROVIDER
+from app.routers.settings import get_setting
 from app.services.ocr.state import OcrState, DEFAULT_OCR_MODEL, TAG_OCR_REVIEW, TAG_OCR_FINISH, TAG_OCR_ERROR
 from app.services.ocr.service import (
     load_review_queue,
@@ -1013,23 +1015,25 @@ async def get_compare_status(
 @inject
 async def evaluate_ocr_results(
     request: OcrEvaluateRequest,
-    llm_service: FromDishka[LLMProviderService] = None
+    llm_service: FromDishka[LLMProviderService] = None,
+    db: AsyncSession = Depends(get_db),
 ):
     """Send OCR comparison results to an external LLM for quality evaluation.
-    
+
     WARNING: This sends document text to a cloud API (OpenAI, Anthropic, etc.)!
     Uses a thorough multi-criteria evaluation inspired by professional OCR benchmarks.
     """
-    if not llm_service.provider:
+    eval_provider = await get_setting(LLM_KEY_CLASSIFIER_PROVIDER, db)
+    if not eval_provider:
         raise HTTPException(
-            status_code=400, 
+            status_code=400,
             detail="Kein LLM-Provider konfiguriert. Bitte zuerst unter Einstellungen einen Provider (z.B. OpenAI) einrichten."
         )
-    
+
     results = request.results
     if not results or len(results) < 1:
         raise HTTPException(status_code=400, detail="Keine OCR-Ergebnisse zum Auswerten")
-    
+
     eval_model = request.evaluation_model or None
     
     # Build the evaluation prompt with full texts
@@ -1136,10 +1140,10 @@ WICHTIG:
 
     try:
         used_model = eval_model or "gpt-4o"
-        print(f"[Evaluate] Sending {len(results)} OCR results to {llm_service.provider.name} / {used_model}")
-        
+        print(f"[Evaluate] Sending {len(results)} OCR results to {eval_provider} / {used_model}")
+
         result = await llm_service.complete(
-            provider=llm_service.provider.name,
+            provider=eval_provider,
             model=eval_model,
             messages=[{"role": "user", "content": prompt}],
         )
@@ -1165,12 +1169,12 @@ WICHTIG:
                     "parse_error": "LLM-Antwort konnte nicht als JSON geparst werden"
                 }
         
-        print(f"[Evaluate] Successfully evaluated with {llm_service.provider.name} / {used_model}")
-        
+        print(f"[Evaluate] Successfully evaluated with {eval_provider} / {used_model}")
+
         return {
             "success": True,
             "evaluation": evaluation,
-            "provider": llm_service.provider.name,
+            "provider": eval_provider,
             "model": used_model
         }
         

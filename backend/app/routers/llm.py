@@ -41,14 +41,16 @@ async def test_llm_connection(
 @inject
 async def test_prompt(
     request: TestPromptRequest,
-    llm_service: FromDishka[LLMProviderService] = None
+    llm_service: FromDishka[LLMProviderService] = None,
+    db=None,
 ):
     """Test a prompt with the active LLM provider."""
     try:
-        provider = llm_service.provider.name if llm_service.provider else None
+        provider = (await get_setting(LLM_KEY_CLASSIFIER_PROVIDER, db)) or None
+        model = (await get_setting(LLM_KEY_CLASSIFIER_MODEL, db)) or None
         result = await llm_service.complete(
             provider=provider,
-            model=llm_service.model,
+            model=model,
             messages=[{"role": "user", "content": request.prompt}],
         )
         return {"success": True, "response": (result.content or "").strip()}

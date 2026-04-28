@@ -9,12 +9,6 @@ from app.services.llm.types import LLMResponse
 class LLMService(Protocol):
     """Protocol for LLM service (LiteLLM-based)."""
 
-    @property
-    def provider(self) -> Any: ...
-
-    @property
-    def model(self) -> Optional[str]: ...
-
     async def complete(
         self,
         provider: str,
