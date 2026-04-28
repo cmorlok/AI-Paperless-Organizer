@@ -713,9 +713,6 @@ class LitellmService:
         except Exception:
             return False
 
-    def _get_token_limit(self) -> int:
-        return 128000
-
     async def get_token_limit(self, provider: str, model: str) -> int:
         """Get the context window (max input tokens) for a specific model.
         
@@ -729,14 +726,12 @@ class LitellmService:
 
         # 1. Try LiteLLM's model_info database first
         try:
-            kwargs = await self._prepare_litellm_kwargs(model, provider)
-            model_name: Optional[str] = kwargs.get("model")
-            if model_name:
-                model_info: Any = litellm.get_model_info(model=model_name)
-                if model_info:
-                    max_tokens: Optional[int] = model_info.get("max_input_tokens")
-                    if max_tokens:
-                        return max_tokens
+            model_name = model if "/" in model else f"{provider}/{model}"
+            model_info: Any = litellm.get_model_info(model=model_name)
+            if model_info:
+                max_tokens: Optional[int] = model_info.get("max_input_tokens")
+                if max_tokens:
+                    return max_tokens
         except Exception as e:
             logger.debug(f"LiteLLM model_info failed for {model}: {e}")
 
@@ -751,30 +746,6 @@ class LitellmService:
             return self.DEFAULT_CONTEXT_WINDOW
 
         return max_context_length or context_length
-
-
-    async def _prepare_litellm_kwargs(
-        self,
-        model: str,
-        provider: str,
-        desired_context: int = -1,
-    ) -> dict:
-        """Prepare kwargs for LiteLLM API call, resolving credentials from LLMProvider table."""
-        creds = await self._resolve_credentials(provider)
-        api_key = creds.get("api_key")
-        api_base = creds.get("api_base")
-        
-        model_name = model if "/" in model else f"{provider}/{model}"
-        kwargs: dict = {"model": model_name}
-        
-        if api_key:
-            kwargs["api_key"] = api_key
-        if api_base:
-            kwargs["api_base"] = api_base
-        if desired_context != -1:
-            kwargs["desired_context"] = desired_context
-            
-        return kwargs
 
 
     async def _get_model_info(
