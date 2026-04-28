@@ -272,6 +272,8 @@ class LitellmService:
         "vllm", "llama.cpp", "llama-cpp", "local"
     })
 
+    DEFAULT_CONTEXT_WINDOW: int = 32000
+
     _PROVIDER_EXTRA_HEADERS: Dict[str, Dict[str, str]] = {
         "openrouter": {"HTTP-Referer": "https://github.com/syberx/AI-Paperless-Organizer"},
     }
@@ -713,6 +715,192 @@ class LitellmService:
 
     def _get_token_limit(self) -> int:
         return 128000
+
+    async def get_token_limit(self, provider: str, model: str) -> int:
+        """Get the context window (max input tokens) for a specific model.
+        
+        Resolution order:
+        1. LiteLLM model_info database (for known OpenAI/Anthropic/etc. models)
+        2. Provider-specific API (Ollama /api/show, LM Studio model info)
+        3. DEFAULT_CONTEXT_WINDOW (32000) as fallback
+        """
+        context_length: Optional[int] = None
+        max_context_length: Optional[int] = None
+
+        # 1. Try LiteLLM's model_info database first
+        try:
+            kwargs = await self._prepare_litellm_kwargs(model, provider)
+            model_name: Optional[str] = kwargs.get("model")
+            if model_name:
+                model_info: Any = litellm.get_model_info(model=model_name)
+                if model_info:
+                    max_tokens: Optional[int] = model_info.get("max_input_tokens")
+                    if max_tokens:
+                        return max_tokens
+        except Exception as e:
+            logger.debug(f"LiteLLM model_info failed for {model}: {e}")
+
+        # 2. Try provider-specific API (Ollama, LM Studio)
+        try:
+            context_length, max_context_length = await self._get_model_info(provider, model)
+        except Exception as e:
+            logger.debug(f"Provider-specific model_info failed for {model}: {e}")
+
+        # 3. If still no result, use default
+        if not context_length:
+            return self.DEFAULT_CONTEXT_WINDOW
+
+        return max_context_length or context_length
+
+
+    async def _prepare_litellm_kwargs(
+        self,
+        model: str,
+        provider: str,
+        desired_context: int = -1,
+    ) -> dict:
+        """Prepare kwargs for LiteLLM API call, resolving credentials from LLMProvider table."""
+        creds = await self._resolve_credentials(provider)
+        api_key = creds.get("api_key")
+        api_base = creds.get("api_base")
+        
+        model_name = model if "/" in model else f"{provider}/{model}"
+        kwargs: dict = {"model": model_name}
+        
+        if api_key:
+            kwargs["api_key"] = api_key
+        if api_base:
+            kwargs["api_base"] = api_base
+        if desired_context != -1:
+            kwargs["desired_context"] = desired_context
+            
+        return kwargs
+
+
+    async def _get_model_info(
+        self,
+        provider: str,
+        model_name: str,
+    ) -> tuple[Optional[int], Optional[int]]:
+        """Fetch model info including context length from the provider API.
+        
+        Returns (context_length, max_context_length).
+        """
+        creds = await self._resolve_credentials(provider)
+        base_url = creds.get("api_base")
+        api_key = creds.get("api_key")
+        
+        if not base_url:
+            return None, None
+
+        base_url = base_url.rstrip("/")
+
+        async with httpx.AsyncClient() as client:
+            try:
+                if provider in ("ollama", "ollama_chat"):
+                    target_url = base_url[:-3] if base_url.endswith("/v1") else base_url
+                    try:
+                        resp = await client.post(
+                            f"{target_url}/api/show",
+                            json={"name": model_name},
+                            timeout=10.0,
+                        )
+                        resp.raise_for_status()
+                        data = resp.json()
+                        model_info = data.get("model_info", {})
+                        details = data.get("details", {})
+
+                        ctx: Optional[int] = None
+                        for key in model_info.keys():
+                            if key.endswith(".context_length"):
+                                ctx = model_info[key]
+                                break
+                        if not ctx:
+                            ctx = details.get("context_length")
+
+                        if ctx:
+                            return ctx, ctx
+                    except Exception:
+                        pass
+
+                elif provider in ("lm_studio", "lm_studio_chat"):
+                    native_url = base_url.replace("/v1", "")
+                    _, loaded_ctx, max_ctx = await self._get_lm_studio_model_info(
+                        client, native_url, model_name, api_key
+                    )
+                    if loaded_ctx:
+                        return loaded_ctx, max_ctx
+
+                    loaded_ctx = await self._load_lm_studio_model(
+                        client, native_url, model_name, api_key
+                    )
+                    if loaded_ctx:
+                        return loaded_ctx, max_ctx
+
+                    _, loaded_ctx, max_ctx = await self._get_lm_studio_model_info(
+                        client, native_url, model_name, api_key
+                    )
+                    return loaded_ctx, max_ctx
+
+                return None, None
+
+            except Exception as e:
+                logger.debug(f"Error fetching model info for {provider}: {e}")
+                return None, None
+
+
+    async def _get_lm_studio_model_info(
+        self,
+        client: httpx.AsyncClient,
+        native_url: str,
+        model_name: str,
+        api_key: Optional[str] = None,
+    ) -> tuple[Optional[str], Optional[int], Optional[int]]:
+        """Fetch model info including context length from LM Studio."""
+        headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
+        max_ctx = None
+        try:
+            resp = await client.get(f"{native_url}/api/v1/models", headers=headers, timeout=3.0)
+            if resp.status_code == 200:
+                data = resp.json()
+                for model in data.get("models", []):
+                    if model.get("key") == model_name:
+                        max_ctx = model.get("max_context_length")
+                        for instance in model.get("loaded_instances", []):
+                            loaded_ctx: Optional[int] = instance.get("config", {}).get(
+                                "context_length"
+                            )
+                            if loaded_ctx:
+                                return instance.get("id"), loaded_ctx, max_ctx
+
+        except Exception:
+            pass
+
+        return None, None, max_ctx
+
+
+    async def _load_lm_studio_model(
+        self,
+        client: httpx.AsyncClient,
+        native_url: str,
+        model_name: str,
+        api_key: Optional[str] = None,
+    ) -> Optional[int]:
+        """Load a model in LM Studio and return its context length."""
+        headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
+        try:
+            resp = await client.post(
+                f"{native_url}/api/v1/models/load",
+                headers=headers,
+                json={"model": model_name},
+                timeout=60.0,
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                return data.get("context_length")
+        except Exception:
+            pass
+        return None
 
     async def _analyze_for_similarity(self, provider: str, model: str, prompt_template: str, items: list) -> Dict:
         if not items:
