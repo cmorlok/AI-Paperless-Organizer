@@ -112,7 +112,8 @@ class SimilarityService:
         """Analyze items - batch only if token limit exceeded."""
         
         # Get token limit from LLM provider
-        token_limit = self.llm._get_token_limit()
+        provider, model = await self._get_llm_config()
+        token_limit = await self.llm.get_token_limit(provider, model)
         
         # Estimate tokens for all items
         items_str = json.dumps([item["name"] for item in all_items], ensure_ascii=False)
@@ -450,7 +451,8 @@ Wenn nichts zusammengehört: {{"group_merges": [], "add_to_groups": []}}"""
         
         # Token estimation
         estimated_input_tokens = self.llm.estimate_tokens(prompt)
-        token_limit = self.llm._get_token_limit()
+        provider, model = await self._get_llm_config()
+        token_limit = await self.llm.get_token_limit(provider, model)
         safe_limit = int(token_limit * 0.8)
         
         stats = {
@@ -459,7 +461,7 @@ Wenn nichts zusammengehört: {{"group_merges": [], "add_to_groups": []}}"""
             "analyzed_count": len(filtered_tags),
             "estimated_input_tokens": estimated_input_tokens,
             "token_limit": token_limit,
-            "model": self.llm.model or "unknown"
+            "model": model or "unknown"
         }
         
         if estimated_input_tokens > safe_limit:
@@ -545,7 +547,8 @@ Wenn nichts zusammengehört: {{"group_merges": [], "add_to_groups": []}}"""
         
         # Token estimation
         estimated_input_tokens = self.llm.estimate_tokens(prompt)
-        token_limit = self.llm._get_token_limit()
+        provider, model = await self._get_llm_config()
+        token_limit = await self.llm.get_token_limit(provider, model)
         safe_limit = int(token_limit * 0.8)
         
         stats = {
@@ -553,7 +556,7 @@ Wenn nichts zusammengehört: {{"group_merges": [], "add_to_groups": []}}"""
             "correspondents_count": len(correspondents),
             "estimated_input_tokens": estimated_input_tokens,
             "token_limit": token_limit,
-            "model": self.llm.model or "unknown"
+            "model": model or "unknown"
         }
         
         if estimated_input_tokens > safe_limit:
@@ -643,7 +646,8 @@ Wenn nichts zusammengehört: {{"group_merges": [], "add_to_groups": []}}"""
         
         # Token estimation
         estimated_input_tokens = self.llm.estimate_tokens(prompt)
-        token_limit = self.llm._get_token_limit()
+        provider, model = await self._get_llm_config()
+        token_limit = await self.llm.get_token_limit(provider, model)
         safe_limit = int(token_limit * 0.8)
         
         stats = {
@@ -651,7 +655,7 @@ Wenn nichts zusammengehört: {{"group_merges": [], "add_to_groups": []}}"""
             "doctypes_count": len(doc_types),
             "estimated_input_tokens": estimated_input_tokens,
             "token_limit": token_limit,
-            "model": self.llm.model or "unknown"
+            "model": model or "unknown"
         }
         
         if estimated_input_tokens > safe_limit:
