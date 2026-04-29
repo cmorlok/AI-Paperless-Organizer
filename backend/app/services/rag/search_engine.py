@@ -11,7 +11,7 @@ DATA_DIR = os.path.join(os.path.dirname(__file__), "..", "..", "..", "data")
 
 class SearchResult:
     def __init__(self, document_id: int, title: str, snippet: str, score: float,
-                 metadata: Dict[str, Any] = None, chunk_id: str = ""):
+                 metadata: Dict[str, Any] | None = None, chunk_id: str = ""):
         self.document_id = document_id
         self.title = title
         self.snippet = snippet
@@ -81,9 +81,11 @@ class SearchEngine:
         batch_size = 500
         for i in range(0, len(ids), batch_size):
             end = min(i + batch_size, len(ids))
+            if self._chroma_collection is None:
+                raise RuntimeError("ChromaDB not initialized")
             self._chroma_collection.upsert(
                 ids=ids[i:end],
-                embeddings=embeddings[i:end],
+                embeddings=list(embeddings[i:end]),
                 documents=documents[i:end],
                 metadatas=metadatas[i:end],
             )
@@ -229,10 +231,13 @@ class SearchEngine:
         items = []
         if results and results["ids"] and results["ids"][0]:
             for i, chunk_id in enumerate(results["ids"][0]):
-                dist = results["distances"][0][i] if results.get("distances") else 0
+                distances = results.get("distances")
+                dist = distances[0][i] if distances else 0
                 score = 1.0 - dist
-                meta = results["metadatas"][0][i] if results.get("metadatas") else {}
-                doc_text = results["documents"][0][i] if results.get("documents") else ""
+                metadatas = results.get("metadatas")
+                meta = metadatas[0][i] if metadatas else {}
+                documents = results.get("documents")
+                doc_text = documents[0][i] if documents else ""
                 items.append({
                     "chunk_id": chunk_id,
                     "score": score,

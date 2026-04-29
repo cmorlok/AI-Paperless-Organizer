@@ -116,6 +116,7 @@ async def delete_source(source_id: int, db: AsyncSession = Depends(get_db)):
 @router.post("/sources/{source_id}/test")
 @inject
 async def test_source(source_id: int, db: AsyncSession = Depends(get_db), service: FromDishka[CloudImportService] = None):
+    assert service is not None
     result = await db.execute(select(CloudSource).where(CloudSource.id == source_id))
     source = result.scalar_one_or_none()
     if not source:
@@ -128,6 +129,8 @@ async def test_source(source_id: int, db: AsyncSession = Depends(get_db), servic
 @router.post("/sources/{source_id}/sync")
 @inject
 async def sync_source_now(source_id: int, db: AsyncSession = Depends(get_db), client: FromDishka[PaperlessClient] = None, service: FromDishka[CloudImportService] = None):
+    assert client is not None
+    assert service is not None
     result = await db.execute(select(CloudSource).where(CloudSource.id == source_id))
     source = result.scalar_one_or_none()
     if not source:
@@ -149,13 +152,14 @@ async def sync_source_now(source_id: int, db: AsyncSession = Depends(get_db), cl
 @router.get("/sources/{source_id}/folders")
 @inject
 async def browse_source_folders(source_id: int, path: str = "/", db: AsyncSession = Depends(get_db), service: FromDishka[CloudImportService] = None):
+    assert service is not None
     """List folders on a source for folder picker UI."""
     result = await db.execute(select(CloudSource).where(CloudSource.id == source_id))
     source = result.scalar_one_or_none()
     if not source:
         raise HTTPException(status_code=404, detail="Quelle nicht gefunden")
     try:
-        folders = await service.list_folders(source, path)
+        folders = await getattr(service, "list_folders")(source, path)
         return {"path": path, "folders": folders}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -166,6 +170,7 @@ async def browse_source_folders(source_id: int, path: str = "/", db: AsyncSessio
 @router.get("/sources/{source_id}/files")
 @inject
 async def list_source_files(source_id: int, db: AsyncSession = Depends(get_db), service: FromDishka[CloudImportService] = None):
+    assert service is not None
     result = await db.execute(select(CloudSource).where(CloudSource.id == source_id))
     source = result.scalar_one_or_none()
     if not source:
@@ -222,6 +227,7 @@ async def clear_import_log(source_id: Optional[int] = None, db: AsyncSession = D
 @router.get("/status")
 @inject
 async def get_sync_status(state: FromDishka[CloudSyncState] = None):
+    assert state is not None
     return {
         "enabled": state.enabled,
         "running": state.running,
@@ -239,6 +245,8 @@ async def start_sync_daemon(
     state: FromDishka[CloudSyncState] = None,
     config_svc: FromDishka[ConfigService] = None,
 ):
+    assert state is not None
+    assert config_svc is not None
     if state.enabled:
         return {"status": "already_running"}
     state.enabled = True
@@ -262,6 +270,8 @@ async def stop_sync_daemon(
     state: FromDishka[CloudSyncState] = None,
     config_svc: FromDishka[ConfigService] = None,
 ):
+    assert state is not None
+    assert config_svc is not None
     state.enabled = False
     task = state.task
     if task and not task.done():
@@ -283,6 +293,7 @@ async def stop_sync_daemon(
 @router.get("/paperless/tags")
 @inject
 async def get_paperless_tags(client: FromDishka[PaperlessClient] = None):
+    assert client is not None
     try:
         tags = await client.get_tags(use_cache=False)
         return [{"id": t["id"], "name": t["name"]} for t in tags]
@@ -293,6 +304,7 @@ async def get_paperless_tags(client: FromDishka[PaperlessClient] = None):
 @router.get("/paperless/correspondents")
 @inject
 async def get_paperless_correspondents(client: FromDishka[PaperlessClient] = None):
+    assert client is not None
     try:
         corrs = await client.get_correspondents(use_cache=False)
         return [{"id": c["id"], "name": c["name"]} for c in corrs]
@@ -303,6 +315,7 @@ async def get_paperless_correspondents(client: FromDishka[PaperlessClient] = Non
 @router.get("/paperless/document-types")
 @inject
 async def get_paperless_document_types(client: FromDishka[PaperlessClient] = None):
+    assert client is not None
     try:
         types = await client.get_document_types(use_cache=False)
         return [{"id": t["id"], "name": t["name"]} for t in types]

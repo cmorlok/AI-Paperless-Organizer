@@ -76,6 +76,7 @@ class ConfigUpdate(BaseModel):
 @router.post("/chat")
 @inject
 async def chat(body: ChatRequest, request: Request, service: FromDishka[RAGService] = None):
+    assert service is not None
     if not await _check_api_auth(request):
         raise HTTPException(status_code=401, detail="Ungültiger API-Key")
     filters = body.filters.model_dump(exclude_none=True) if body.filters else None
@@ -101,6 +102,7 @@ async def chat(body: ChatRequest, request: Request, service: FromDishka[RAGServi
 @router.post("/search")
 @inject
 async def search(body: SearchRequest, request: Request, service: FromDishka[RAGService] = None):
+    assert service is not None
     if not await _check_api_auth(request):
         raise HTTPException(status_code=401, detail="Ungültiger API-Key")
     filters = body.filters.model_dump(exclude_none=True) if body.filters else None
@@ -122,6 +124,7 @@ async def search(body: SearchRequest, request: Request, service: FromDishka[RAGS
 @router.post("/index/start")
 @inject
 async def start_indexing(request: IndexRequest, service: FromDishka[RAGService] = None):
+    assert service is not None
     if service.indexer.is_indexing:
         raise HTTPException(status_code=409, detail="Indexierung läuft bereits")
 
@@ -132,6 +135,7 @@ async def start_indexing(request: IndexRequest, service: FromDishka[RAGService] 
 @router.get("/index/status")
 @inject
 async def indexing_status(service: FromDishka[RAGService] = None):
+    assert service is not None
     return await service.indexer.get_status()
 
 
@@ -140,12 +144,14 @@ async def indexing_status(service: FromDishka[RAGService] = None):
 @router.get("/sessions")
 @inject
 async def list_sessions(service: FromDishka[RAGService] = None):
+    assert service is not None
     return await service.get_sessions()
 
 
 @router.get("/sessions/{session_id}")
 @inject
 async def get_session(session_id: str, service: FromDishka[RAGService] = None):
+    assert service is not None
     session = await service.get_session(session_id)
     if not session:
         raise HTTPException(status_code=404, detail="Session nicht gefunden")
@@ -155,6 +161,7 @@ async def get_session(session_id: str, service: FromDishka[RAGService] = None):
 @router.delete("/sessions/{session_id}")
 @inject
 async def delete_session(session_id: str, service: FromDishka[RAGService] = None):
+    assert service is not None
     deleted = await service.delete_session(session_id)
     if not deleted:
         raise HTTPException(status_code=404, detail="Session nicht gefunden")
@@ -166,12 +173,14 @@ async def delete_session(session_id: str, service: FromDishka[RAGService] = None
 @router.get("/config")
 @inject
 async def get_config(service: FromDishka[RAGService] = None):
+    assert service is not None
     return await service.get_config_dict()
 
 
 @router.put("/config")
 @inject
 async def update_config(request: ConfigUpdate, service: FromDishka[RAGService] = None):
+    assert service is not None
     updates = request.model_dump(exclude_none=True)
     if not updates:
         raise HTTPException(status_code=400, detail="Keine Änderungen angegeben")
@@ -183,10 +192,11 @@ async def update_config(request: ConfigUpdate, service: FromDishka[RAGService] =
 @router.get("/health")
 @inject
 async def rag_health(service: FromDishka[RAGService] = None):
+    assert service is not None
     config = await service.get_config_dict()
     index_status = await service.indexer.get_status()
     return {
-        "embedding": await _probe_embedding(config, service.llm_service),
+        "embedding": await _probe_embedding(config, getattr(service, "llm_service")),
         "index": index_status,
     }
 

@@ -41,6 +41,7 @@ class RemoveFromAnalysesRequest(BaseModel):
 @router.get("/")
 @inject
 async def list_tags(client: FromDishka[PaperlessClient] = None):
+    assert client is not None
     """List all tags with document counts."""
     return await client.get_tags_with_counts()
 
@@ -51,6 +52,7 @@ async def estimate_tags(
     analysis_type: str = "nonsense",
     tags_service: FromDishka[TagsService] = None,
 ):
+    assert tags_service is not None
     """Estimate tokens needed for specific analysis type.
 
     analysis_type can be: nonsense, correspondent, doctype, similar
@@ -142,14 +144,16 @@ async def mark_group_processed(
 @router.post("/analyze")
 @inject
 async def analyze_tags(
-    request: AnalyzeRequest = None,
+    request: AnalyzeRequest | None = None,
     similarity_service: FromDishka[SimilarityService] = None,
     tags_service: FromDishka[TagsService] = None,
 ):
+    assert similarity_service is not None
+    assert tags_service is not None
     """Analyze tags and find similar groups using AI."""
     batch_size = request.batch_size if request else 200
     result = await similarity_service.find_similar_tags(batch_size=batch_size)
-    await tags_service.save_similarity_analysis(result)
+    await getattr(tags_service, "save_similarity_analysis")(result)
     return result
 
 
@@ -161,6 +165,7 @@ async def merge_tags(
     request: MergeRequest,
     merge_service: FromDishka[MergeService] = None
 ):
+    assert merge_service is not None
     """Merge multiple tags into one."""
     return await merge_service.merge_tags(
         target_id=request.target_id,
@@ -174,6 +179,7 @@ async def merge_tags(
 async def get_merge_history(
     merge_service: FromDishka[MergeService] = None
 ):
+    assert merge_service is not None
     """Get merge history for tags."""
     return await merge_service.get_history("tags")
 
@@ -185,6 +191,7 @@ async def get_merge_history(
 async def get_empty_tags(
     client: FromDishka[PaperlessClient] = None
 ):
+    assert client is not None
     """Get tags with 0 documents."""
     tags = await client.get_tags_with_counts()
     empty = [t for t in tags if t.get("document_count", 0) == 0]
@@ -199,6 +206,7 @@ async def get_empty_tags(
 async def delete_empty_tags(
     tags_service: FromDishka[TagsService] = None,
 ):
+    assert tags_service is not None
     """Delete all tags with 0 documents - PARALLEL for speed."""
     return await tags_service.delete_empty_tags()
 
@@ -211,6 +219,7 @@ async def bulk_delete_tags(
     request: BulkDeleteRequest,
     tags_service: FromDishka[TagsService] = None,
 ):
+    assert tags_service is not None
     """Delete multiple tags in parallel and keep DB cache in sync."""
     try:
         return await tags_service.bulk_delete_tags(request.tag_ids)
@@ -226,6 +235,7 @@ async def remove_tags_from_saved_analyses(
     request: RemoveFromAnalysesRequest,
     tags_service: FromDishka[TagsService] = None,
 ):
+    assert tags_service is not None
     """Remove deleted tag IDs from ALL saved analyses so they don't reappear."""
     return await tags_service.remove_tags_from_saved_analyses(request.tag_ids)
 
@@ -238,6 +248,7 @@ async def delete_tag(
     tag_id: int,
     client: FromDishka[PaperlessClient] = None
 ):
+    assert client is not None
     """Delete a single tag by ID."""
     try:
         await client.delete_tag(tag_id)
@@ -306,9 +317,11 @@ async def analyze_nonsense_tags(
     similarity_service: FromDishka[SimilarityService] = None,
     tags_service: FromDishka[TagsService] = None,
 ):
+    assert similarity_service is not None
+    assert tags_service is not None
     """Analyze tags to find nonsensical/useless tags using AI and SAVE results."""
     result = await similarity_service.find_nonsense_tags()
-    await tags_service.save_nonsense_analysis(result)
+    await getattr(tags_service, "save_nonsense_analysis")(result)
     return result
 
 
@@ -372,9 +385,11 @@ async def analyze_correspondent_matches(
     similarity_service: FromDishka[SimilarityService] = None,
     tags_service: FromDishka[TagsService] = None,
 ):
+    assert similarity_service is not None
+    assert tags_service is not None
     """Analyze tags that should be correspondents using AI and SAVE results."""
     result = await similarity_service.find_tags_that_are_correspondents()
-    await tags_service.save_correspondent_matches(result)
+    await getattr(tags_service, "save_correspondent_matches")(result)
     return result
 
 
@@ -438,7 +453,9 @@ async def analyze_doctype_matches(
     similarity_service: FromDishka[SimilarityService] = None,
     tags_service: FromDishka[TagsService] = None,
 ):
+    assert similarity_service is not None
+    assert tags_service is not None
     """Analyze tags that should be document types using AI and SAVE results."""
     result = await similarity_service.find_tags_that_are_document_types()
-    await tags_service.save_doctype_matches(result)
+    await getattr(tags_service, "save_doctype_matches")(result)
     return result

@@ -28,6 +28,7 @@ async def scan_junk_documents(
     search_content: bool = Query(False, description="Search in document content, not just title"),
     client: FromDishka[PaperlessClient] = None
 ):
+    assert client is not None
     """Scan for junk documents by title or full-text content matching."""
     try:
         # Parse terms from query - frontend sends comma-separated terms
@@ -81,6 +82,7 @@ async def get_thumbnail(
     document_id: int,
     client: FromDishka[PaperlessClient] = None
 ):
+    assert client is not None
     """Proxy a document thumbnail from Paperless (handles auth)."""
     try:
         image_bytes = await client.get_document_thumbnail_bytes(document_id)
@@ -96,6 +98,7 @@ async def delete_junk_documents(
     request: DeleteRequest,
     client: FromDishka[PaperlessClient] = None
 ):
+    assert client is not None
     """Delete the specified junk documents."""
     deleted_count = 0
     errors = []

@@ -32,6 +32,8 @@ class EmbeddingService:
 
             for attempt in range(max_attempts):
                 try:
+                    if self.llm_service is None:
+                        raise RuntimeError("LLM service not configured")
                     embeddings = await self.llm_service.embed(
                         provider=self.provider,
                         model=self.model,

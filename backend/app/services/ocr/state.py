@@ -42,6 +42,15 @@ class OcrDocumentProgress(BaseModel):
     started_at: float = 0.0
     status: str = ""
 
+    def __getitem__(self, key: str):
+        return getattr(self, key)
+
+    def __setitem__(self, key: str, value) -> None:
+        setattr(self, key, value)
+
+    def get(self, key: str, default=None):
+        return getattr(self, key, default)
+
 
 class OcrBatchProgress(BaseModel):
     running: bool = False
@@ -144,3 +153,14 @@ class OcrState(BaseState, CancelMixin):
         """Cancel the OCR operation and signal batch should stop."""
         self.request_cancel()
         self.batch.should_stop = True
+
+    async def acquire_lock(self, operation: str = "") -> None:
+        """Acquire the per-instance lock for single-document operations."""
+        await self._lock.acquire()
+
+    def release_lock(self) -> None:
+        """Release the per-instance lock."""
+        try:
+            self._lock.release()
+        except RuntimeError:
+            pass

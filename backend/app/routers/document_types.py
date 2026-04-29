@@ -31,6 +31,7 @@ class AnalyzeRequest(BaseModel):
 @router.get("/")
 @inject
 async def list_document_types(client: FromDishka[PaperlessClient] = None):
+    assert client is not None
     """List all document types with document counts."""
     return await client.get_document_types_with_counts()
 
@@ -40,6 +41,7 @@ async def list_document_types(client: FromDishka[PaperlessClient] = None):
 async def estimate_document_types(
     document_types_service: FromDishka[DocumentTypesService] = None,
 ):
+    assert document_types_service is not None
     """Estimate tokens needed for analysis."""
     return await document_types_service.estimate_document_types()
 
@@ -124,10 +126,12 @@ async def mark_group_processed(
 @router.post("/analyze")
 @inject
 async def analyze_document_types(
-    request: AnalyzeRequest = None,
+    request: AnalyzeRequest | None = None,
     similarity_service: FromDishka[SimilarityService] = None,
     document_types_service: FromDishka[DocumentTypesService] = None,
 ):
+    assert similarity_service is not None
+    assert document_types_service is not None
     """Analyze document types and find similar groups using AI."""
     batch_size = request.batch_size if request else 200
     result = await similarity_service.find_similar_document_types(batch_size=batch_size)
@@ -141,6 +145,7 @@ async def merge_document_types(
     request: MergeRequest,
     merge_service: FromDishka[MergeService] = None
 ):
+    assert merge_service is not None
     """Merge multiple document types into one."""
     result = await merge_service.merge_document_types(
         target_id=request.target_id,
@@ -155,6 +160,7 @@ async def merge_document_types(
 async def get_merge_history(
     merge_service: FromDishka[MergeService] = None
 ):
+    assert merge_service is not None
     """Get merge history for document types."""
     return await merge_service.get_history("document_types")
 
@@ -164,6 +170,7 @@ async def get_merge_history(
 async def get_empty_document_types(
     client: FromDishka[PaperlessClient] = None
 ):
+    assert client is not None
     """Get document types with 0 documents."""
     doc_types = await client.get_document_types_with_counts()
     empty = [dt for dt in doc_types if dt.get("document_count", 0) == 0]
@@ -178,6 +185,7 @@ async def get_empty_document_types(
 async def delete_empty_document_types(
     document_types_service: FromDishka[DocumentTypesService] = None,
 ):
+    assert document_types_service is not None
     """Delete all document types with 0 documents - PARALLEL for speed."""
     return await document_types_service.delete_empty_document_types()
 
@@ -188,6 +196,7 @@ async def delete_document_type_by_id(
     document_type_id: int,
     client: FromDishka[PaperlessClient] = None
 ):
+    assert client is not None
     """Delete a single document type."""
     try:
         await client.delete_document_type(document_type_id)

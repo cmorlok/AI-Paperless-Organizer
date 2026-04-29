@@ -31,7 +31,7 @@ async def get_setting(key: str, db: AsyncSession) -> Optional[str]:
     return setting.value if setting else None
 
 
-async def set_setting(key: str, value: str, value_type: str = "str", db: AsyncSession = None):
+async def set_setting(key: str, value: str, value_type: str = "str", db: AsyncSession | None = None):
     """Set a setting value. Creates new row if key doesn't exist, updates if it does."""
     if db is None:
         async for session in get_db():

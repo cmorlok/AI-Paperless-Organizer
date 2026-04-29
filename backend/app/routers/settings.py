@@ -30,7 +30,7 @@ async def get_setting(key: str, db: AsyncSession) -> Optional[str]:
     return setting.value if setting else None
 
 
-async def set_setting(key: str, value: str, value_type: str = "str", db: AsyncSession = None):
+async def set_setting(key: str, value: str, value_type: str = "str", db: AsyncSession | None = None):
     """Set a setting value. Creates new row if key doesn't exist, updates if it does."""
     if db is None:
         async for session in get_db():
@@ -168,6 +168,7 @@ async def get_llm_providers_from_db(db: AsyncSession = Depends(get_db)):
 async def get_llm_providers_from_litellm(
     llm_service: FromDishka[LLMService] = None,
 ):
+    assert llm_service is not None
     """Get all LiteLLM-supported providers."""
     return llm_service.list_providers()
 
@@ -178,6 +179,7 @@ async def get_llm_provider_models(
     provider: str,
     llm_service: FromDishka[LLMService] = None,
 ):
+    assert llm_service is not None
     """Get available models for a specific LiteLLM provider."""
     try:
         models = await llm_service.list_models(provider)

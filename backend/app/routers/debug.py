@@ -42,7 +42,7 @@ async def dns_lookup(request: DnsRequest):
         
         # Get all IPs
         results = socket.getaddrinfo(hostname, None)
-        ips = list(set([r[4][0] for r in results]))
+        ips = list(set([str(r[4][0]) for r in results]))
         
         return {
             "success": True,
@@ -214,6 +214,10 @@ async def get_service_statuses(
     cloud_state: FromDishka[CloudSyncState] = None,
     dup_state: FromDishka[DuplicateScanState] = None,
 ):
+    assert ocr_state is not None
+    assert classify_state is not None
+    assert cloud_state is not None
+    assert dup_state is not None
     """Return unified status of all background services (read-only)."""
     from app.services.debug_service import DebugService
     svc = DebugService()

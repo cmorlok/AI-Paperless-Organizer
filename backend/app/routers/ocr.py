@@ -87,6 +87,7 @@ class OcrEvaluateRequest(BaseModel):
 @router.get("/settings")
 @inject
 async def get_ocr_settings(state: FromDishka[OcrState] = None):
+    assert state is not None
     """Get current OCR settings."""
     settings = load_ocr_settings()
     settings["processor_enabled"] = state.processor.enabled
@@ -97,6 +98,7 @@ async def get_ocr_settings(state: FromDishka[OcrState] = None):
 @router.post("/settings")
 @inject
 async def save_ocr_settings_endpoint(request: OcrSettingsRequest, config_svc: FromDishka[ConfigService] = None):
+    assert config_svc is not None
     """Save OCR settings to KV store."""
     await config_svc.set("ocr_model", request.model, "str")
     await config_svc.set("max_image_size", str(request.max_image_size), "int")
@@ -124,6 +126,7 @@ class ProcessorSettingsRequest(BaseModel):
 @router.get("/processor/status")
 @inject
 async def get_processor_status(state: FromDishka[OcrState] = None):
+    assert state is not None
     """Get processor status."""
     return {
         "enabled": state.processor.enabled,
@@ -142,6 +145,10 @@ async def set_processor_settings(
     service: FromDishka[OcrService] = None,
     state: FromDishka[OcrState] = None,
 ):
+    assert config_svc is not None
+    assert client is not None
+    assert service is not None
+    assert state is not None
     """Enable/Disable processor and set interval."""
     state.processor.interval_minutes = max(1, request.interval_minutes)
 
@@ -170,6 +177,7 @@ async def set_processor_settings(
 @router.post("/batch/pause")
 @inject
 async def pause_batch_ocr(state: FromDishka[OcrState] = None):
+    assert state is not None
     """Pause the running batch OCR job."""
     if not state.batch.running:
         return {"success": False, "message": "Kein Batch-Job aktiv"}
@@ -180,6 +188,7 @@ async def pause_batch_ocr(state: FromDishka[OcrState] = None):
 @router.post("/batch/resume")
 @inject
 async def resume_batch_ocr(state: FromDishka[OcrState] = None):
+    assert state is not None
     """Resume the paused batch OCR job."""
     if not state.batch.running:
         return {"success": False, "message": "Kein Batch-Job aktiv"}
@@ -196,6 +205,7 @@ async def resume_batch_ocr(state: FromDishka[OcrState] = None):
 async def ensure_ocr_tags(
     client: FromDishka[PaperlessClient] = None
 ):
+    assert client is not None
     """Ensure runocr and ocrfinish tags exist in Paperless."""
     try:
         runocr_tag = await client.get_or_create_tag("runocr")
@@ -211,6 +221,7 @@ async def ensure_ocr_tags(
 @router.post("/test-connection")
 @inject
 async def test_ocr_connection(service: FromDishka[OcrService] = None):
+    assert service is not None
     """Test connection to OCR provider."""
     return await service.test_connection()
 
@@ -218,6 +229,7 @@ async def test_ocr_connection(service: FromDishka[OcrService] = None):
 @router.get("/stats")
 @inject
 async def get_ocr_stats(service: FromDishka[OcrService] = None):
+    assert service is not None
     """Get OCR statistics."""
     return service.get_stats()
 
@@ -228,6 +240,8 @@ async def get_ocr_status(
     client: FromDishka[PaperlessClient] = None,
     service: FromDishka[OcrService] = None,
 ):
+    assert client is not None
+    assert service is not None
     """Get overall OCR status - total docs, finished docs, percentage."""
     try:
         return await service.get_ocr_status(client)
@@ -248,9 +262,12 @@ async def ocr_single_document(
     service: FromDishka[OcrService] = None,
     state: FromDishka[OcrState] = None,
 ):
+    assert client is not None
+    assert service is not None
+    assert state is not None
     """Run OCR on a single document with page-level persistence and resume support."""
     try:
-        state.acquire_lock("single")
+        await state.acquire_lock("single")
         result = await service.ocr_document(client, document_id, force=force, db_session=db)
         return result
     except ValueError as e:
@@ -270,11 +287,12 @@ async def ocr_single_document(
 @router.get("/progress/{document_id}")
 @inject
 async def get_ocr_progress(document_id: int, state: FromDishka[OcrState] = None):
+    assert state is not None
     """Get live page-level progress for an ongoing OCR job."""
     progress = state.page_progress.get(document_id)
     if not progress:
         return {"active": False, "document_id": document_id}
-    elapsed = time.time() - progress.get("started_at", time.time())
+    elapsed = time.time() - (progress.get("started_at") or time.time())
     return {
         "active": True,
         "document_id": document_id,
@@ -296,6 +314,8 @@ async def apply_ocr_result(
     client: FromDishka[PaperlessClient] = None,
     service: FromDishka[OcrService] = None,
 ):
+    assert client is not None
+    assert service is not None
     """Apply new OCR content to a document.
 
     Fires off the Paperless update as async task for instant response.
@@ -330,6 +350,9 @@ async def start_batch_ocr(
     service: FromDishka[OcrService] = None,
     state: FromDishka[OcrState] = None,
 ):
+    assert client is not None
+    assert service is not None
+    assert state is not None
     """Start batch OCR processing in the background."""
     if state.batch.running:
         raise HTTPException(status_code=409, detail="Ein Batch-OCR-Job läuft bereits")
@@ -339,7 +362,7 @@ async def start_batch_ocr(
         service.batch_ocr,
         client,
         request.mode,
-        request.document_ids,
+        request.document_ids or [],
         request.set_finish_tag,
         request.remove_runocr_tag
     )
@@ -353,6 +376,8 @@ async def get_batch_status(
     state: FromDishka[OcrState] = None,
     llm_service: FromDishka[LLMService] = None,
 ):
+    assert state is not None
+    assert llm_service is not None
     """Get current batch OCR job status, including page-level progress for current document."""
     current_doc = state.batch.current_document
     current_doc_id = current_doc.get("id") if isinstance(current_doc, dict) else None
@@ -392,6 +417,7 @@ async def get_batch_status(
 @router.post("/batch/stop")
 @inject
 async def stop_batch_ocr(state: FromDishka[OcrState] = None):
+    assert state is not None
     """Stop the running batch OCR job."""
     if not state.batch.running:
         return {"stopped": False, "message": "Kein Batch-Job aktiv"}
@@ -416,6 +442,8 @@ async def apply_review_item(
     client: FromDishka[PaperlessClient] = None,
     service: FromDishka[OcrService] = None,
 ):
+    assert client is not None
+    assert service is not None
     """Apply review queue item (accept the new OCR text)."""
     try:
         return await service.apply_review_item(document_id, client)
@@ -442,6 +470,8 @@ async def reset_all_review_items(
     client: FromDishka[PaperlessClient] = None,
     service: FromDishka[OcrService] = None,
 ):
+    assert client is not None
+    assert service is not None
     """Reset all review queue items: remove ocrpruefen tag so batch OCR re-processes them."""
     try:
         return await service.reset_all_review_items(client)
@@ -455,6 +485,8 @@ async def keep_all_originals(
     client: FromDishka[PaperlessClient] = None,
     service: FromDishka[OcrService] = None,
 ):
+    assert client is not None
+    assert service is not None
     """Keep all original contents: set ocrfinish on all review items without changing content."""
     try:
         return await service.keep_all_originals(client)
@@ -502,6 +534,8 @@ async def add_to_ocr_ignore_list(
     client: FromDishka[PaperlessClient] = None,
     service: FromDishka[OcrService] = None,
 ):
+    assert client is not None
+    assert service is not None
     """Add a document to the OCR ignore list."""
     return await service.add_to_ignore_list(document_id, client)
 
@@ -534,6 +568,8 @@ async def remove_from_ocr_error_list(
     client: FromDishka[PaperlessClient] = None,
     service: FromDishka[OcrService] = None,
 ):
+    assert client is not None
+    assert service is not None
     """Remove a document from the error list and remove its ocrfehler tag so it can be retried."""
     return await service.remove_from_error_list(document_id, client)
 
@@ -554,6 +590,7 @@ async def get_document_preview(
     document_id: int,
     client: FromDishka[PaperlessClient] = None
 ):
+    assert client is not None
     """Proxy document preview from Paperless. Auto-detects PDF vs image."""
     try:
         file_bytes = await client.get_document_preview_image(document_id)
@@ -587,6 +624,7 @@ async def get_document_thumbnail(
     document_id: int,
     client: FromDishka[PaperlessClient] = None
 ):
+    assert client is not None
     """Proxy document thumbnail from Paperless (small image, handles auth)."""
     try:
         image_bytes = await client.get_document_thumbnail_bytes(document_id)
@@ -606,6 +644,9 @@ async def start_compare(
     service: FromDishka[OcrService] = None,
     compare_state: FromDishka[OcrCompareState] = None,
 ):
+    assert client is not None
+    assert service is not None
+    assert compare_state is not None
     """Start OCR model comparison as background task."""
     if compare_state.running:
         raise HTTPException(status_code=409, detail="Ein Vergleich läuft bereits")
@@ -633,6 +674,7 @@ async def start_compare(
 async def get_compare_status(
     compare_state: FromDishka[OcrCompareState] = None,
 ):
+    assert compare_state is not None
     """Get current compare job status (for polling)."""
     return {
         "running": compare_state.running,
@@ -661,6 +703,9 @@ async def evaluate_ocr_results(
     config_svc: FromDishka[ConfigService] = None,
     service: FromDishka[OcrService] = None,
 ):
+    assert llm_service is not None
+    assert config_svc is not None
+    assert service is not None
     """Send OCR comparison results to an external LLM for quality evaluation.
 
     WARNING: This sends document text to a cloud API (OpenAI, Anthropic, etc.)!

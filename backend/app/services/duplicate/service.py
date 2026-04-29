@@ -20,6 +20,8 @@ class DuplicateService:
         self.llm_service = llm_service
 
     async def scan_all(self, modes: List[str], similarity_threshold: float = 0.92):
+        assert self.llm_service is not None
+        assert self.state is not None
         from app.services.duplicate.state import DuplicateScanState
         from app.services.duplicate import exact, similar, invoices
 

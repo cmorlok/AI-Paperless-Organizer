@@ -51,6 +51,7 @@ class ToolExecutor:
         return any(p.match(tag_name) for p in self._tags_ignore_patterns)
 
     async def execute(self, tool_name: str, arguments: Dict[str, Any]) -> str:
+        assert self.paperless is not None
         """Execute a tool call and return the result as JSON string."""
         handlers = {
             "search_tags": self._search_tags,
@@ -72,6 +73,7 @@ class ToolExecutor:
             return json.dumps({"error": str(e)})
 
     async def _search_tags(self, args: Dict) -> List[Dict]:
+        assert self.paperless is not None
         query = args.get("query", "").lower()
         all_tags = await self.paperless.get_tags(use_cache=True)
 
@@ -97,6 +99,7 @@ class ToolExecutor:
         return results if not query else results[:20]
 
     async def _search_correspondents(self, args: Dict) -> List[Dict]:
+        assert self.paperless is not None
         query = args.get("query", "").lower()
         all_correspondents = await self.paperless.get_correspondents(use_cache=True)
 
@@ -116,6 +119,7 @@ class ToolExecutor:
         return results if not query else results[:20]
 
     async def _get_document_types(self, _args: Dict) -> List[Dict]:
+        assert self.paperless is not None
         all_types = await self.paperless.get_document_types(use_cache=True)
         return [
             {

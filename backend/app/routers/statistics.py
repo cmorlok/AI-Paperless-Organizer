@@ -30,6 +30,7 @@ async def record_statistic(
     request: RecordStatisticRequest,
     stats_service: FromDishka[StatisticsService] = None
 ):
+    assert stats_service is not None
     """Manually record a cleanup operation statistic."""
     await stats_service.record_operation(
         entity_type=request.entity_type,
@@ -98,6 +99,8 @@ async def get_statistics_summary(
     paperless: FromDishka[PaperlessClient] = None,
     db: AsyncSession = Depends(get_db)
 ):
+    assert stats_service is not None
+    assert paperless is not None
     """Get comprehensive statistics summary for dashboard."""
     import asyncio
     
@@ -125,6 +128,7 @@ async def get_recent_operations(
     limit: int = 10,
     stats_service: FromDishka[StatisticsService] = None
 ):
+    assert stats_service is not None
     """Get recent cleanup operations."""
     return await stats_service.get_recent_operations(limit)
 
@@ -135,6 +139,7 @@ async def get_daily_trend(
     days: int = 7,
     stats_service: FromDishka[StatisticsService] = None
 ):
+    assert stats_service is not None
     """Get daily statistics trend."""
     return await stats_service.get_daily_trend(days)
 

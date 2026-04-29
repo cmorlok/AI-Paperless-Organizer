@@ -23,11 +23,14 @@ async def _persist_auto_classify_enabled(enabled: bool, config_svc: ConfigServic
 @router.get("/config")
 @inject
 async def get_config(service: FromDishka[DocumentClassifierService] = None, config_svc: FromDishka[ConfigService] = None):
+    assert service is not None
+    assert config_svc is not None
     return await service.get_config_response(await config_svc.get("classifier_provider") or "", await config_svc.get(LLM_KEY_CLASSIFIER_MODEL) or "")
 
 @router.put("/config")
 @inject
 async def update_config(data: ClassifierConfigUpdate, service: FromDishka[DocumentClassifierService] = None):
+    assert service is not None
     update = {k: v for k, v in data.model_dump().items() if v is not None}
     config = await service.save_config(update)
     return {"status": "ok", "active_provider": config.active_provider}
@@ -40,16 +43,21 @@ async def get_prompt_defaults():
 @router.get("/stats")
 @inject
 async def get_classifier_stats(service: FromDishka[DocumentClassifierService] = None, client: FromDishka[PaperlessClient] = None):
+    assert service is not None
+    assert client is not None
     return await service.get_stats(client)
 
 @router.get("/next-unclassified")
 @inject
 async def get_next_unclassified(after_id: int = 0, service: FromDishka[DocumentClassifierService] = None, client: FromDishka[PaperlessClient] = None):
+    assert service is not None
+    assert client is not None
     return await service.get_next_unclassified(after_id, client)
 
 @router.post("/refresh-cache")
 @inject
 async def refresh_paperless_cache(client: FromDishka[PaperlessClient] = None):
+    assert client is not None
     from app.services.cache import get_cache
     await get_cache().clear("paperless:")
     tags, correspondents, doc_types, paths = await asyncio.gather(
@@ -61,53 +69,65 @@ async def refresh_paperless_cache(client: FromDishka[PaperlessClient] = None):
 @router.get("/tags")
 @inject
 async def get_tags(client: FromDishka[PaperlessClient] = None):
+    assert client is not None
     return await client.get_tags(use_cache=False)
 
 @router.get("/correspondents")
 @inject
 async def get_correspondents(client: FromDishka[PaperlessClient] = None):
+    assert client is not None
     return await client.get_correspondents(use_cache=False)
 
 @router.get("/document-types")
 @inject
 async def get_document_types(client: FromDishka[PaperlessClient] = None):
+    assert client is not None
     return await client.get_document_types(use_cache=False)
 
 @router.get("/storage-paths")
 @inject
 async def get_storage_paths(client: FromDishka[PaperlessClient] = None):
+    assert client is not None
     return await client.get_storage_paths(use_cache=False)
 
 @router.get("/storage-path-profiles")
 @inject
 async def get_storage_path_profiles(service: FromDishka[DocumentClassifierService] = None, client: FromDishka[PaperlessClient] = None):
+    assert service is not None
+    assert client is not None
     return await service.get_storage_path_profiles_merged(client)
 
 @router.put("/storage-path-profiles")
 @inject
 async def save_storage_path_profiles(profiles: List[StoragePathProfileUpdate], service: FromDishka[DocumentClassifierService] = None):
+    assert service is not None
     saved = [await service.save_storage_profile(p.model_dump()) for p in profiles]
     return {"status": "ok", "saved_count": len(saved)}
 
 @router.get("/custom-fields")
 @inject
 async def get_custom_fields(client: FromDishka[PaperlessClient] = None):
+    assert client is not None
     return await client.get_custom_fields(use_cache=False)
 
 @router.get("/custom-field-mappings")
 @inject
 async def get_custom_field_mappings(service: FromDishka[DocumentClassifierService] = None, client: FromDishka[PaperlessClient] = None):
+    assert service is not None
+    assert client is not None
     return await service.get_custom_field_mappings_merged(client)
 
 @router.put("/custom-field-mappings")
 @inject
 async def save_custom_field_mappings(mappings: List[CustomFieldMappingUpdate], service: FromDishka[DocumentClassifierService] = None):
+    assert service is not None
     saved = [await service.save_custom_field_mapping(m.model_dump()) for m in mappings]
     return {"status": "ok", "saved_count": len(saved)}
 
 @router.get("/document/{document_id}/thumb")
 @inject
 async def get_document_thumbnail(document_id: int, client: FromDishka[PaperlessClient] = None):
+    assert client is not None
     from fastapi.responses import Response
     try:
         return Response(content=await client.get_document_thumbnail_bytes(document_id), media_type="image/webp")
@@ -117,6 +137,7 @@ async def get_document_thumbnail(document_id: int, client: FromDishka[PaperlessC
 @router.get("/document/{document_id}/preview")
 @inject
 async def get_document_preview(document_id: int, client: FromDishka[PaperlessClient] = None):
+    assert client is not None
     from fastapi.responses import Response
     try:
         pdf_bytes = await client.get_document_preview_image(document_id)
@@ -128,6 +149,7 @@ async def get_document_preview(document_id: int, client: FromDishka[PaperlessCli
 @router.post("/analyze")
 @inject
 async def analyze_document(document_id: int, service: FromDishka[DocumentClassifierService] = None):
+    assert service is not None
     try:
         result = await service.classify_document(document_id)
         if result.error:
@@ -142,26 +164,32 @@ async def analyze_document(document_id: int, service: FromDishka[DocumentClassif
 @router.post("/benchmark")
 @inject
 async def benchmark_document(req: BenchmarkRequest, service: FromDishka[DocumentClassifierService] = None):
+    assert service is not None
     return await service.benchmark_document(req.document_id, [(s.provider, s.model or None) for s in req.slots])
 
 @router.post("/apply")
 @inject
 async def apply_classification(req: ApplyRequest, service: FromDishka[DocumentClassifierService] = None):
+    assert service is not None
     return await service.apply_classification(req.document_id, req.classification)
 
 @router.get("/history")
 @inject
 async def get_history(limit: int = 50, service: FromDishka[DocumentClassifierService] = None):
+    assert service is not None
     return await service.get_history(limit)
 
 @router.get("/tag-stats")
 @inject
 async def get_tag_stats(service: FromDishka[DocumentClassifierService] = None):
+    assert service is not None
     return await service.get_tag_stats()
 
 @router.post("/auto-classify/start")
 @inject
 async def start_auto_classify(state: FromDishka[AutoClassifyState] = None, config_svc: FromDishka[ConfigService] = None):
+    assert state is not None
+    assert config_svc is not None
     if state.enabled:
         return {"status": "already_running"}
     state.enabled, state.processed, state.errors, state.reviewed = True, 0, 0, 0
@@ -175,6 +203,8 @@ async def start_auto_classify(state: FromDishka[AutoClassifyState] = None, confi
 @router.post("/auto-classify/stop")
 @inject
 async def stop_auto_classify(state: FromDishka[AutoClassifyState] = None, config_svc: FromDishka[ConfigService] = None):
+    assert state is not None
+    assert config_svc is not None
     state.enabled = False
     if state._task and not state._task.done():
         state._task.cancel()
@@ -188,6 +218,8 @@ async def stop_auto_classify(state: FromDishka[AutoClassifyState] = None, config
 @router.get("/auto-classify/status")
 @inject
 async def get_auto_classify_status(state: FromDishka[AutoClassifyState] = None, llm_service: FromDishka[LLMService] = None):
+    assert state is not None
+    assert llm_service is not None
     lock = llm_service.get_lock_status() if llm_service else {}
     waiting = next((p for p, s in lock.items() if s["locked"] and p != "classifier"), None) if state.enabled else None
     return {"enabled": state.enabled, "running": state.running, "processed": state.processed, "errors": state.errors, "reviewed": state.reviewed, "current_doc": state.current_doc, "last_run": state.last_run, "waiting_for": waiting}
@@ -195,11 +227,13 @@ async def get_auto_classify_status(state: FromDishka[AutoClassifyState] = None, 
 @router.get("/review-queue")
 @inject
 async def get_review_queue(service: FromDishka[DocumentClassifierService] = None):
+    assert service is not None
     return await service.get_review_queue()
 
 @router.post("/review-queue/{entry_id}/approve")
 @inject
 async def approve_review_entry(entry_id: int, req: ApplyRequest, service: FromDishka[DocumentClassifierService] = None):
+    assert service is not None
     try:
         return await service.approve_review(entry_id, req.document_id, req.classification)
     except ValueError as e:
@@ -208,6 +242,7 @@ async def approve_review_entry(entry_id: int, req: ApplyRequest, service: FromDi
 @router.post("/review-queue/{entry_id}/dismiss")
 @inject
 async def dismiss_review_entry(entry_id: int, service: FromDishka[DocumentClassifierService] = None):
+    assert service is not None
     try:
         return await service.dismiss_review(entry_id)
     except ValueError as e:
@@ -216,16 +251,20 @@ async def dismiss_review_entry(entry_id: int, service: FromDishka[DocumentClassi
 @router.get("/tag-ideas")
 @inject
 async def get_tag_ideas(service: FromDishka[DocumentClassifierService] = None):
+    assert service is not None
     return await service.get_tag_ideas()
 
 @router.get("/tag-ideas/stats")
 @inject
 async def get_tag_ideas_stats(service: FromDishka[DocumentClassifierService] = None):
+    assert service is not None
     return await service.get_tag_ideas_stats()
 
 @router.post("/tag-ideas/{entry_id}/approve")
 @inject
 async def approve_tag_idea(entry_id: int, req: TagIdeaApproveRequest, service: FromDishka[DocumentClassifierService] = None, client: FromDishka[PaperlessClient] = None):
+    assert service is not None
+    assert client is not None
     try:
         return await service.approve_tag_idea(entry_id, req.tag_name, client)
     except ValueError as e:
@@ -234,6 +273,7 @@ async def approve_tag_idea(entry_id: int, req: TagIdeaApproveRequest, service: F
 @router.post("/tag-ideas/{entry_id}/dismiss")
 @inject
 async def dismiss_tag_idea(entry_id: int, req: TagIdeaApproveRequest, service: FromDishka[DocumentClassifierService] = None):
+    assert service is not None
     try:
         return await service.dismiss_tag_idea(entry_id, req.tag_name)
     except ValueError as e:
@@ -242,6 +282,8 @@ async def dismiss_tag_idea(entry_id: int, req: TagIdeaApproveRequest, service: F
 @router.post("/tag-ideas/{entry_id}/approve-all")
 @inject
 async def approve_all_tag_ideas(entry_id: int, service: FromDishka[DocumentClassifierService] = None, client: FromDishka[PaperlessClient] = None):
+    assert service is not None
+    assert client is not None
     try:
         return await service.approve_all_tag_ideas(entry_id, client)
     except ValueError as e:
@@ -250,6 +292,8 @@ async def approve_all_tag_ideas(entry_id: int, service: FromDishka[DocumentClass
 @router.post("/tag-ideas/bulk-approve")
 @inject
 async def bulk_approve_tag_idea(req: TagIdeaApproveRequest, service: FromDishka[DocumentClassifierService] = None, client: FromDishka[PaperlessClient] = None):
+    assert service is not None
+    assert client is not None
     try:
         return await service.bulk_approve_tag_idea(req.tag_name, client)
     except ValueError as e:
@@ -258,11 +302,14 @@ async def bulk_approve_tag_idea(req: TagIdeaApproveRequest, service: FromDishka[
 @router.post("/tag-ideas/bulk-dismiss")
 @inject
 async def bulk_dismiss_tag_idea(req: TagIdeaApproveRequest, service: FromDishka[DocumentClassifierService] = None):
+    assert service is not None
     return await service.bulk_dismiss_tag_idea(req.tag_name)
 
 @router.post("/tag-ideas/{entry_id}/assign-existing")
 @inject
 async def assign_existing_tag(entry_id: int, req: TagIdeaApproveRequest, service: FromDishka[DocumentClassifierService] = None, client: FromDishka[PaperlessClient] = None):
+    assert service is not None
+    assert client is not None
     try:
         return await service.assign_existing_tag(entry_id, req.tag_name, client)
     except ValueError as e:

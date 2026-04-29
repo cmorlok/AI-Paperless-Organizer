@@ -114,7 +114,7 @@ async def validate_api_key(request: Request, db: AsyncSession) -> Optional[ApiKe
 
     key_hash = _hash_key(token)
     result = await db.execute(
-        select(ApiKey).where(ApiKey.key_hash == key_hash, ApiKey.is_active is True)
+        select(ApiKey).where(ApiKey.key_hash == key_hash, ApiKey.is_active == True)
     )
     api_key = result.scalar_one_or_none()
     if api_key:

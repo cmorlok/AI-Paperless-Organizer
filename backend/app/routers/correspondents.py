@@ -39,6 +39,7 @@ class MergeGroup(BaseModel):
 @router.get("/")
 @inject
 async def list_correspondents(client: FromDishka[PaperlessClient] = None):
+    assert client is not None
     """List all correspondents with document counts."""
     return await client.get_correspondents_with_counts()
 
@@ -48,6 +49,7 @@ async def list_correspondents(client: FromDishka[PaperlessClient] = None):
 async def estimate_correspondents(
     correspondents_service: FromDishka[CorrespondentsService] = None,
 ):
+    assert correspondents_service is not None
     """Estimate tokens needed for analysis."""
     return await correspondents_service.estimate_correspondents()
 
@@ -132,10 +134,12 @@ async def mark_group_processed(
 @router.post("/analyze")
 @inject
 async def analyze_correspondents(
-    request: AnalyzeRequest = None,
+    request: AnalyzeRequest | None = None,
     similarity_service: FromDishka[SimilarityService] = None,
     correspondents_service: FromDishka[CorrespondentsService] = None,
 ):
+    assert similarity_service is not None
+    assert correspondents_service is not None
     """Analyze correspondents and find similar groups using AI."""
     batch_size = request.batch_size if request else 200
     result = await similarity_service.find_similar_correspondents(batch_size=batch_size)
@@ -149,6 +153,7 @@ async def merge_correspondents(
     request: MergeRequest,
     merge_service: FromDishka[MergeService] = None
 ):
+    assert merge_service is not None
     """Merge multiple correspondents into one."""
     result = await merge_service.merge_correspondents(
         target_id=request.target_id,
@@ -163,6 +168,7 @@ async def merge_correspondents(
 async def get_merge_history(
     merge_service: FromDishka[MergeService] = None
 ):
+    assert merge_service is not None
     """Get merge history for correspondents."""
     return await merge_service.get_history("correspondents")
 
@@ -172,6 +178,7 @@ async def get_merge_history(
 async def get_empty_correspondents(
     client: FromDishka[PaperlessClient] = None
 ):
+    assert client is not None
     """Get correspondents with 0 documents."""
     correspondents = await client.get_correspondents_with_counts()
     empty = [c for c in correspondents if c.get("document_count", 0) == 0]
@@ -186,6 +193,7 @@ async def get_empty_correspondents(
 async def delete_empty_correspondents(
     correspondents_service: FromDishka[CorrespondentsService] = None,
 ):
+    assert correspondents_service is not None
     """Delete all correspondents with 0 documents - PARALLEL for speed."""
     return await correspondents_service.delete_empty_correspondents()
 
@@ -196,6 +204,7 @@ async def delete_correspondent(
     correspondent_id: int,
     client: FromDishka[PaperlessClient] = None
 ):
+    assert client is not None
     """Delete a single correspondent."""
     try:
         await client.delete_correspondent(correspondent_id)

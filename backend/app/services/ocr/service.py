@@ -63,6 +63,8 @@ class OcrService:
         self.session_factory = session_factory
 
     async def _get_provider(self) -> str:
+        assert self.llm_service is not None
+        assert self.session_factory is not None
         """Read OCR provider from KV store."""
         from app.routers.settings import get_setting
         async with self.session_factory() as db:
@@ -72,12 +74,16 @@ class OcrService:
             return provider
 
     async def _get_model(self) -> str:
+        assert self.llm_service is not None
+        assert self.session_factory is not None
         """Read OCR model from KV store."""
         from app.routers.settings import get_setting
         async with self.session_factory() as db:
             return await get_setting("ocr_model", db) or DEFAULT_OCR_MODEL
 
     async def _get_max_image_size(self) -> int:
+        assert self.llm_service is not None
+        assert self.session_factory is not None
         """Lazy-load max image size from KV store."""
         from app.routers.settings import get_setting
         async with self.session_factory() as db:
@@ -85,6 +91,8 @@ class OcrService:
             return int(val) if val else 2048
 
     async def _get_smart_skip_enabled(self) -> bool:
+        assert self.llm_service is not None
+        assert self.session_factory is not None
         """Lazy-load smart skip setting from KV store."""
         from app.routers.settings import get_setting
         async with self.session_factory() as db:
@@ -92,6 +100,7 @@ class OcrService:
             return val != "false" if val else True
 
     async def _ensure_provider_ready(self, provider: str) -> None:
+        assert self.llm_service is not None
         """Check that the OCR provider is accessible."""
         if self.llm_service is None:
             raise RuntimeError("OcrService.llm_service not injected - cannot perform OCR")
@@ -182,8 +191,8 @@ class OcrService:
         """
         if max(image.size) > max_size:
             ratio = max_size / max(image.size)
-            new_size = tuple(int(dim * ratio) for dim in image.size)
-            image = image.resize(new_size, Image.LANCZOS)
+            new_size = (int(image.width * ratio), int(image.height * ratio))
+            image = image.resize(new_size, Image.Resampling.LANCZOS)
         img_bytes = io.BytesIO()
         image.save(img_bytes, format="JPEG", quality=85)
         return img_bytes.getvalue()
@@ -345,7 +354,8 @@ class OcrService:
         page_num: int = 0,
         total_pages: int = 0,
         timeout: float = 300.0,
-    ) -> str:
+    ) -> str | None:
+        assert self.llm_service is not None
         """Run OCR on a single prepared image bytes block.
 
         Uses model-specific parameters from get_model_params().
@@ -403,6 +413,7 @@ class OcrService:
         model_params: dict,
         timeout: float,
     ) -> dict | str | None:
+        assert self.llm_service is not None
         """Execute a single vision OCR request via LiteLLM."""
         if self.llm_service is None:
             raise RuntimeError("OcrService.llm_service not injected - cannot perform OCR")
@@ -546,6 +557,7 @@ class OcrService:
             return None
 
     async def ocr_document(self, paperless_client, document_id: int, force: bool = False, db_session=None) -> Dict[str, Any]:
+        assert self.state is not None
         """OCR a document with page-level persistence. Supports resume after failures."""
         # Fetch provider config at runtime
         provider = await self._get_provider()
@@ -797,6 +809,7 @@ class OcrService:
         return []
 
     async def _load_completed_pages(self, db_session, document_id: int, total_pages: int) -> Dict[int, str]:
+        assert self.llm_service is not None
         """Load already-completed page results from the DB."""
         from sqlalchemy import select
         from app.models.ocr import OcrPageResult
@@ -817,8 +830,9 @@ class OcrService:
     async def _save_page_result(
         self, db_session, document_id: int, page_number: int, total_pages: int,
         page_text: Optional[str], status: str, attempt_count: int,
-        duration: float = 0, error_message: str = None,
+        duration: float = 0, error_message: str | None = None,
     ):
+        assert self.llm_service is not None
         """Upsert a page result into the DB."""
         from sqlalchemy import select
         from app.models.ocr import OcrPageResult
@@ -856,6 +870,7 @@ class OcrService:
                 pass
 
     async def _cleanup_page_results(self, db_session, document_id: int):
+        assert self.llm_service is not None
         """Remove page results from DB after successful completion."""
         from sqlalchemy import delete
         from app.models.ocr import OcrPageResult
@@ -869,6 +884,7 @@ class OcrService:
             logger.warning(f"Failed to cleanup page results: {e}")
 
     async def ocr_image(self, image_bytes: bytes) -> str:
+        assert self.llm_service is not None
         """Legacy method for backward compat or single image bytes."""
         try:
             provider = await self._get_provider()
@@ -876,12 +892,14 @@ class OcrService:
             max_size = await self._get_max_image_size()
             img = Image.open(io.BytesIO(image_bytes))
             prepared = self._prepare_image(img, max_size=max_size)
-            return await self._ocr_single_image(prepared, model, provider)
+            result = await self._ocr_single_image(prepared, model, provider)
+            return result or ""
         except Exception as e:
             logger.error(f"Legacy ocr_image failed: {e}")
             raise
 
     async def test_connection(self) -> Dict[str, Any]:
+        assert self.llm_service is not None
         """Test OCR provider connection and return status."""
         try:
             provider = await self._get_provider()
@@ -1144,9 +1162,10 @@ WICHTIG:
         used_model = eval_model or "gpt-4o"
         logger.info("Evaluating OCR results", extra={"count": len(results), "provider": eval_provider, "model": used_model})
 
+        assert self.llm_service is not None
         result = await self.llm_service.complete(
             provider=eval_provider,
-            model=eval_model,
+            model=used_model,
             messages=[{"role": "user", "content": prompt}],
         )
         cleaned = (result.content or "").strip()
@@ -1187,6 +1206,7 @@ WICHTIG:
         new_content: str,
         set_finish_tag: bool = True
     ) -> Dict[str, Any]:
+        assert self.state is not None
         """Apply OCR result to document and optionally set ocrfinish tag."""
         start_time = time.time()
 
@@ -1226,10 +1246,11 @@ WICHTIG:
         self,
         paperless_client,
         mode: str = "all",
-        document_ids: List[int] = None,
+        document_ids: List[int] | None = None,
         set_finish_tag: bool = True,
         remove_runocr_tag: bool = True
     ) -> None:
+        assert self.state is not None
         """Run batch OCR. Updates self.state.batch in-place for progress tracking."""
         self.state.batch.running = True
         self.state.batch.should_stop = False
@@ -1288,7 +1309,7 @@ WICHTIG:
                             return
 
                 documents = [
-                    d for d in all_docs
+                    d for d in (all_docs or [])
                     if ocrfinish_tag_id not in d.get("tags", [])
                     and ocrreview_tag_id not in d.get("tags", [])
                     and ocrerror_tag_id not in d.get("tags", [])
@@ -1559,6 +1580,7 @@ WICHTIG:
             self.state.batch.current_document = None
 
     async def _unload_model_from_vram(self, model: str) -> None:
+        assert self.llm_service is not None
         try:
             await self.llm_service.unload_local_model("ollama", model)
             logger.info(f"Unloaded {model} from VRAM")
@@ -1566,6 +1588,7 @@ WICHTIG:
             pass
 
     async def _wait_for_provider_ready(self, provider: str, max_wait: int = 60) -> bool:
+        assert self.llm_service is not None
         waited = 0
         interval = 3
         while waited < max_wait:
@@ -1696,7 +1719,7 @@ WICHTIG:
                             page_num=page_idx + 1, total_pages=total_pages, timeout=300.0,
                         )
                         preview = page_text[:200].replace('\n', ' ') if page_text else "(empty)"
-                        logger.debug(f"{model_name} page {page_idx+1} result: {len(page_text)} chars, preview: {preview}")
+                        logger.debug(f"{model_name} page {page_idx+1} result: {len(page_text or '')} chars, preview: {preview}")
                         page_texts.append(page_text)
                 except Exception as e:
                     error_msg = str(e)
@@ -1738,6 +1761,7 @@ WICHTIG:
             compare_state.running = False
 
     async def processor_loop(self, paperless_client):
+        assert self.state is not None
         """Continuous background loop to check for new documents."""
         from datetime import datetime
 
@@ -1749,6 +1773,7 @@ WICHTIG:
         _ocrerror_tag = None
 
         async def _get_exclude_tag_ids():
+            assert self.state is not None
             nonlocal _ocrfinish_tag, _ocrpruefen_tag, _ocrerror_tag
             try:
                 if _ocrfinish_tag is None:
@@ -1804,7 +1829,7 @@ WICHTIG:
                 logger.info(f"Processor error: {e}")
 
             self.state.processor.running = False
-            interval_min = self.state.processor.get("interval_minutes", 1)
+            interval_min = self.state.processor.interval_minutes or 1
             for _ in range(interval_min * 60):
                 if not self.state.processor.enabled:
                     break

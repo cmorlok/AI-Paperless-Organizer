@@ -37,6 +37,7 @@ async def update_db_cache(db: AsyncSession, key: str, data: list):
 async def get_paperless_status(
     client: FromDishka[PaperlessClient] = None
 ):
+    assert client is not None
     """Check connection status to Paperless-ngx - FAST, no data loading."""
     if not client.base_url:
         return {
@@ -62,6 +63,7 @@ async def get_paperless_status(
 @router.get("/correspondents")
 @inject
 async def get_correspondents(client: FromDishka[PaperlessClient] = None):
+    assert client is not None
     """Get all correspondents from Paperless."""
     return await client.get_correspondents()
 
@@ -72,6 +74,7 @@ async def get_tags(
     client: FromDishka[PaperlessClient] = None,
     db: AsyncSession = Depends(get_db)
 ):
+    assert client is not None
     """Get all tags - in-memory cache → DB cache → Paperless (fallback only)."""
     from app.services.cache import get_cache
     from app.services.paperless import CACHE_TTL
@@ -101,6 +104,7 @@ async def get_tags(
 @router.get("/document-types")
 @inject
 async def get_document_types(client: FromDishka[PaperlessClient] = None):
+    assert client is not None
     """Get all document types from Paperless."""
     return await client.get_document_types()
 
@@ -108,11 +112,12 @@ async def get_document_types(client: FromDishka[PaperlessClient] = None):
 @router.get("/documents")
 @inject
 async def get_documents(
-    correspondent_id: int = None,
-    tag_id: int = None,
-    document_type_id: int = None,
+    correspondent_id: int | None = None,
+    tag_id: int | None = None,
+    document_type_id: int | None = None,
     client: FromDishka[PaperlessClient] = None
 ):
+    assert client is not None
     """Get documents with optional filters."""
     return await client.get_documents(
         correspondent_id=correspondent_id,
@@ -127,6 +132,7 @@ async def refresh_cache(
     client: FromDishka[PaperlessClient] = None,
     db: AsyncSession = Depends(get_db)
 ):
+    assert client is not None
     """Refresh the cache by fetching fresh data from Paperless and storing in DB."""
     cache = get_cache()
     
@@ -155,12 +161,13 @@ async def refresh_cache(
 @router.get("/document-previews")
 @inject
 async def get_document_previews(
-    correspondent_id: int = None,
-    tag_id: int = None,
-    document_type_id: int = None,
+    correspondent_id: int | None = None,
+    tag_id: int | None = None,
+    document_type_id: int | None = None,
     limit: int = 5,
     client: FromDishka[PaperlessClient] = None
 ):
+    assert client is not None
     """Get document previews for a specific entity."""
     return await client.get_document_previews(
         correspondent_id=correspondent_id,

@@ -24,6 +24,8 @@ async def test_llm_connection(
     llm_service: FromDishka[LLMService] = None,
     config_svc: FromDishka[ConfigService] = None,
 ):
+    assert llm_service is not None
+    assert config_svc is not None
     """Test LLM provider connection. If provider/model given, tests that specific combo; otherwise tests active classifier provider."""
     try:
         test_provider = provider
@@ -31,6 +33,8 @@ async def test_llm_connection(
         if not test_provider or not test_model:
             test_provider = test_provider or (await config_svc.get(LLM_KEY_CLASSIFIER_PROVIDER))
             test_model = test_model or (await config_svc.get(LLM_KEY_CLASSIFIER_MODEL))
+        assert test_provider is not None
+        assert test_model is not None
         result = await llm_service.test_connection(provider=test_provider, model=test_model)
         return {"success": True, "provider": result["provider"], "model": result["model"]}
     except Exception as e:
@@ -44,10 +48,14 @@ async def test_prompt(
     llm_service: FromDishka[LLMService] = None,
     config_svc: FromDishka[ConfigService] = None,
 ):
+    assert llm_service is not None
+    assert config_svc is not None
     """Test a prompt with the active LLM provider."""
     try:
         provider = (await config_svc.get(LLM_KEY_CLASSIFIER_PROVIDER)) or None
         model = (await config_svc.get(LLM_KEY_CLASSIFIER_MODEL)) or None
+        assert provider is not None
+        assert model is not None
         result = await llm_service.complete(
             provider=provider,
             model=model,
@@ -63,6 +71,7 @@ async def test_prompt(
 async def get_llm_status(
     llm_service: FromDishka[LLMService] = None,
 ) -> dict[str, dict]:
+    assert llm_service is not None
     """Get current LLM lock status for all local providers.
 
     Returns lock status for each provider that has an active lock,

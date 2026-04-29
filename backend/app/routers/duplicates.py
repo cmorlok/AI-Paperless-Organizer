@@ -37,6 +37,8 @@ async def start_scan(
     service: FromDishka[DuplicateService] = None,
     state: FromDishka[DuplicateScanState] = None,
 ):
+    assert service is not None
+    assert state is not None
     """Startet einen Duplikat-Scan im Hintergrund."""
     if state.running:
         raise HTTPException(status_code=409, detail="Scan läuft bereits")
@@ -54,6 +56,7 @@ async def start_scan(
 @router.get("/status")
 @inject
 async def scan_status(state: FromDishka[DuplicateScanState] = None):
+    assert state is not None
     """Polling-Endpoint für den Scan-Fortschritt."""
     return {
         "running": state.running,
@@ -67,6 +70,7 @@ async def scan_status(state: FromDishka[DuplicateScanState] = None):
 @router.post("/stop")
 @inject
 async def stop_scan(state: FromDishka[DuplicateScanState] = None):
+    assert state is not None
     """Stoppt den laufenden Scan."""
     if not state.running:
         return {"status": "not_running"}
@@ -78,6 +82,7 @@ async def stop_scan(state: FromDishka[DuplicateScanState] = None):
 @router.get("/results")
 @inject
 async def scan_results(state: FromDishka[DuplicateScanState] = None):
+    assert state is not None
     """Gibt die Ergebnis-Gruppen des letzten Scans zurück."""
     if state.running:
         raise HTTPException(status_code=409, detail="Scan läuft noch")
@@ -145,7 +150,7 @@ async def remove_ignore(doc_id_a: int, doc_id_b: int, db: AsyncSession = Depends
     )
     await db.commit()
 
-    if result.rowcount == 0:
+    if getattr(result, "rowcount", 0) == 0:
         raise HTTPException(status_code=404, detail="Paar nicht gefunden")
 
     logger.info("Removed ignore pair (%d, %d)", a, b)

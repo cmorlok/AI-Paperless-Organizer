@@ -22,7 +22,7 @@ class StatisticsService:
         documents_affected: int = 0,
         items_before: int = 0,
         items_after: int = 0,
-        details: dict = None
+        details: dict | None = None
     ) -> Optional[CleanupStatistics]:
         """Record a cleanup operation."""
         if self.session_factory is None:

@@ -1,6 +1,8 @@
 """Protocol for RAG service."""
 
-from typing import Protocol, runtime_checkable, Any, Optional, Dict, List, AsyncIterator
+from __future__ import annotations
+
+from typing import Protocol, runtime_checkable, Any, Optional, Dict, List, AsyncIterator, AsyncGenerator
 
 
 @runtime_checkable
@@ -10,12 +12,12 @@ class RAGService(Protocol):
     @property
     def indexer(self) -> Any: ...
 
-    async def chat_stream(
+    def chat_stream(
         self,
         question: str,
         session_id: Optional[str] = None,
         filters: Optional[Dict] = None,
-    ) -> AsyncIterator[str]: ...
+    ) -> AsyncGenerator[str, None]: ...
 
     async def search(self, query: str, limit: int = 5, filters: Optional[Dict] = None) -> List[Any]: ...
 

@@ -17,12 +17,3 @@ class TagsService(Protocol):
     async def bulk_delete_tags(self, tag_ids: List[int]) -> Dict: ...
 
     async def remove_tags_from_saved_analyses(self, tag_ids: List[int]) -> Dict: ...
-
-    async def save_analysis(
-        self,
-        entity_type: str,
-        analysis_type: str,
-        groups: list,
-        stats: dict,
-        items_count_key: str = "items_count",
-    ) -> None: ...

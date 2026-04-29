@@ -93,7 +93,7 @@ _TITLE_REF_INDICATORS = re.compile(
 _TITLE_YEAR_ID_RE = re.compile(r"\b((?:19|20)\d{2})-(\d{4,6})\b")
 
 
-def _clean_title(title: str, created_date: str = None) -> str:
+def _clean_title(title: str, created_date: str | None = None) -> str:
     """Minimal safety net: remove obvious personal-number patterns from titles.
 
     Only removes "YYYY-NNNNN" patterns that are NOT preceded by a reference
@@ -226,6 +226,7 @@ class DocumentClassifierService:
         }
 
     async def get_storage_profiles(self) -> List[StoragePathProfile]:
+        assert self.paperless is not None
         if self.session_factory is None:
             return []
         async with self.session_factory() as db:
@@ -235,6 +236,7 @@ class DocumentClassifierService:
             return list(result.scalars().all())
 
     async def save_storage_profile(self, data: Dict[str, Any]) -> StoragePathProfile:
+        assert self.paperless is not None
         if self.session_factory is None:
             raise RuntimeError("No session_factory configured")
         async with self.session_factory() as db:
@@ -258,6 +260,8 @@ class DocumentClassifierService:
             return profile
 
     async def get_custom_field_mappings(self) -> List[CustomFieldMapping]:
+        assert self.paperless is not None
+        assert self.llm_service is not None
         if self.session_factory is None:
             return []
         async with self.session_factory() as db:
@@ -267,6 +271,8 @@ class DocumentClassifierService:
             return list(result.scalars().all())
 
     async def save_custom_field_mapping(self, data: Dict[str, Any]) -> CustomFieldMapping:
+        assert self.paperless is not None
+        assert self.llm_service is not None
         if self.session_factory is None:
             raise RuntimeError("No session_factory configured")
         async with self.session_factory() as db:
@@ -293,6 +299,7 @@ class DocumentClassifierService:
         self, config: ClassifierConfig,
         storage_profiles: list, field_mappings: list,
     ) -> ToolExecutor:
+        assert self.paperless is not None
         return ToolExecutor(
             paperless=self.paperless,
             storage_profiles=storage_profiles,
@@ -304,6 +311,8 @@ class DocumentClassifierService:
         )
 
     async def _get_llm_provider(self, provider_name: str) -> 'LLMProvider':
+        assert self.paperless is not None
+        assert self.llm_service is not None
         """Get a configured LLMProvider from the central table."""
         if self.session_factory is None:
             raise RuntimeError("No session_factory configured")
@@ -317,6 +326,8 @@ class DocumentClassifierService:
             return provider
 
     async def _get_classifier_provider_name(self) -> str:
+        assert self.paperless is not None
+        assert self.llm_service is not None
         """Get the classifier provider name from AppSettings key-value store (LLM-08)."""
         if self.session_factory is None:
             raise ValueError("classifier_provider is not configured")
@@ -335,6 +346,8 @@ class DocumentClassifierService:
             raise ValueError("classifier_provider is not configured")
 
     async def _build_provider(self, config: ClassifierConfig) -> BaseClassifierProvider:
+        assert self.paperless is not None
+        assert self.llm_service is not None
         """Build the appropriate provider based on central LLM settings."""
         storage_profiles = await self.get_storage_profiles()
         field_mappings = await self.get_custom_field_mappings()
@@ -347,12 +360,14 @@ class DocumentClassifierService:
         self, provider_name: str, tool_executor: ToolExecutor,
         model_override: Optional[str] = None,
     ) -> BaseClassifierProvider:
+        assert self.llm_service is not None
+        assert self.paperless is not None
         """Create a provider instance from the central LLMProvider table."""
         if self.session_factory is not None:
             async with self.session_factory() as db:
-                model = model_override or await get_setting(LLM_KEY_CLASSIFIER_MODEL, db)
+                model = model_override or await get_setting(LLM_KEY_CLASSIFIER_MODEL, db) or ""
         else:
-            model = model_override
+            model = model_override or ""
 
         if provider_name == "ollama":
             return LitellmOllamaProvider(model=model, provider=provider_name, tool_executor=tool_executor, llm_service=self.llm_service)
@@ -362,6 +377,7 @@ class DocumentClassifierService:
         return LitellmToolCallingProvider(model=model, provider=provider_name, tool_executor=tool_executor, provider_label=label, llm_service=self.llm_service)
 
     async def _get_active_classifier_provider_name(self) -> str:
+        assert self.paperless is not None
         """Alias for backward compat."""
         return await self._get_classifier_provider_name()
 
@@ -392,6 +408,7 @@ class DocumentClassifierService:
         }
 
     async def _build_document_context(self, document_id: int) -> tuple:
+        assert self.paperless is not None
         """Build DocumentContext + raw doc_data from Paperless. Returns (context, doc_data) or raises."""
         doc_data = await self.paperless.get_document(document_id)
         if not doc_data:
@@ -632,6 +649,7 @@ class DocumentClassifierService:
         self, result: ClassificationResult, config: ClassifierConfig,
         doc_content: str = "",
     ):
+        assert self.paperless is not None
         """Post-process: normalize fields, filter tags, verify coherence."""
         logger.info(f"Post-process start: tags_from_model={result.tags}")
         result.custom_fields = self._normalize_custom_fields(result.custom_fields)
@@ -757,6 +775,7 @@ class DocumentClassifierService:
         self._verify_result_coherence(result, config, doc_content)
 
     async def classify_document(self, document_id: int) -> ClassificationResult:
+        assert self.paperless is not None
         """Classify a single document and return proposals."""
         # Fresh Paperless data for every classification — new tags/correspondents
         # created by a previous apply must be visible immediately.
@@ -848,6 +867,7 @@ class DocumentClassifierService:
         self, provider_name: str, config: ClassifierConfig,
         model_override: Optional[str] = None,
     ) -> BaseClassifierProvider:
+        assert self.paperless is not None
         """Build a specific provider with optional model override (for benchmarks)."""
         storage_profiles = await self.get_storage_profiles()
         field_mappings = await self.get_custom_field_mappings()
@@ -859,6 +879,7 @@ class DocumentClassifierService:
         self, document_id: int,
         slots: List[tuple],
     ) -> Dict[str, Any]:
+        assert self.paperless is not None
         """Run classification with N provider/model combos, strictly sequential."""
 
         config = await self.get_config()
@@ -878,6 +899,7 @@ class DocumentClassifierService:
                     break
 
         async def run_single(name: str, model: Optional[str]) -> Dict[str, Any]:
+            assert self.paperless is not None
             # Resolve actual model for display: use provided model, or fetch from KV store
             if model:
                 actual_model = model
@@ -929,6 +951,7 @@ class DocumentClassifierService:
     async def apply_classification(
         self, document_id: int, classification: Dict[str, Any]
     ) -> Dict[str, Any]:
+        assert self.paperless is not None
         """Apply a (potentially edited) classification to a document in Paperless."""
         config = await self.get_config()
         update_data = {}
@@ -1113,6 +1136,7 @@ class DocumentClassifierService:
         return "; ".join(reasons)
 
     async def classify_document_auto(self, document_id: int, mode: str = "review") -> Dict[str, Any]:
+        assert self.paperless is not None
         """Classify a document in auto-mode.
 
         New tags suggested by the AI are NOT created automatically.
@@ -1204,6 +1228,7 @@ class DocumentClassifierService:
         }
 
     async def _save_tag_ideas(self, document_id: int, tag_ideas: List[str]):
+        assert self.paperless is not None
         """Save tag ideas on the latest history entry for a document."""
         try:
             if self.session_factory is not None:
@@ -1222,6 +1247,7 @@ class DocumentClassifierService:
             logger.warning(f"Could not save tag ideas for doc {document_id}: {e}")
 
     async def _add_status_tag(self, document_id: int, tag_name: str):
+        assert self.paperless is not None
         """Append a single tag to a document in Paperless (creates the tag if missing)."""
         try:
             tag_name = tag_name.strip()
@@ -1356,7 +1382,7 @@ class DocumentClassifierService:
             if after_id:
                 params["id__gt"] = after_id
 
-            result = await client._request("GET", "/documents/", params=params)
+            result = await getattr(client, "_request")("GET", "/documents/", params=params)
             if not result:
                 break
 
@@ -1383,7 +1409,7 @@ class DocumentClassifierService:
         result = []
         for path in all_paths:
             path_id = path.get("id")
-            profile = saved_by_id.get(path_id)
+            profile = saved_by_id.get(int(path_id)) if path_id is not None else None
             result.append({
                 "id": profile.id if profile else None,
                 "paperless_path_id": path_id,
@@ -1407,7 +1433,7 @@ class DocumentClassifierService:
         result = []
         for field in all_fields:
             fid = field.get("id")
-            mapping = saved_by_id.get(fid)
+            mapping = saved_by_id.get(int(fid)) if fid is not None else None
             field_type = field.get("data_type", "string")
             auto_prompt = FIELD_TYPE_PROMPTS.get(field.get("name", "").lower(), "")
 

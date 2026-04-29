@@ -6,8 +6,6 @@ import base64
 import os
 import secrets
 from typing import Optional
-
-import anyio
 from cryptography.hazmat.primitives.kdf.scrypt import Scrypt
 
 
@@ -36,14 +34,16 @@ def _verify_password_sync(password: str, stored: str) -> bool:
 
 async def hash_password(password: str) -> str:
     """Async Scrypt hash (offloads to worker thread — never blocks event loop)."""
-    return await anyio.to_thread.run_sync(_hash_password_sync, password)
+    from anyio.to_thread import run_sync
+    return await run_sync(_hash_password_sync, password)
 
 
 async def verify_password(password: str, stored: str) -> bool:
     """Async Scrypt verify (offloads to worker thread)."""
     if not stored:
         return False
-    return await anyio.to_thread.run_sync(_verify_password_sync, password, stored)
+    from anyio.to_thread import run_sync
+    return await run_sync(_verify_password_sync, password, stored)
 
 
 def create_session() -> str:

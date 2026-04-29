@@ -119,7 +119,7 @@ async def lifespan(app: FastAPI):
 
             # Migrate away from mistral-nemo:12b — reset to documented default qwen3.5:4b
             if rag_cfg and getattr(rag_cfg, "chat_model", "") == "mistral-nemo:12b":
-                rag_cfg.chat_model = "qwen3.5:4b"
+                setattr(rag_cfg, "chat_model", "qwen3.5:4b")
                 await db_sess.commit()
                 logging.getLogger(__name__).info("RAG: migrated chat_model from mistral-nemo:12b to qwen3.5:4b")
 
@@ -166,7 +166,7 @@ async def lifespan(app: FastAPI):
         try:
             from app.models.cloud_import import CloudSource
             src_q = await db_sess.execute(
-                sa_select(CloudSource).where(CloudSource.enabled is True)
+                sa_select(CloudSource).where(CloudSource.enabled == True)
             )
             kv_cloud_sync_enabled = src_q.scalars().first() is not None
         except Exception:
@@ -203,6 +203,7 @@ async def lifespan(app: FastAPI):
 
     # Cloud sync shutdown - resolve from container
     try:
+        from app.services.cloud_import import CloudSyncState
         async with di_container() as ctx:
             css: CloudSyncState = await ctx.get(CloudSyncState)
             css.enabled = False
@@ -233,7 +234,7 @@ app = FastAPI(
 )
 
 setup_dishka(di_container, app)
-app.container = di_container
+setattr(app, "container", di_container)
 
 
 def _log(level: str, msg: str, *args):

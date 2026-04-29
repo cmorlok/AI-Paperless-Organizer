@@ -11,7 +11,7 @@ class OcrService(Protocol):
     """Protocol for OCR service."""
 
     @staticmethod
-    def get_model_params(model_name: str) -> dict: ...
+    def get_model_params(model: str) -> dict: ...
 
     async def processor_loop(self, paperless_client: PaperlessClient) -> None: ...
 
@@ -19,7 +19,7 @@ class OcrService(Protocol):
         self,
         paperless_client: PaperlessClient,
         mode: str,
-        document_ids: List[int] = None,
+        document_ids: List[int] | None = None,
         set_finish_tag: bool = True,
         remove_runocr_tag: bool = True,
     ) -> None: ...

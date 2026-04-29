@@ -212,6 +212,7 @@ class SimilarityService:
             }
 
     async def _call_llm_for_similarity(self, provider: str, model: str, prompt_template: str, items: list) -> dict:
+        assert self.llm is not None
         """Call LLM for similarity analysis and parse the response.
         
         Builds prompt by injecting items JSON into {items} placeholder,
@@ -297,11 +298,13 @@ class SimilarityService:
         return filtered, ignored_count
     
     async def _analyze_batch(self, items: List[Dict], prompt_template: str) -> Dict:
+        assert self.llm is not None
         """Analyze a single batch of items."""
         provider, model = await self._get_llm_config()
         return await self._call_llm_for_similarity(provider, model, prompt_template, items)
     
     async def _analyze_with_batching(self, all_items: List[Dict], prompt_template: str, batch_size: int = 200) -> Dict:
+        assert self.llm is not None
         """Analyze items - batch only if token limit exceeded."""
         
         # Get token limit from LLM provider
@@ -426,7 +429,8 @@ class SimilarityService:
         
         return result
     
-    async def _cross_batch_merge(self, groups: List[Dict], all_items: List[Dict], ungrouped_items: List[Dict] = None) -> List[Dict]:
+    async def _cross_batch_merge(self, groups: List[Dict], all_items: List[Dict], ungrouped_items: List[Dict] | None = None) -> List[Dict]:
+        assert self.llm is not None
         """Merge groups from different batches that are similar.
         
         Also checks if ungrouped items should belong to existing groups.
@@ -567,6 +571,8 @@ Wenn nichts zusammengehört: {{"group_merges": [], "add_to_groups": []}}"""
             return groups
 
     async def find_similar_correspondents(self, batch_size: int = 200) -> Dict:
+        assert self.llm is not None
+        assert self.paperless is not None
         """Find similar correspondents using LLM analysis."""
         correspondents = await self.paperless.get_correspondents_with_counts()
         
@@ -582,6 +588,8 @@ Wenn nichts zusammengehört: {{"group_merges": [], "add_to_groups": []}}"""
         return await self._analyze_with_batching(items, prompt_template, batch_size)
     
     async def find_similar_tags(self, batch_size: int = 200) -> Dict:
+        assert self.llm is not None
+        assert self.paperless is not None
         """Find similar tags using LLM analysis."""
         tags = await self.paperless.get_tags_with_counts()
         
@@ -597,6 +605,8 @@ Wenn nichts zusammengehört: {{"group_merges": [], "add_to_groups": []}}"""
         return await self._analyze_with_batching(items, prompt_template, batch_size)
     
     async def find_similar_document_types(self, batch_size: int = 200) -> Dict:
+        assert self.llm is not None
+        assert self.paperless is not None
         """Find similar document types using LLM analysis."""
         doc_types = await self.paperless.get_document_types_with_counts()
         
@@ -612,6 +622,8 @@ Wenn nichts zusammengehört: {{"group_merges": [], "add_to_groups": []}}"""
         return await self._analyze_with_batching(items, prompt_template, batch_size)
     
     async def find_nonsense_tags(self, batch_size: int = 300) -> Dict:
+        assert self.llm is not None
+        assert self.paperless is not None
         """Find nonsense/useless tags using LLM analysis."""
         tags = await self.paperless.get_tags_with_counts()
         
@@ -726,6 +738,8 @@ Wenn nichts zusammengehört: {{"group_merges": [], "add_to_groups": []}}"""
             return {"nonsense_tags": [], "error": str(e), "stats": stats}
     
     async def find_tags_that_are_correspondents(self, batch_size: int = 300) -> Dict:
+        assert self.llm is not None
+        assert self.paperless is not None
         """Find tags that should be correspondents using LLM analysis."""
         tags = await self.paperless.get_tags_with_counts()
         correspondents = await self.paperless.get_correspondents()
@@ -826,6 +840,8 @@ Wenn nichts zusammengehört: {{"group_merges": [], "add_to_groups": []}}"""
             return {"correspondent_tags": [], "error": str(e), "stats": stats}
     
     async def find_tags_that_are_document_types(self, batch_size: int = 300) -> Dict:
+        assert self.llm is not None
+        assert self.paperless is not None
         """Find tags that should be document types using LLM analysis."""
         tags = await self.paperless.get_tags_with_counts()
         doc_types = await self.paperless.get_document_types()

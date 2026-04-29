@@ -5,7 +5,7 @@ from __future__ import annotations
 import httpx
 import asyncio
 import logging
-from typing import Optional, List, Dict
+from typing import Any, Optional, List, Dict
 
 from .exceptions import (
     PaperlessError,
@@ -81,8 +81,8 @@ class PaperlessClient:
         self,
         method: str,
         endpoint: str,
-        params: Dict = None,
-        json: Dict = None
+        params: Dict | None = None,
+        json: Dict | None = None
     ) -> Optional[Dict]:
         """Make an API request to Paperless."""
         await self._ensure_config()
@@ -142,7 +142,7 @@ class PaperlessClient:
             # Try correspondents as alternative
             try:
                 result = await self._request("GET", "/correspondents/", params={"page_size": 1})
-                return "results" in result or "count" in result
+                return result is not None and ("results" in result or "count" in result)
             except Exception:
                 return False
     
@@ -172,7 +172,9 @@ class PaperlessClient:
     
     async def update_correspondent(self, correspondent_id: int, data: Dict) -> Dict:
         """Update a correspondent."""
-        return await self._request("PATCH", f"/correspondents/{correspondent_id}/", json=data)
+        result = await self._request("PATCH", f"/correspondents/{correspondent_id}/", json=data)
+        assert result is not None
+        return result
     
     async def delete_correspondent(self, correspondent_id: int) -> None:
         """Delete a correspondent."""
@@ -207,7 +209,9 @@ class PaperlessClient:
     
     async def update_tag(self, tag_id: int, data: Dict) -> Dict:
         """Update a tag."""
-        return await self._request("PATCH", f"/tags/{tag_id}/", json=data)
+        result = await self._request("PATCH", f"/tags/{tag_id}/", json=data)
+        assert result is not None
+        return result
     
     async def delete_tag(self, tag_id: int) -> None:
         """Delete a tag."""
@@ -301,7 +305,9 @@ class PaperlessClient:
     
     async def update_document_type(self, doc_type_id: int, data: Dict) -> Dict:
         """Update a document type."""
-        return await self._request("PATCH", f"/document_types/{doc_type_id}/", json=data)
+        result = await self._request("PATCH", f"/document_types/{doc_type_id}/", json=data)
+        assert result is not None
+        return result
     
     async def delete_document_type(self, doc_type_id: int) -> None:
         """Delete a document type."""
@@ -313,14 +319,14 @@ class PaperlessClient:
     # Documents
     async def get_documents(
         self,
-        correspondent_id: int = None,
-        tag_id: int = None,
-        document_type_id: int = None,
-        query: str = None,
+        correspondent_id: int | None = None,
+        tag_id: int | None = None,
+        document_type_id: int | None = None,
+        query: str | None = None,
         page_size: int = 1000 # Safer page size to avoid 120s timeout
     ) -> List[Dict]:
         """Get documents with optional filters and auto-pagination."""
-        params = {"page_size": page_size}
+        params: Dict[str, int | str] | None = {"page_size": page_size}
         
         if correspondent_id:
             params["correspondent__id"] = correspondent_id
@@ -352,12 +358,12 @@ class PaperlessClient:
     
     async def get_document_count(
         self,
-        tag_id: int = None,
-        tags_id_all: List[int] = None,
-        tags_id_none: List[int] = None
+        tag_id: int | None = None,
+        tags_id_all: List[int] | None = None,
+        tags_id_none: List[int] | None = None
     ) -> int:
         """Get document count without downloading all documents. Very fast."""
-        params = {"page_size": 1}
+        params: Dict[str, int | str] = {"page_size": 1}
         if tag_id:
             params["tags__id__in"] = tag_id
         if tags_id_all:
@@ -386,15 +392,17 @@ class PaperlessClient:
 
     async def update_document(self, document_id: int, data: Dict) -> Dict:
         """Update a document."""
-        return await self._request("PATCH", f"/documents/{document_id}/", json=data)
+        result = await self._request("PATCH", f"/documents/{document_id}/", json=data)
+        assert result is not None
+        return result
     
     async def bulk_update_documents(
         self, 
         document_ids: List[int], 
-        correspondent_id: int = None,
-        add_tags: List[int] = None,
-        remove_tags: List[int] = None,
-        document_type_id: int = None
+        correspondent_id: int | None = None,
+        add_tags: List[int] | None = None,
+        remove_tags: List[int] | None = None,
+        document_type_id: int | None = None
     ) -> Dict:
         """Bulk update multiple documents via Paperless bulk_edit API."""
         if add_tags or remove_tags:
@@ -421,13 +429,15 @@ class PaperlessClient:
         else:
             return {}
         
-        return await self._request("POST", "/documents/bulk_edit/", json=data)
+        result = await self._request("POST", "/documents/bulk_edit/", json=data)
+        assert result is not None
+        return result
     
     async def get_document_previews(
         self,
-        correspondent_id: int = None,
-        tag_id: int = None,
-        document_type_id: int = None,
+        correspondent_id: int | None = None,
+        tag_id: int | None = None,
+        document_type_id: int | None = None,
         limit: int = 5
     ) -> List[Dict]:
         """Get document previews with thumbnail URLs for a specific entity."""
@@ -559,6 +569,7 @@ class PaperlessClient:
         result = await self._request("POST", "/correspondents/", json={"name": name})
         cache = get_cache()
         await cache.clear("paperless:correspondents:")
+        assert result is not None
         return result
 
     async def get_or_create_correspondent(self, name: str) -> Dict:
@@ -581,6 +592,7 @@ class PaperlessClient:
         # Invalidate tag cache
         cache = get_cache()
         await cache.clear("paperless:tags:")
+        assert result is not None
         return result
     
     async def get_or_create_tag(self, name: str) -> Dict:
@@ -608,6 +620,7 @@ class PaperlessClient:
             if tag_id not in current_tags:
                 current_tags.append(tag_id)
                 return await self.update_document(document_id, {"tags": current_tags})
+        assert doc is not None
         return doc
     
     async def remove_tag_from_document(self, document_id: int, tag_id: int) -> Dict:
@@ -618,6 +631,7 @@ class PaperlessClient:
             if tag_id in current_tags:
                 current_tags.remove(tag_id)
                 return await self.update_document(document_id, {"tags": current_tags})
+        assert doc is not None
         return doc
 
     async def upload_document(
@@ -635,7 +649,9 @@ class PaperlessClient:
         url = f"{self.base_url}/api/documents/post_document/"
 
         # Multipart: tags must be repeated fields, not a list in one field
-        files_payload = [("document", (filename, file_bytes, "application/octet-stream"))]
+        files_payload: list[Any] = [
+            ("document", (filename, file_bytes, "application/octet-stream"))
+        ]
         if tag_ids:
             for tid in tag_ids:
                 files_payload.append(("tags", (None, str(tid))))

@@ -15,7 +15,7 @@ class StatisticsService(Protocol):
         documents_affected: int = 0,
         items_before: int = 0,
         items_after: int = 0,
-        details: dict = None,
+        details: dict | None = None,
     ) -> Any: ...
 
     async def get_total_stats(self) -> Dict: ...

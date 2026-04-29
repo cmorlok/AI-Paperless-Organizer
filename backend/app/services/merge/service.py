@@ -25,6 +25,7 @@ class MergeService:
         target_name: str,
         source_ids: List[int]
     ) -> Dict:
+        assert self.paperless is not None
         """Merge multiple correspondents into one target."""
         if not source_ids:
             return {"success": False, "error": "No source IDs provided"}
@@ -124,6 +125,7 @@ class MergeService:
         target_name: str,
         source_ids: List[int]
     ) -> Dict:
+        assert self.paperless is not None
         """Merge multiple tags into one target."""
         if not source_ids:
             return {"success": False, "error": "No source IDs provided"}
@@ -229,6 +231,7 @@ class MergeService:
         target_name: str,
         source_ids: List[int]
     ) -> Dict:
+        assert self.paperless is not None
         """Merge multiple document types into one target."""
         if not source_ids:
             return {"success": False, "error": "No source IDs provided"}
@@ -320,7 +323,7 @@ class MergeService:
             "history_id": history.id
         }
     
-    async def get_history(self, entity_type: str = None) -> List[Dict]:
+    async def get_history(self, entity_type: str | None = None) -> List[Dict]:
         """Get merge history, optionally filtered by entity type."""
         if self.session_factory is None:
             return []

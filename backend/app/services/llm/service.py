@@ -334,7 +334,7 @@ class LitellmService:
             stream=True,
             **kwargs,
         )
-        raw_stream = await self._execute_completion(provider, litellm_kwargs)
+        raw_stream: Any = await self._execute_completion(provider, litellm_kwargs)
 
         async def _generate():
             async for chunk in raw_stream:
@@ -373,8 +373,8 @@ class LitellmService:
         """List all LiteLLM-supported providers."""
         try:
             providers = []
-            for provider_enum in litellm.provider_list:
-                provider_name = provider_enum.value
+            for provider_item in litellm.provider_list:
+                provider_name = getattr(provider_item, "value", provider_item)
                 providers.append({
                     "name": provider_name,
                     "display_name": PROVIDER_DISPLAY_NAMES.get(
