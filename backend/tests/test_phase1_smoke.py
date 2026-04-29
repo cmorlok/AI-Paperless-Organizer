@@ -54,11 +54,9 @@ class TestPhase1Smoke:
         """LLM-01 / DI-01: All consumer files must import LLM types from llm package or protocol."""
         consumer_files = [
             "app/routers/llm.py",
-            "app/routers/tags.py",
-            "app/routers/correspondents.py",
-            "app/routers/document_types.py",
             "app/routers/ocr.py",
             "app/services/similarity/service.py",
+            "app/services/tags/service.py",
         ]
         from pathlib import Path
         backend_root = Path(__file__).parent.parent

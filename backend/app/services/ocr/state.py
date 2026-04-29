@@ -141,8 +141,6 @@ class OcrState(BaseState, CancelMixin):
     processor: OcrProcessorProgress = Field(default_factory=OcrProcessorProgress)
     page_progress: dict[int, OcrDocumentProgress] = Field(default_factory=dict)
 
-    _lock: asyncio.Lock = PrivateAttr(default_factory=asyncio.Lock)
-
     def _reset_fields(self) -> None:
         self.batch = OcrBatchProgress()
         self.processor = OcrProcessorProgress()

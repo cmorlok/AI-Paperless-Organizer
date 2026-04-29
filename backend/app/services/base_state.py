@@ -20,7 +20,7 @@ Design decisions (from CONTEXT.md):
 from __future__ import annotations
 
 import asyncio
-from typing import Any, Set
+from typing import Any, ClassVar, Set
 
 from pydantic import BaseModel, ConfigDict, PrivateAttr
 
@@ -44,8 +44,7 @@ class BaseState(BaseModel):
 
     running: bool = False
     enabled: bool = False
-
-    # Per D-03: subclasses that need per-instance locks add their own.
+    _lock: ClassVar[asyncio.Lock] = asyncio.Lock()
 
     def reset(self) -> None:
         """Reset state to initial values in-place.
