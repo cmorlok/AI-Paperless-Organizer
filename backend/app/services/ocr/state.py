@@ -81,6 +81,12 @@ class OcrProcessorProgress(BaseModel):
         return getattr(self, key, default)
 
 
+class OcrCompareSlot(BaseModel):
+    """A single provider+model slot in an OCR comparison run."""
+    provider: str
+    model: str
+
+
 class OcrCompareState(BaseModel):
     """State for the OCR compare (Vergleich) feature."""
     running: bool = False

@@ -1,7 +1,7 @@
 """OCR service: Vision OCR, processor loop, batch processing."""
 
 from app.services.ocr.protocol import OcrService
-from app.services.ocr.state import OcrState, OcrCompareState
+from app.services.ocr.state import OcrState, OcrCompareState, OcrCompareSlot
 from app.services.ocr.service import (
     load_review_queue,
     save_review_queue,
@@ -28,6 +28,7 @@ __all__ = [
     "OcrService",
     "OcrState",
     "OcrCompareState",
+    "OcrCompareSlot",
     "load_review_queue",
     "save_review_queue",
     "load_ocr_ignore_list",
