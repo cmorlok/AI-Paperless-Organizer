@@ -9,7 +9,7 @@ from typing import Dict, List, Optional
 from sqlalchemy import select as sa_select, text
 
 from app.models.duplicates import DuplicateInvoiceCache
-from app.services.llm.protocol import LLMService
+from app.services.llm import LLMService
 
 logger = logging.getLogger(__name__)
 

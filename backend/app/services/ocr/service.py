@@ -14,7 +14,7 @@ from typing import Optional, Dict, List, Any
 from PIL import Image
 from pdf2image import convert_from_bytes
 
-from app.services.llm.protocol import LLMService
+from app.services.llm import LLMService
 
 from .state import (
     DEFAULT_OCR_MODEL,

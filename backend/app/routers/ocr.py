@@ -16,8 +16,8 @@ from app.database import get_db
 from dishka.integrations.fastapi import inject
 from dishka import FromDishka
 
-from app.services.paperless.protocol import PaperlessClient
-from app.services.ocr.protocol import OcrService
+from app.services.paperless import PaperlessClient
+from app.services.ocr import OcrService
 from app.models.settings_model import LLM_KEY_CLASSIFIER_PROVIDER
 from app.routers.settings import get_setting
 from app.services.ocr.state import OcrState, DEFAULT_OCR_MODEL, TAG_OCR_REVIEW, TAG_OCR_FINISH, TAG_OCR_ERROR
@@ -35,7 +35,7 @@ from app.services.ocr.error import (
     load_ocr_error_counts,
     save_ocr_error_counts,
 )
-from app.services.llm.protocol import LLMService as LLMProviderService
+from app.services.llm import LLMService as LLMProviderService
 from app.services.ocr.state import OcrCompareState
 
 logger = logging.getLogger(__name__)

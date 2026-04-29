@@ -8,7 +8,7 @@ from sqlalchemy import select
 from app.core.logging import get_logger
 from app.models.classifier import ClassificationHistory
 # Internal imports from same package — keep deep to avoid circular imports
-from app.services.classifier.protocol import DocumentClassifierService
+from app.services.classifier import DocumentClassifierService
 from app.services.classifier.state import AutoClassifyState
 from app.services.paperless import PaperlessClient
 

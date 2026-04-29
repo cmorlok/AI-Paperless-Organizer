@@ -12,7 +12,7 @@ from app.models.rag import RagConfig, RagIndexingState
 from app.services.rag.embedding_service import EmbeddingService
 from app.services.rag.chunking import ChunkingService
 from app.services.llm import LLMResponse
-from app.services.llm.protocol import LLMService
+from app.services.llm import LLMService
 
 logger = logging.getLogger(__name__)
 

@@ -10,7 +10,7 @@ from typing import Dict, Any, List, Optional
 from app.services.classifier.base_provider import (
     BaseClassifierProvider, ClassificationResult, DocumentContext,
 )
-from app.services.llm.protocol import LLMService
+from app.services.llm import LLMService
 from app.services.classifier.tool_definitions import (
     CLASSIFIER_TOOLS,
 )

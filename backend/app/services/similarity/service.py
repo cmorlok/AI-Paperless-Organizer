@@ -9,8 +9,8 @@ from typing import Dict, List, Optional, Any
 from sqlalchemy import select
 from app.models import CustomPrompt, IgnoredTag, LLMProvider
 from app.models.settings_model import LLM_KEY_CLASSIFIER_PROVIDER, LLM_KEY_CLASSIFIER_MODEL
-from app.services.paperless.protocol import PaperlessClient
-from app.services.llm.protocol import LLMService
+from app.services.paperless import PaperlessClient
+from app.services.llm import LLMService
 from app.prompts.default_prompts import DEFAULT_PROMPTS
 from app.routers.settings import get_setting as gs
 

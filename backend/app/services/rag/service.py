@@ -13,7 +13,7 @@ from app.services.rag.search_engine import SearchEngine, SearchResult
 from app.services.rag.indexer import Indexer
 from app.services.rag.rerank_service import RerankService
 from app.services.llm.service import LLMLockTimeoutError
-from app.services.llm.protocol import LLMService
+from app.services.llm import LLMService
 
 logger = logging.getLogger(__name__)
 

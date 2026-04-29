@@ -14,15 +14,15 @@ from dishka import FromDishka
 from app.container import container as di_container
 
 from app.database import get_db
-from app.services.paperless.protocol import PaperlessClient
-from app.services.classifier.protocol import DocumentClassifierService
+from app.services.paperless import PaperlessClient
+from app.services.classifier import DocumentClassifierService
 from app.services.classifier import AutoClassifyState, auto_classify_loop
 from app.models.classifier import (
     ClassificationHistory,
 )
 from app.models.settings_model import LLM_KEY_CLASSIFIER_MODEL
 from app.routers.settings import get_setting
-from app.services.llm.protocol import LLMService as LLMProviderService
+from app.services.llm import LLMService as LLMProviderService
 
 logger = logging.getLogger(__name__)
 router = APIRouter()

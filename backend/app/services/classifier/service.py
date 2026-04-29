@@ -28,7 +28,7 @@ from app.services.classifier.litellm_provider import (
 )
 from app.services.classifier.tool_executor import ToolExecutor
 from app.services.classifier.state import AutoClassifyState
-from app.services.llm.protocol import LLMService
+from app.services.llm import LLMService
 
 logger = logging.getLogger(__name__)
 

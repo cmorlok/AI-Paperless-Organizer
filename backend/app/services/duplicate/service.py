@@ -7,7 +7,7 @@ import logging
 from typing import List, Optional
 
 from app.database import async_session
-from app.services.llm.protocol import LLMService
+from app.services.llm import LLMService
 
 logger = logging.getLogger(__name__)
 

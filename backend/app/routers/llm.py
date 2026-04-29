@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Query
 from pydantic import BaseModel
 from typing import Optional
-from app.services.llm.protocol import LLMService as LLMProviderService
+from app.services.llm import LLMService as LLMProviderService
 from app.models.settings_model import LLM_KEY_CLASSIFIER_PROVIDER, LLM_KEY_CLASSIFIER_MODEL
 from app.routers.settings import get_setting
 from dishka.integrations.fastapi import inject
