@@ -263,6 +263,16 @@ class CloudImportService:
         folders.sort(key=lambda x: x["name"].lower())
         return folders
 
+    async def list_files(self, source) -> List[Dict]:
+        """List files on any source type (type-based dispatch)."""
+        if source.source_type == "webdav":
+            return await self.list_files_webdav(source)
+        elif source.source_type == "rclone":
+            return await self.list_files_rclone(source)
+        elif source.source_type == "local":
+            return await self.list_files_local(source)
+        return []
+
     async def list_folders(self, source, path: str = "/") -> List[Dict]:
         """List folders on any source type."""
         if source.source_type == "rclone":

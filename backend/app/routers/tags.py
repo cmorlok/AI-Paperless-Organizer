@@ -1,18 +1,14 @@
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from typing import List
-import asyncio
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, delete
 from app.database import get_db
-from app.models import SavedAnalysis, PaperlessCache
+from app.models import SavedAnalysis
 from app.services.paperless import PaperlessClient
 from app.services.similarity import SimilarityService
 from app.services.merge import MergeService
-from app.services.statistics import StatisticsService
-from app.services.llm import LLMService
-from app.models.settings_model import LLM_KEY_CLASSIFIER_PROVIDER, LLM_KEY_CLASSIFIER_MODEL
-from app.services.config import ConfigService
+from app.services.tags import TagsService
 from dishka.integrations.fastapi import inject
 from dishka import FromDishka
 
@@ -32,6 +28,16 @@ class AnalyzeRequest(BaseModel):
     batch_size: int = 200
 
 
+class BulkDeleteRequest(BaseModel):
+    tag_ids: List[int]
+
+
+class RemoveFromAnalysesRequest(BaseModel):
+    tag_ids: List[int]
+
+
+# ============ LIST / ESTIMATE ============
+
 @router.get("/")
 @inject
 async def list_tags(client: FromDishka[PaperlessClient] = None):
@@ -43,69 +49,16 @@ async def list_tags(client: FromDishka[PaperlessClient] = None):
 @inject
 async def estimate_tags(
     analysis_type: str = "nonsense",
-    client: FromDishka[PaperlessClient] = None,
-    llm: FromDishka[LLMService] = None,
-    config_svc: FromDishka[ConfigService] = None,
+    tags_service: FromDishka[TagsService] = None,
 ):
     """Estimate tokens needed for specific analysis type.
-    
+
     analysis_type can be: nonsense, correspondent, doctype, similar
     """
-    tags = await client.get_tags_with_counts()
-    tags_count = len(tags)
-    avg_tag_length = sum(len(t.get("name", "")) for t in tags) / max(tags_count, 1)
-    
-    # Base prompt size varies by analysis type
-    prompt_sizes = {
-        "nonsense": 800,      # Just tags + nonsense detection prompt
-        "correspondent": 1200, # Tags + correspondents + matching prompt
-        "doctype": 1000,       # Tags + document types + matching prompt
-        "similar": 600         # Just tags + similarity prompt
-    }
-    base_prompt = prompt_sizes.get(analysis_type, 800)
-    
-    # Calculate based on analysis type
-    if analysis_type == "correspondent":
-        correspondents = await client.get_correspondents()
-        corr_count = len(correspondents)
-        avg_corr_length = sum(len(c.get("name", "")) for c in correspondents) / max(corr_count, 1)
-        # Tags + Correspondents
-        estimated_chars = base_prompt + tags_count * (avg_tag_length + 10) + corr_count * (avg_corr_length + 5)
-        items_info = f"{tags_count} Tags + {corr_count} Korrespondenten"
-    elif analysis_type == "doctype":
-        doc_types = await client.get_document_types()
-        dt_count = len(doc_types)
-        avg_dt_length = sum(len(d.get("name", "")) for d in doc_types) / max(dt_count, 1)
-        # Tags + Document Types
-        estimated_chars = base_prompt + tags_count * (avg_tag_length + 10) + dt_count * (avg_dt_length + 5)
-        items_info = f"{tags_count} Tags + {dt_count} Dokumenttypen"
-    else:
-        # nonsense or similar - just tags
-        estimated_chars = base_prompt + tags_count * (avg_tag_length + 10)
-        items_info = f"{tags_count} Tags"
-    
-    # Rough token estimate (1 token ≈ 4 chars)
-    estimated_tokens = estimated_chars // 4
-    
-    # Default token limit for batching decisions
-    provider = await config_svc.get(LLM_KEY_CLASSIFIER_PROVIDER) or ""
-    model = await config_svc.get(LLM_KEY_CLASSIFIER_MODEL) or ""
-    token_limit = await llm.get_token_limit(provider, model)
-    is_cloud = not llm.is_local_provider(provider)
-    safe_limit = int(token_limit * 0.8)
-    needs_batching = estimated_tokens > safe_limit
-    recommended_batches = max(1, (estimated_tokens + safe_limit - 1) // safe_limit) if needs_batching else 1
+    return await tags_service.estimate_tags(analysis_type)
 
-    return {
-        "analysis_type": analysis_type,
-        "items_info": items_info,
-        "estimated_tokens": estimated_tokens,
-        "token_limit": token_limit,
-        "is_cloud": is_cloud,
-        "recommended_batches": recommended_batches,
-        "warning": f"~{estimated_tokens:,} Tokens > {safe_limit:,} Limit. Wird in {recommended_batches} Batches aufgeteilt." if needs_batching else None
-    }
 
+# ============ SAVED ANALYSIS CRUD ============
 
 @router.get("/saved-analysis")
 async def get_saved_analysis(db: AsyncSession = Depends(get_db)):
@@ -117,7 +70,7 @@ async def get_saved_analysis(db: AsyncSession = Depends(get_db)):
         .limit(1)
     )
     saved = result.scalar_one_or_none()
-    
+
     if saved:
         return {
             "exists": True,
@@ -140,10 +93,10 @@ async def load_saved_analysis(db: AsyncSession = Depends(get_db)):
         .limit(1)
     )
     saved = result.scalar_one_or_none()
-    
+
     if not saved:
         raise HTTPException(status_code=404, detail="Keine gespeicherte Analyse gefunden")
-    
+
     return {
         "groups": saved.groups,
         "stats": saved.stats,
@@ -173,50 +126,34 @@ async def mark_group_processed(
         .limit(1)
     )
     saved = result.scalar_one_or_none()
-    
+
     if saved:
         processed = saved.processed_groups or []
         if group_index not in processed:
             processed.append(group_index)
             saved.processed_groups = processed
             await db.commit()
-    
+
     return {"success": True}
 
+
+# ============ ANALYZE ============
 
 @router.post("/analyze")
 @inject
 async def analyze_tags(
     request: AnalyzeRequest = None,
     similarity_service: FromDishka[SimilarityService] = None,
-    db: AsyncSession = Depends(get_db)
+    tags_service: FromDishka[TagsService] = None,
 ):
     """Analyze tags and find similar groups using AI."""
     batch_size = request.batch_size if request else 200
     result = await similarity_service.find_similar_tags(batch_size=batch_size)
-    
-    # Save the analysis result
-    groups = result.get("groups", [])
-    stats = result.get("stats", {})
-    
-    # Delete old analysis
-    await db.execute(delete(SavedAnalysis).where(SavedAnalysis.entity_type == ENTITY_TYPE))
-    
-    # Save new analysis
-    saved = SavedAnalysis(
-        entity_type=ENTITY_TYPE,
-        analysis_type="similarity",
-        groups=groups,
-        stats=stats,
-        items_count=stats.get("items_count", 0),
-        groups_count=len(groups),
-        processed_groups=[]
-    )
-    db.add(saved)
-    await db.commit()
-    
+    await tags_service.save_similarity_analysis(result)
     return result
 
+
+# ============ MERGE ============
 
 @router.post("/merge")
 @inject
@@ -225,12 +162,11 @@ async def merge_tags(
     merge_service: FromDishka[MergeService] = None
 ):
     """Merge multiple tags into one."""
-    result = await merge_service.merge_tags(
+    return await merge_service.merge_tags(
         target_id=request.target_id,
         target_name=request.target_name,
         source_ids=request.source_ids
     )
-    return result
 
 
 @router.get("/history")
@@ -241,6 +177,8 @@ async def get_merge_history(
     """Get merge history for tags."""
     return await merge_service.get_history("tags")
 
+
+# ============ EMPTY TAGS ============
 
 @router.get("/empty")
 @inject
@@ -259,126 +197,40 @@ async def get_empty_tags(
 @router.delete("/empty")
 @inject
 async def delete_empty_tags(
-    client: FromDishka[PaperlessClient] = None,
-    stats_service: FromDishka[StatisticsService] = None
+    tags_service: FromDishka[TagsService] = None,
 ):
     """Delete all tags with 0 documents - PARALLEL for speed."""
-    tags = await client.get_tags_with_counts()
-    empty = [t for t in tags if t.get("document_count", 0) == 0]
-    
-    if not empty:
-        return {"deleted": 0, "total": 0, "errors": None}
-    
-    # Parallel deletion for speed (batch of 10 at a time to not overwhelm API)
-    errors = []
-    deleted = 0
-    batch_size = 10
-    
-    async def delete_one(tag):
-        try:
-            await client.delete_tag(tag["id"])
-            return True, None
-        except Exception as e:
-            return False, f"{tag['name']}: {str(e)}"
-    
-    for i in range(0, len(empty), batch_size):
-        batch = empty[i:i + batch_size]
-        results = await asyncio.gather(*[delete_one(t) for t in batch])
-        for success, error in results:
-            if success:
-                deleted += 1
-            elif error:
-                errors.append(error)
-    
-    # Record statistics
-    if deleted > 0:
-        await stats_service.record_operation(
-            entity_type="tags",
-            operation="deleted",
-            items_affected=deleted,
-            documents_affected=0,
-            items_before=len(tags),
-            items_after=len(tags) - deleted
-        )
-    
-    return {
-        "deleted": deleted,
-        "total": len(empty),
-        "errors": errors if errors else None
-    }
+    return await tags_service.delete_empty_tags()
 
 
-class BulkDeleteRequest(BaseModel):
-    tag_ids: List[int]
+# ============ BULK DELETE ============
 
 @router.post("/bulk-delete")
 @inject
 async def bulk_delete_tags(
     request: BulkDeleteRequest,
-    client: FromDishka[PaperlessClient] = None,
-    db: AsyncSession = Depends(get_db)
+    tags_service: FromDishka[TagsService] = None,
 ):
     """Delete multiple tags in parallel and keep DB cache in sync."""
     try:
-        result = await client.delete_tags_bulk(request.tag_ids)
-        
-        # Update DB cache: remove deleted tag IDs so next request is instant
-        deleted_set = set(result.get("deleted", []))
-        if deleted_set:
-            db_result = await db.execute(
-                select(PaperlessCache).where(PaperlessCache.cache_key == "tags")
-            )
-            db_entry = db_result.scalar_one_or_none()
-            if db_entry and db_entry.data:
-                db_entry.data = [t for t in db_entry.data if t.get("id") not in deleted_set]
-                db_entry.count = len(db_entry.data)
-                await db.commit()
-        
-        return result
+        return await tags_service.bulk_delete_tags(request.tag_ids)
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
 
-class RemoveFromAnalysesRequest(BaseModel):
-    tag_ids: List[int]
+# ============ REMOVE FROM SAVED ANALYSES ============
 
 @router.post("/saved-analyses/remove-tags")
+@inject
 async def remove_tags_from_saved_analyses(
     request: RemoveFromAnalysesRequest,
-    db: AsyncSession = Depends(get_db)
+    tags_service: FromDishka[TagsService] = None,
 ):
     """Remove deleted tag IDs from ALL saved analyses so they don't reappear."""
-    removed_ids = set(request.tag_ids)
-    updated = {}
-    
-    analysis_types = {
-        "tags_nonsense": {"id_field": "id", "key": "nonsense"},
-        "tags_correspondents": {"id_field": "tag_id", "key": "correspondent"},
-        "tags_doctypes": {"id_field": "tag_id", "key": "doctype"},
-    }
-    
-    for entity_type, config in analysis_types.items():
-        result = await db.execute(
-            select(SavedAnalysis)
-            .where(SavedAnalysis.entity_type == entity_type)
-            .order_by(SavedAnalysis.created_at.desc())
-            .limit(1)
-        )
-        saved = result.scalar_one_or_none()
-        if not saved or not saved.groups:
-            continue
-        
-        id_field = config["id_field"]
-        original_count = len(saved.groups)
-        filtered = [item for item in saved.groups if item.get(id_field) not in removed_ids]
-        
-        if len(filtered) < original_count:
-            saved.groups = filtered
-            saved.groups_count = len(filtered)
-            updated[config["key"]] = {"before": original_count, "after": len(filtered)}
-    
-    await db.commit()
-    return {"success": True, "updated": updated}
+    return await tags_service.remove_tags_from_saved_analyses(request.tag_ids)
+
+
+# ============ SINGLE DELETE ============
 
 @router.delete("/{tag_id}")
 @inject
@@ -395,6 +247,7 @@ async def delete_tag(
 
 
 # ============ NONSENSE TAGS ============
+
 @router.get("/saved-nonsense")
 async def get_saved_nonsense_analysis(db: AsyncSession = Depends(get_db)):
     """Check if there's a saved nonsense analysis."""
@@ -405,7 +258,7 @@ async def get_saved_nonsense_analysis(db: AsyncSession = Depends(get_db)):
         .limit(1)
     )
     saved = result.scalar_one_or_none()
-    
+
     if saved:
         return {
             "exists": True,
@@ -427,10 +280,10 @@ async def load_saved_nonsense_analysis(db: AsyncSession = Depends(get_db)):
         .limit(1)
     )
     saved = result.scalar_one_or_none()
-    
+
     if not saved:
         return {"exists": False, "nonsense_tags": []}
-    
+
     return {
         "exists": True,
         "nonsense_tags": saved.groups,
@@ -451,34 +304,16 @@ async def delete_saved_nonsense_analysis(db: AsyncSession = Depends(get_db)):
 @inject
 async def analyze_nonsense_tags(
     similarity_service: FromDishka[SimilarityService] = None,
-    db: AsyncSession = Depends(get_db)
+    tags_service: FromDishka[TagsService] = None,
 ):
     """Analyze tags to find nonsensical/useless tags using AI and SAVE results."""
     result = await similarity_service.find_nonsense_tags()
-    
-    # Save the analysis result
-    nonsense_tags = result.get("nonsense_tags", [])
-    stats = result.get("stats", {})
-    
-    # Delete old analysis
-    await db.execute(delete(SavedAnalysis).where(SavedAnalysis.entity_type == "tags_nonsense"))
-    
-    # Save new analysis
-    saved = SavedAnalysis(
-        entity_type="tags_nonsense",
-        analysis_type="nonsense",
-        groups=nonsense_tags,
-        stats=stats,
-        items_count=stats.get("analyzed_count", len(nonsense_tags)),
-        groups_count=len(nonsense_tags)
-    )
-    db.add(saved)
-    await db.commit()
-    
+    await tags_service.save_nonsense_analysis(result)
     return result
 
 
 # ============ CORRESPONDENT TAGS ============
+
 @router.get("/saved-correspondent-matches")
 async def get_saved_correspondent_analysis(db: AsyncSession = Depends(get_db)):
     """Check if there's a saved correspondent matches analysis."""
@@ -489,7 +324,7 @@ async def get_saved_correspondent_analysis(db: AsyncSession = Depends(get_db)):
         .limit(1)
     )
     saved = result.scalar_one_or_none()
-    
+
     if saved:
         return {
             "exists": True,
@@ -511,10 +346,10 @@ async def load_saved_correspondent_analysis(db: AsyncSession = Depends(get_db)):
         .limit(1)
     )
     saved = result.scalar_one_or_none()
-    
+
     if not saved:
         return {"exists": False, "correspondent_tags": []}
-    
+
     return {
         "exists": True,
         "correspondent_tags": saved.groups,
@@ -535,34 +370,16 @@ async def delete_saved_correspondent_analysis(db: AsyncSession = Depends(get_db)
 @inject
 async def analyze_correspondent_matches(
     similarity_service: FromDishka[SimilarityService] = None,
-    db: AsyncSession = Depends(get_db)
+    tags_service: FromDishka[TagsService] = None,
 ):
     """Analyze tags that should be correspondents using AI and SAVE results."""
     result = await similarity_service.find_tags_that_are_correspondents()
-    
-    # Save the analysis result
-    correspondent_tags = result.get("correspondent_tags", [])
-    stats = result.get("stats", {})
-    
-    # Delete old analysis
-    await db.execute(delete(SavedAnalysis).where(SavedAnalysis.entity_type == "tags_correspondents"))
-    
-    # Save new analysis
-    saved = SavedAnalysis(
-        entity_type="tags_correspondents",
-        analysis_type="correspondent_matches",
-        groups=correspondent_tags,
-        stats=stats,
-        items_count=stats.get("tags_count", len(correspondent_tags)),
-        groups_count=len(correspondent_tags)
-    )
-    db.add(saved)
-    await db.commit()
-    
+    await tags_service.save_correspondent_matches(result)
     return result
 
 
 # ============ DOCTYPE TAGS ============
+
 @router.get("/saved-doctype-matches")
 async def get_saved_doctype_analysis(db: AsyncSession = Depends(get_db)):
     """Check if there's a saved doctype matches analysis."""
@@ -573,7 +390,7 @@ async def get_saved_doctype_analysis(db: AsyncSession = Depends(get_db)):
         .limit(1)
     )
     saved = result.scalar_one_or_none()
-    
+
     if saved:
         return {
             "exists": True,
@@ -595,10 +412,10 @@ async def load_saved_doctype_analysis(db: AsyncSession = Depends(get_db)):
         .limit(1)
     )
     saved = result.scalar_one_or_none()
-    
+
     if not saved:
         return {"exists": False, "doctype_tags": []}
-    
+
     return {
         "exists": True,
         "doctype_tags": saved.groups,
@@ -619,29 +436,9 @@ async def delete_saved_doctype_analysis(db: AsyncSession = Depends(get_db)):
 @inject
 async def analyze_doctype_matches(
     similarity_service: FromDishka[SimilarityService] = None,
-    db: AsyncSession = Depends(get_db)
+    tags_service: FromDishka[TagsService] = None,
 ):
     """Analyze tags that should be document types using AI and SAVE results."""
     result = await similarity_service.find_tags_that_are_document_types()
-    
-    # Save the analysis result
-    doctype_tags = result.get("doctype_tags", [])
-    stats = result.get("stats", {})
-    
-    # Delete old analysis
-    await db.execute(delete(SavedAnalysis).where(SavedAnalysis.entity_type == "tags_doctypes"))
-    
-    # Save new analysis
-    saved = SavedAnalysis(
-        entity_type="tags_doctypes",
-        analysis_type="doctype_matches",
-        groups=doctype_tags,
-        stats=stats,
-        items_count=stats.get("tags_count", len(doctype_tags)),
-        groups_count=len(doctype_tags)
-    )
-    db.add(saved)
-    await db.commit()
-    
+    await tags_service.save_doctype_matches(result)
     return result
-

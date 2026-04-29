@@ -17,6 +17,7 @@ from app.services.classifier import DocumentClassifierService, AutoClassifyState
 from app.services.duplicate import DuplicateService, DuplicateScanState
 from app.services.cloud_import import CloudImportService, CloudSyncState
 from app.services.config import ConfigService
+from app.services.tags import TagsService
 # Implementation imports use aliases to avoid name collision with Protocols
 from app.services.config.service import ConfigServiceImpl
 from app.services.llm.service import LitellmService
@@ -29,6 +30,7 @@ from app.services.rag.service import RAGService as RAGServiceImpl
 from app.services.classifier.service import DocumentClassifierService as DocumentClassifierServiceImpl
 from app.services.duplicate.service import DuplicateService as DuplicateServiceImpl
 from app.services.cloud_import.service import CloudImportService as CloudImportServiceImpl
+from app.services.tags.service import TagsServiceImpl
 
 
 class AppProvider(Provider):
@@ -174,6 +176,23 @@ class AppProvider(Provider):
         session_factory: async_sessionmaker,
     ) -> ConfigService:
         return ConfigServiceImpl(session_factory=session_factory)
+
+    @provide(scope=Scope.APP)
+    def tags_service(
+        self,
+        paperless_client: PaperlessClient,
+        llm_service: LLMService,
+        config_service: ConfigService,
+        statistics_service: StatisticsService,
+        session_factory: async_sessionmaker,
+    ) -> TagsService:
+        return TagsServiceImpl(
+            paperless_client=paperless_client,
+            llm_service=llm_service,
+            config_service=config_service,
+            statistics_service=statistics_service,
+            session_factory=session_factory,
+        )
 
 
 # Module-level container singleton
