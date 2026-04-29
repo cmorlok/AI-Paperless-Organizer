@@ -2,7 +2,7 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, and_
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 from typing import Optional, List
 from app.database import get_db
 from app.models.settings_model import IgnoredItem
@@ -19,6 +19,8 @@ class IgnoredItemCreate(BaseModel):
 
 
 class IgnoredItemResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
     id: int
     item_id: int
     item_name: str
@@ -26,9 +28,6 @@ class IgnoredItemResponse(BaseModel):
     analysis_type: str
     reason: str
     created_at: str
-
-    class Config:
-        from_attributes = True
 
 
 @router.get("")

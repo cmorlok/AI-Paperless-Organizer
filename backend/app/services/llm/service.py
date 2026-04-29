@@ -4,19 +4,20 @@ from __future__ import annotations
 
 import asyncio
 import json
-import re
 import traceback
 from collections import defaultdict
-from typing import Optional, Dict, Any, List, AsyncGenerator
+from typing import Optional, Dict, Any, AsyncGenerator, TYPE_CHECKING
 
 import httpx
 import litellm
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.logging import get_logger
 from app.database import async_session
 from app.models import LLMProvider
+
+if TYPE_CHECKING:
+    from app.services.llm.types import LLMResponse
 
 
 class LLMLockTimeoutError(Exception):
@@ -669,7 +670,7 @@ class LitellmService:
     def _log_llm_error(msg: str, exc: Exception) -> None:
         detail = LitellmService._extract_litellm_error(exc)
         tb = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
-        print(f"ERROR app.services.llm.service: {msg}: {detail}\n{tb}", flush=True)
+        logger.error("LLM service error", extra={"message": msg, "detail": detail, "traceback": tb})
         logger.error("%s: %s", msg, detail, exc_info=True)
 
     async def check_provider_health(self, provider: str) -> bool:

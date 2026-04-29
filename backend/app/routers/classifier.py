@@ -21,7 +21,7 @@ from app.models.classifier import (
     ClassificationHistory,
 )
 from app.models.settings_model import LLM_KEY_CLASSIFIER_MODEL
-from app.routers.settings import get_setting
+from app.services.config import ConfigService
 from app.services.llm import LLMService
 
 logger = logging.getLogger(__name__)
@@ -107,57 +107,54 @@ class ApplyRequest(BaseModel):
 @inject
 async def get_config(
     service: FromDishka[DocumentClassifierService] = None,
-    db: AsyncSession = Depends(get_db),
+    config_svc: FromDishka[ConfigService] = None,
 ):
     """Get classifier configuration."""
-    config = await service.get_config()
+    cfg = await service.get_config()
 
     # Read classifier provider from central AppSettings
-    from app.models import AppSettings as _AppSettings
-    app_s = await db.execute(select(_AppSettings).where(_AppSettings.id == 1))
-    app_settings = app_s.scalar_one_or_none()
-    active_provider = getattr(app_settings, "classifier_provider", None) or ""
+    active_provider = await config_svc.get("classifier_provider") or ""
 
     # Read model from AppSettings key-value store (LLM-09)
-    active_model = await get_setting(LLM_KEY_CLASSIFIER_MODEL, db) or ""
+    active_model = await config_svc.get(LLM_KEY_CLASSIFIER_MODEL) or ""
 
     return {
         "active_provider": active_provider,
         "active_model": active_model,
-        "enable_title": config.enable_title,
-        "enable_tags": config.enable_tags,
-        "enable_correspondent": config.enable_correspondent,
-        "enable_document_type": config.enable_document_type,
-        "enable_storage_path": config.enable_storage_path,
-        "enable_created_date": config.enable_created_date,
-        "enable_custom_fields": config.enable_custom_fields,
-        "tag_behavior": config.tag_behavior,
-        "tags_min": config.tags_min or 1,
-        "tags_max": config.tags_max or 5,
-        "tags_keep_existing": config.tags_keep_existing if config.tags_keep_existing is not None else True,
-        "tags_ignore": config.tags_ignore or [],
-        "tags_protected": config.tags_protected or [],
-        "dates_ignore": config.dates_ignore or [],
-        "storage_path_behavior": config.storage_path_behavior or "always",
-        "storage_path_override_names": config.storage_path_override_names or ["Zuweisen"],
-        "correspondent_behavior": config.correspondent_behavior,
-        "review_mode": config.review_mode,
-        "batch_size": config.batch_size,
-        "prompt_title": config.prompt_title or "",
-        "prompt_tags": config.prompt_tags or "",
-        "prompt_correspondent": config.prompt_correspondent or "",
-        "prompt_document_type": config.prompt_document_type or "",
-        "prompt_date": config.prompt_date or "",
-        "system_prompt": config.system_prompt,
-        "excluded_tag_ids": config.excluded_tag_ids or [],
-        "excluded_correspondent_ids": config.excluded_correspondent_ids or [],
-        "excluded_document_type_ids": config.excluded_document_type_ids or [],
-        "correspondent_trim_prompt": bool(getattr(config, "correspondent_trim_prompt", False)),
-        "correspondent_strip_legal": bool(getattr(config, "correspondent_strip_legal", False)),
-        "correspondent_ignore": getattr(config, "correspondent_ignore", None) or [],
-        "auto_classify_enabled": bool(getattr(config, "auto_classify_enabled", False)),
-        "auto_classify_interval": getattr(config, "auto_classify_interval", 5) or 5,
-        "auto_classify_mode": getattr(config, "auto_classify_mode", "review") or "review",
+        "enable_title": cfg.enable_title,
+        "enable_tags": cfg.enable_tags,
+        "enable_correspondent": cfg.enable_correspondent,
+        "enable_document_type": cfg.enable_document_type,
+        "enable_storage_path": cfg.enable_storage_path,
+        "enable_created_date": cfg.enable_created_date,
+        "enable_custom_fields": cfg.enable_custom_fields,
+        "tag_behavior": cfg.tag_behavior,
+        "tags_min": cfg.tags_min or 1,
+        "tags_max": cfg.tags_max or 5,
+        "tags_keep_existing": cfg.tags_keep_existing if cfg.tags_keep_existing is not None else True,
+        "tags_ignore": cfg.tags_ignore or [],
+        "tags_protected": cfg.tags_protected or [],
+        "dates_ignore": cfg.dates_ignore or [],
+        "storage_path_behavior": cfg.storage_path_behavior or "always",
+        "storage_path_override_names": cfg.storage_path_override_names or ["Zuweisen"],
+        "correspondent_behavior": cfg.correspondent_behavior,
+        "review_mode": cfg.review_mode,
+        "batch_size": cfg.batch_size,
+        "prompt_title": cfg.prompt_title or "",
+        "prompt_tags": cfg.prompt_tags or "",
+        "prompt_correspondent": cfg.prompt_correspondent or "",
+        "prompt_document_type": cfg.prompt_document_type or "",
+        "prompt_date": cfg.prompt_date or "",
+        "system_prompt": cfg.system_prompt,
+        "excluded_tag_ids": cfg.excluded_tag_ids or [],
+        "excluded_correspondent_ids": cfg.excluded_correspondent_ids or [],
+        "excluded_document_type_ids": cfg.excluded_document_type_ids or [],
+        "correspondent_trim_prompt": bool(getattr(cfg, "correspondent_trim_prompt", False)),
+        "correspondent_strip_legal": bool(getattr(cfg, "correspondent_strip_legal", False)),
+        "correspondent_ignore": getattr(cfg, "correspondent_ignore", None) or [],
+        "auto_classify_enabled": bool(getattr(cfg, "auto_classify_enabled", False)),
+        "auto_classify_interval": getattr(cfg, "auto_classify_interval", 5) or 5,
+        "auto_classify_mode": getattr(cfg, "auto_classify_mode", "review") or "review",
     }
 
 
@@ -184,14 +181,12 @@ async def get_prompt_defaults():
 
 # Persist enabled flag to AppSettings KV store (STATE-08)
 
-async def _persist_auto_classify_enabled(enabled: bool, db: AsyncSession) -> None:
+async def _persist_auto_classify_enabled(enabled: bool, config_svc: ConfigService) -> None:
     """Persist auto_classify_enabled flag to AppSettings."""
-    from app.routers.settings import set_setting
-    await set_setting(
+    await config_svc.set(
         "auto_classify_enabled",
         "true" if enabled else "false",
         "bool",
-        db
     )
 
 @router.get("/stats")
@@ -847,8 +842,8 @@ async def get_tag_stats(db: AsyncSession = Depends(get_db)):
 @router.post("/auto-classify/start")
 @inject
 async def start_auto_classify(
-    db: AsyncSession = Depends(get_db),
     state: FromDishka[AutoClassifyState] = None,
+    config_svc: FromDishka[ConfigService] = None,
 ):
     """Start the auto-classification background job."""
     if state.enabled:
@@ -863,7 +858,7 @@ async def start_auto_classify(
 
     # Persist to AppSettings KV store (STATE-08)
     try:
-        await _persist_auto_classify_enabled(True, db)
+        await _persist_auto_classify_enabled(True, config_svc)
     except Exception as e:
         logger.warning(f"Could not persist auto-classify enabled to KV: {e}")
 
@@ -873,8 +868,8 @@ async def start_auto_classify(
 @router.post("/auto-classify/stop")
 @inject
 async def stop_auto_classify(
-    db: AsyncSession = Depends(get_db),
     state: FromDishka[AutoClassifyState] = None,
+    config_svc: FromDishka[ConfigService] = None,
 ):
     """Stop the auto-classification background job."""
     state.enabled = False
@@ -887,7 +882,7 @@ async def stop_auto_classify(
 
     # Persist to AppSettings KV store (STATE-08)
     try:
-        await _persist_auto_classify_enabled(False, db)
+        await _persist_auto_classify_enabled(False, config_svc)
     except Exception as e:
         logger.warning(f"Could not persist auto-classify disabled to KV: {e}")
 

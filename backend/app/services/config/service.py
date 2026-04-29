@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-from typing import Optional, Callable
+from typing import Optional
 
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from app.core.logging import get_logger
 from app.models.settings_model import AppSettings

@@ -17,7 +17,7 @@ from dishka import FromDishka
 
 from app.services.paperless import PaperlessClient
 from app.models.settings_model import LLM_KEY_CLASSIFIER_PROVIDER
-from app.routers.settings import get_setting
+from app.services.config import ConfigService
 from app.services.ocr import (
     OcrService,
     OcrState,
@@ -100,15 +100,11 @@ async def get_ocr_settings(state: FromDishka[OcrState] = None):
 
 @router.post("/settings")
 @inject
-async def save_ocr_settings_endpoint(request: OcrSettingsRequest, db: AsyncSession = Depends(get_db), client: FromDishka[PaperlessClient] = None):
+async def save_ocr_settings_endpoint(request: OcrSettingsRequest, config_svc: FromDishka[ConfigService] = None):
     """Save OCR settings to KV store."""
-    from app.routers.settings import set_setting
-    from app.models.settings_model import LLM_KEY_OCR_MODEL
-
-    await set_setting("ocr_model", request.model, "str", db)
-    await set_setting("max_image_size", str(request.max_image_size), "int", db)
-    await set_setting("smart_skip_enabled", str(request.smart_skip_enabled).lower(), "bool", db)
-    await db.commit()
+    await config_svc.set("ocr_model", request.model, "str")
+    await config_svc.set("max_image_size", str(request.max_image_size), "int")
+    await config_svc.set("smart_skip_enabled", str(request.smart_skip_enabled).lower(), "bool")
 
     return {"success": True, "model": request.model, "max_image_size": request.max_image_size, "smart_skip_enabled": request.smart_skip_enabled}
 
@@ -116,14 +112,12 @@ async def save_ocr_settings_endpoint(request: OcrSettingsRequest, db: AsyncSessi
 
 # Persist enabled flag to AppSettings KV store
 
-async def _persist_ocr_processor_enabled(enabled: bool, db: AsyncSession) -> None:
+async def _persist_ocr_processor_enabled(enabled: bool, config_svc: ConfigService) -> None:
     """Persist ocr_processor_enabled flag to AppSettings."""
-    from app.routers.settings import set_setting
-    await set_setting(
+    await config_svc.set(
         "ocr_processor_enabled",
         "true" if enabled else "false",
         "bool",
-        db
     )
 
 
@@ -147,7 +141,7 @@ async def get_processor_status(state: FromDishka[OcrState] = None):
 async def set_processor_settings(
     request: ProcessorSettingsRequest,
     background_tasks: BackgroundTasks,
-    db: AsyncSession = Depends(get_db),
+    config_svc: FromDishka[ConfigService] = None,
     client: FromDishka[PaperlessClient] = None,
     service: FromDishka[OcrService] = None,
     state: FromDishka[OcrState] = None,
@@ -157,7 +151,7 @@ async def set_processor_settings(
 
     # Persist to AppSettings KV store
     try:
-        await _persist_ocr_processor_enabled(request.enabled, db)
+        await _persist_ocr_processor_enabled(request.enabled, config_svc)
     except Exception as e:
         logger.warning(f"Could not persist ocr_processor_enabled to KV: {e}")
 
@@ -328,16 +322,16 @@ async def apply_ocr_result(
     The PATCH to Paperless can take 20-30s due to full-text re-indexing,
     so we don't make the user wait.
     """
-    print(f"[OCR] Request to apply result for doc {document_id}")
+    logger.info("OCR apply result requested", extra={"document_id": document_id})
 
     async def _apply_in_background():
         try:
             await service.apply_ocr_result(
                 client, document_id, request.content, request.set_finish_tag
             )
-            print(f"[OCR] Successfully applied result for doc {document_id}")
+            logger.info("OCR result applied successfully", extra={"document_id": document_id})
         except Exception as e:
-            print(f"[OCR] Error applying result for doc {document_id}: {e}")
+            logger.error("OCR result apply failed", extra={"document_id": document_id, "error": str(e)})
             logger.error(f"Background apply error: {e}")
 
     # Fire and forget: don't wait for Paperless re-indexing
@@ -786,14 +780,14 @@ async def get_compare_status(
 async def evaluate_ocr_results(
     request: OcrEvaluateRequest,
     llm_service: FromDishka[LLMService] = None,
-    db: AsyncSession = Depends(get_db),
+    config_svc: FromDishka[ConfigService] = None,
 ):
     """Send OCR comparison results to an external LLM for quality evaluation.
 
     WARNING: This sends document text to a cloud API (OpenAI, Anthropic, etc.)!
     Uses a thorough multi-criteria evaluation inspired by professional OCR benchmarks.
     """
-    eval_provider = await get_setting(LLM_KEY_CLASSIFIER_PROVIDER, db)
+    eval_provider = await config_svc.get(LLM_KEY_CLASSIFIER_PROVIDER)
     if not eval_provider:
         raise HTTPException(
             status_code=400,
@@ -910,7 +904,7 @@ WICHTIG:
 
     try:
         used_model = eval_model or "gpt-4o"
-        print(f"[Evaluate] Sending {len(results)} OCR results to {eval_provider} / {used_model}")
+        logger.info("Evaluating OCR results", extra={"count": len(results), "provider": eval_provider, "model": used_model})
 
         result = await llm_service.complete(
             provider=eval_provider,
@@ -934,12 +928,12 @@ WICHTIG:
                 logger.error(f"Could not parse LLM response as JSON: {cleaned[:500]}")
                 return {
                     "success": True,
-                    "raw_response": raw_response,
+                    "raw_response": cleaned,
                     "evaluation": None,
                     "parse_error": "LLM-Antwort konnte nicht als JSON geparst werden"
                 }
         
-        print(f"[Evaluate] Successfully evaluated with {eval_provider} / {used_model}")
+        logger.info("OCR evaluation complete", extra={"provider": eval_provider, "model": used_model})
 
         return {
             "success": True,

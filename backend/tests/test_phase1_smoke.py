@@ -40,7 +40,7 @@ class TestPhase1Smoke:
         assert hasattr(LitellmService, "complete")
         assert hasattr(LitellmService, "test_connection")
         assert hasattr(LitellmService, "estimate_tokens")
-        assert hasattr(LitellmService, "analyze_for_similarity")
+        assert hasattr(LitellmService, "list_providers")
 
         # Verify estimate_tokens works
         s = LitellmService()
@@ -51,7 +51,7 @@ class TestPhase1Smoke:
         print("PASS: LitellmService importable with core methods")
 
     def test_all_6_consumers_updated(self):
-        """LLM-01 / DI-01: All consumer files must import LLM types from llm.protocol."""
+        """LLM-01 / DI-01: All consumer files must import LLM types from llm package or protocol."""
         consumer_files = [
             "app/routers/llm.py",
             "app/routers/tags.py",
@@ -66,9 +66,9 @@ class TestPhase1Smoke:
         for rel_path in consumer_files:
             file_path = backend_root / rel_path
             content = file_path.read_text()
-            # After Phase 04-07, imports should be from llm.protocol (distributed)
-            assert "from app.services.llm.protocol import" in content and "LLMService" in content, \
-                f"{rel_path} does not import LLMService from app.services.llm.protocol"
+            # After Phase 04, imports should be from app.services.llm (package-level re-export)
+            assert ("from app.services.llm import" in content or "from app.services.llm.protocol import" in content) and "LLMService" in content, \
+                f"{rel_path} does not import LLMService from app.services.llm or app.services.llm.protocol"
             assert "from app.services.llm_service import" not in content, \
                 f"{rel_path} still imports from llm_service"
 
@@ -136,7 +136,7 @@ class TestPhase1Smoke:
             "app/routers/correspondents.py",
             "app/routers/document_types.py",
             "app/routers/ocr.py",
-            "app/services/similarity.py",
+            "app/services/similarity/service.py",
         ]
         backend_root = Path(__file__).parent.parent
         lines = []

@@ -15,6 +15,7 @@ from app.container import container as di_container
 from dishka.integrations.fastapi import inject
 from dishka import FromDishka
 from app.services.paperless import PaperlessClient
+from app.services.config import ConfigService
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -22,14 +23,12 @@ logger = logging.getLogger(__name__)
 
 # Persist enabled flag to AppSettings KV store (STATE-08)
 
-async def _persist_cloud_sync_enabled(enabled: bool, db: AsyncSession) -> None:
+async def _persist_cloud_sync_enabled(enabled: bool, config_svc: ConfigService) -> None:
     """Persist cloud_sync_enabled flag to AppSettings."""
-    from app.routers.settings import set_setting
-    await set_setting(
+    await config_svc.set(
         "cloud_sync_enabled",
         "true" if enabled else "false",
         "bool",
-        db
     )
 
 
@@ -242,8 +241,8 @@ async def get_sync_status(state: FromDishka[CloudSyncState] = None):
 @router.post("/start")
 @inject
 async def start_sync_daemon(
-    db: AsyncSession = Depends(get_db),
     state: FromDishka[CloudSyncState] = None,
+    config_svc: FromDishka[ConfigService] = None,
 ):
     if state.enabled:
         return {"status": "already_running"}
@@ -255,7 +254,7 @@ async def start_sync_daemon(
 
     # Persist to AppSettings KV store (STATE-08)
     try:
-        await _persist_cloud_sync_enabled(True, db)
+        await _persist_cloud_sync_enabled(True, config_svc)
     except Exception as e:
         logger.warning(f"Could not persist cloud_sync_enabled to KV: {e}")
 
@@ -265,8 +264,8 @@ async def start_sync_daemon(
 @router.post("/stop")
 @inject
 async def stop_sync_daemon(
-    db: AsyncSession = Depends(get_db),
     state: FromDishka[CloudSyncState] = None,
+    config_svc: FromDishka[ConfigService] = None,
 ):
     state.enabled = False
     task = state.task
@@ -277,7 +276,7 @@ async def stop_sync_daemon(
 
     # Persist to AppSettings KV store (STATE-08)
     try:
-        await _persist_cloud_sync_enabled(False, db)
+        await _persist_cloud_sync_enabled(False, config_svc)
     except Exception as e:
         logger.warning(f"Could not persist cloud_sync_enabled to KV: {e}")
 

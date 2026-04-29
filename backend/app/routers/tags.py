@@ -12,7 +12,7 @@ from app.services.merge import MergeService
 from app.services.statistics import StatisticsService
 from app.services.llm import LLMService
 from app.models.settings_model import LLM_KEY_CLASSIFIER_PROVIDER, LLM_KEY_CLASSIFIER_MODEL
-from app.routers.settings import get_setting
+from app.services.config import ConfigService
 from dishka.integrations.fastapi import inject
 from dishka import FromDishka
 
@@ -45,7 +45,7 @@ async def estimate_tags(
     analysis_type: str = "nonsense",
     client: FromDishka[PaperlessClient] = None,
     llm: FromDishka[LLMService] = None,
-    db: AsyncSession = Depends(get_db)
+    config_svc: FromDishka[ConfigService] = None,
 ):
     """Estimate tokens needed for specific analysis type.
     
@@ -88,8 +88,8 @@ async def estimate_tags(
     estimated_tokens = estimated_chars // 4
     
     # Default token limit for batching decisions
-    provider = await get_setting(LLM_KEY_CLASSIFIER_PROVIDER, db) or ""
-    model = await get_setting(LLM_KEY_CLASSIFIER_MODEL, db) or ""
+    provider = await config_svc.get(LLM_KEY_CLASSIFIER_PROVIDER) or ""
+    model = await config_svc.get(LLM_KEY_CLASSIFIER_MODEL) or ""
     token_limit = await llm.get_token_limit(provider, model)
     is_cloud = not llm.is_local_provider(provider)
     safe_limit = int(token_limit * 0.8)

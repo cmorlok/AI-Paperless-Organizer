@@ -1,5 +1,6 @@
 """Statistics API endpoints."""
 
+import logging
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -11,6 +12,7 @@ from app.services.paperless import PaperlessClient
 from dishka.integrations.fastapi import inject
 from dishka import FromDishka
 
+logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
@@ -83,7 +85,7 @@ async def get_cached_counts(db: AsyncSession, paperless: PaperlessClient) -> dic
                     db.add(cache_entry)
             await db.commit()
         except Exception as e:
-            print(f"Error loading from Paperless: {e}")
+            logger.error("Paperless loading failed", extra={"error": str(e)})
             # Keep the 0 values if Paperless fails
     
     return result

@@ -7,7 +7,7 @@ import re
 import fnmatch
 from typing import Dict, List, Optional, Any
 from sqlalchemy import select
-from app.models import CustomPrompt, IgnoredTag, LLMProvider
+from app.models import CustomPrompt, IgnoredTag
 from app.models.settings_model import LLM_KEY_CLASSIFIER_PROVIDER, LLM_KEY_CLASSIFIER_MODEL
 from app.services.paperless import PaperlessClient
 from app.services.llm import LLMService
