@@ -258,12 +258,6 @@ PROVIDER_DISPLAY_NAMES: Dict[str, str] = {
 }
 
 
-async def get_setting(key: str, db: AsyncSession) -> Optional[str]:
-    """Get a setting value from the key-value store."""
-    from app.routers.settings import get_setting as gs
-    return await gs(key, db)
-
-
 class LitellmService:
     """Service for interacting with various LLM providers via LiteLLM."""
 
@@ -469,13 +463,13 @@ class LitellmService:
             status[prov] = {"locked": lock.locked()}
         return status
 
-    # ── Private helpers ────────────────────────────────────────────────────────
-
     def is_local_provider(self, provider: str) -> bool:
         if not provider:
             return False
         provider_lower = provider.lower().split("/")[0]
         return provider_lower in self._LOCAL_LLM_PROVIDERS
+
+    # ── Private helpers ────────────────────────────────────────────────────────
 
     async def _resolve_credentials(self, provider: str) -> dict:
         async with async_session() as db:
