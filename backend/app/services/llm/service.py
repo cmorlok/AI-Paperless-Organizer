@@ -678,7 +678,7 @@ class LitellmService:
         print(f"ERROR app.services.llm.service: {msg}: {detail}\n{tb}", flush=True)
         logger.error("%s: %s", msg, detail, exc_info=True)
 
-    async def _check_provider_health(self, provider: str) -> bool:
+    async def check_provider_health(self, provider: str) -> bool:
         creds = await self._resolve_credentials(provider)
         url = creds.get("api_base")
         if not url:
@@ -691,7 +691,7 @@ class LitellmService:
         except Exception:
             return False
 
-    async def _unload_local_model(self, provider: str, model: str) -> bool:
+    async def unload_local_model(self, provider: str, model: str) -> bool:
         creds = await self._resolve_credentials(provider)
         url = (creds.get("api_base") or "").rstrip("/")
         api_key = creds.get("api_key")
