@@ -10,7 +10,6 @@ from pydantic import BaseModel, ConfigDict, Field, PrivateAttr
 
 from app.services.base_state import BaseState, CancelMixin
 
-DEFAULT_OLLAMA_URL = "http://localhost:11434"
 DEFAULT_OCR_MODEL = "qwen2.5vl:7b"
 
 TAG_RUN_OCR = "runocr"
@@ -65,7 +64,7 @@ class OcrBatchProgress(BaseModel):
         return getattr(self, key, default)
 
 
-class OcrWatchdogProgress(BaseModel):
+class OcrProcessorProgress(BaseModel):
     enabled: bool = False
     running: bool = False
     interval_minutes: int = Field(ge=1, default=5)
@@ -80,6 +79,12 @@ class OcrWatchdogProgress(BaseModel):
 
     def get(self, key: str, default=None):
         return getattr(self, key, default)
+
+
+class OcrCompareSlot(BaseModel):
+    """A single provider+model slot in an OCR comparison run."""
+    provider: str
+    model: str
 
 
 class OcrCompareState(BaseModel):
@@ -124,35 +129,18 @@ class OcrCompareState(BaseModel):
 
 class OcrState(BaseState, CancelMixin):
     batch: OcrBatchProgress = Field(default_factory=OcrBatchProgress)
-    watchdog: OcrWatchdogProgress = Field(default_factory=OcrWatchdogProgress)
+    processor: OcrProcessorProgress = Field(default_factory=OcrProcessorProgress)
     page_progress: dict[int, OcrDocumentProgress] = Field(default_factory=dict)
-    lock_holder: str | None = None
 
     _lock: asyncio.Lock = PrivateAttr(default_factory=asyncio.Lock)
 
     def _reset_fields(self) -> None:
         self.batch = OcrBatchProgress()
-        self.watchdog = OcrWatchdogProgress()
+        self.processor = OcrProcessorProgress()
         self.page_progress.clear()
-        self.lock_holder = None
         self.clear_cancel()
 
     def cancel(self) -> None:
         """Cancel the OCR operation and signal batch should stop."""
         self.request_cancel()
         self.batch.should_stop = True
-
-    def acquire_lock(self, holder: str) -> bool:
-        if self.lock_holder is not None:
-            return False
-        self.lock_holder = holder
-        return True
-
-    def release_lock(self) -> None:
-        self.lock_holder = None
-
-    def is_locked(self) -> bool:
-        return self.lock_holder is not None
-
-    def current_lock_holder(self) -> str | None:
-        return self.lock_holder

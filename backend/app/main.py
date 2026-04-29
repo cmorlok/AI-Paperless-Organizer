@@ -18,7 +18,7 @@ init_logging()
 logger = get_logger("app.main")
 
 from app.routers import paperless, correspondents, tags, document_types, settings, llm, debug, statistics, ignored_items, ocr, cleanup, classifier, rag, api_keys, cloud_import, duplicates, auth  # noqa: E402
-from app.routers.ocr import ocr_settings  # noqa: E402
+from app.routers.ocr import load_ocr_settings  # noqa: E402
 from app.services.ocr import OcrState, OcrService  # noqa: E402
 from app.services.classifier import AutoClassifyState, auto_classify_loop  # noqa: E402
 from app.services.paperless import PaperlessClient  # noqa: E402
@@ -72,27 +72,27 @@ async def lifespan(app: FastAPI):
         except Exception:
             return None
 
-    # Auto-start watchdog if it was enabled before shutdown (STATE-08: check KV store first)
-    kv_watchdog_enabled = await _read_kv_setting("ocr_watchdog_enabled")
-    file_watchdog_enabled = ocr_settings.get("watchdog_enabled")
-    start_watchdog = kv_watchdog_enabled if kv_watchdog_enabled is not None else file_watchdog_enabled
+    # Auto-start processor if it was enabled before shutdown
+    kv_processor_enabled = await _read_kv_setting("ocr_processor_enabled")
+    startup_settings = load_ocr_settings()
+    start_processor = kv_processor_enabled if kv_processor_enabled is not None else startup_settings.get("processor_enabled")
 
-    if start_watchdog:
+    if start_processor:
         try:
             async with di_container() as ctx:
                 client = await ctx.get(PaperlessClient)
                 service = await ctx.get(OcrService)
                 ocr_state = await ctx.get(OcrState)
                 ocr_state.reset()
-                ocr_state.watchdog.enabled = True
-                ocr_state.watchdog.interval_minutes = ocr_settings.get("watchdog_interval", 5)
+                ocr_state.processor.enabled = True
+                ocr_state.processor.interval_minutes = startup_settings.get("processor_interval", 5)
                 loop = asyncio.get_running_loop()
-                ocr_state.watchdog.task = loop.create_task(service.watchdog_loop(client))
+                ocr_state.processor.task = loop.create_task(service.processor_loop(client))
                 logging.getLogger(__name__).info(
-                    f"Watchdog auto-started from KV store (interval: {ocr_state.watchdog.interval_minutes} min)"
+                    f"Processor auto-started from KV store (interval: {ocr_state.processor.interval_minutes} min)"
                 )
         except Exception as e:
-            logging.getLogger(__name__).error(f"Watchdog auto-start failed: {e}")
+            logging.getLogger(__name__).error(f"Processor auto-start failed: {e}")
 
     # Auto-start classifier background job if enabled (STATE-08: check KV store first)
     kv_classify_enabled = await _read_kv_setting("auto_classify_enabled")
@@ -216,9 +216,9 @@ async def lifespan(app: FastAPI):
     try:
         async with di_container() as ctx:
             ocr_state = await ctx.get(OcrState)
-            if ocr_state.watchdog.enabled:
-                ocr_state.watchdog.enabled = False
-                task = ocr_state.watchdog.task
+            if ocr_state.processor.enabled:
+                ocr_state.processor.enabled = False
+                task = ocr_state.processor.task
                 if task and not task.done():
                     task.cancel()
     except Exception:

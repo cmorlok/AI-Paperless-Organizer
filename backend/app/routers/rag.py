@@ -8,7 +8,7 @@ from starlette.requests import Request
 from dishka.integrations.fastapi import inject
 from dishka import FromDishka
 
-from app.services.rag.protocol import RAGService
+from app.services.rag import RAGService
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -186,19 +186,18 @@ async def rag_health(service: FromDishka[RAGService] = None):
     config = await service.get_config_dict()
     index_status = await service.indexer.get_status()
     return {
-        "embedding": await _probe_embedding(config),
+        "embedding": await _probe_embedding(config, service.llm_service),
         "index": index_status,
     }
 
 
-async def _probe_embedding(config: dict) -> dict:
-    from app.services.llm import llm_embedding
+async def _probe_embedding(config: dict, llm_service) -> dict:
     provider = config["embedding_provider"]
     model = config["embedding_model"]
     try:
-        await llm_embedding(
-            model=model,
+        await llm_service.embed(
             provider=provider,
+            model=model,
             input=["test"],
         )
         return {"healthy": True, "provider": provider, "model": model}

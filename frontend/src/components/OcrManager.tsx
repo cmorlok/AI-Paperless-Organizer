@@ -57,7 +57,7 @@ export default function OcrManager() {
     const [batchPaused, setBatchPaused] = useState(false)
     const [startingBatch, setStartingBatch] = useState(false)
 
-    const [watchdogStatus, setWatchdogStatus] = useState<api.WatchdogStatus | null>(null)
+    const [processorStatus, setProcessorStatus] = useState<api.ProcessorStatus | null>(null)
     const pollInterval = useRef<ReturnType<typeof setInterval> | null>(null)
     const logContainerRef = useRef<HTMLDivElement>(null)
     const logEndRef = useRef<HTMLDivElement>(null)
@@ -104,13 +104,13 @@ export default function OcrManager() {
 
     const checkStatus = async () => {
         try {
-            const [bStatus, wStatus] = await Promise.all([
+            const [bStatus, pStatus] = await Promise.all([
                 api.getBatchOcrStatus(),
-                api.getWatchdogStatus()
+                api.getProcessorStatus()
             ])
 
             setBatchStatus(bStatus)
-            setWatchdogStatus(wStatus)
+            setProcessorStatus(pStatus)
 
             if (bStatus.running) {
                 setBatchRunning(true)
@@ -135,7 +135,7 @@ export default function OcrManager() {
                     setBatchRunning(false)
                     setBatchPaused(false)
                     if (pollInterval.current) clearInterval(pollInterval.current)
-                    api.getWatchdogStatus().then(setWatchdogStatus)
+                    api.getProcessorStatus().then(setProcessorStatus)
                 }
             } catch { }
         }, 3000)
@@ -230,13 +230,13 @@ export default function OcrManager() {
                         </p>
                     </div>
 
-                    {watchdogStatus?.enabled && (
+                    {processorStatus?.enabled && (
                         <div className="hidden sm:flex items-center gap-2 px-3 py-1.5 rounded-full bg-surface-800/60 border border-purple-500/30 text-xs font-medium text-purple-200 shadow-lg shadow-purple-900/20 animate-in fade-in">
                             <div className="relative flex h-2 w-2">
                                 <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-purple-400 opacity-75"></span>
                                 <span className="relative inline-flex rounded-full h-2 w-2 bg-purple-500"></span>
                             </div>
-                            <span>Autopilot Aktiv ({watchdogStatus.interval_minutes}m)</span>
+                            <span>Autopilot Aktiv ({processorStatus.interval_minutes}m)</span>
                         </div>
                     )}
                 </div>

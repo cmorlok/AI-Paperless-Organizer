@@ -28,6 +28,7 @@ from app.services.classifier.litellm_provider import (
 )
 from app.services.classifier.tool_executor import ToolExecutor
 from app.services.classifier.state import AutoClassifyState
+from app.services.llm import LLMService
 
 logger = logging.getLogger(__name__)
 
@@ -118,10 +119,12 @@ class DocumentClassifierService:
         paperless: Optional[PaperlessClient] = None,
         session_factory: Optional[Any] = None,
         state: Optional[AutoClassifyState] = None,
+        llm_service: Optional[LLMService] = None,
     ):
         self.paperless = paperless
         self.session_factory = session_factory
         self.state = state
+        self.llm_service = llm_service
 
     async def get_config(self) -> ClassifierConfig:
         if self.session_factory is None:
@@ -250,7 +253,7 @@ class DocumentClassifierService:
     async def _get_classifier_provider_name(self) -> str:
         """Get the classifier provider name from AppSettings key-value store (LLM-08)."""
         if self.session_factory is None:
-            return "ollama"
+            raise ValueError("classifier_provider is not configured")
         # Try key-value store first
         from app.routers.settings import get_setting
         async with self.session_factory() as db:
@@ -263,7 +266,7 @@ class DocumentClassifierService:
             app_settings = result.scalar_one_or_none()
             if app_settings and getattr(app_settings, "classifier_provider", None):
                 return app_settings.classifier_provider
-            return "ollama"
+            raise ValueError("classifier_provider is not configured")
 
     async def _build_provider(self, config: ClassifierConfig) -> BaseClassifierProvider:
         """Build the appropriate provider based on central LLM settings."""
@@ -286,11 +289,11 @@ class DocumentClassifierService:
             model = model_override
 
         if provider_name == "ollama":
-            return LitellmOllamaProvider(model=model, tool_executor=tool_executor)
+            return LitellmOllamaProvider(model=model, provider=provider_name, tool_executor=tool_executor, llm_service=self.llm_service)
 
-        from app.services.llm.service import PROVIDER_DISPLAY_NAMES
+        from app.services.llm import PROVIDER_DISPLAY_NAMES
         label = PROVIDER_DISPLAY_NAMES.get(provider_name, provider_name.replace("_", " ").title())
-        return LitellmToolCallingProvider(model=model, provider=provider_name, tool_executor=tool_executor, provider_label=label)
+        return LitellmToolCallingProvider(model=model, provider=provider_name, tool_executor=tool_executor, provider_label=label, llm_service=self.llm_service)
 
     async def _get_active_classifier_provider_name(self) -> str:
         """Alias for backward compat."""
@@ -809,7 +812,19 @@ class DocumentClassifierService:
                     break
 
         async def run_single(name: str, model: Optional[str]) -> Dict[str, Any]:
-            actual_model = model or (config.openai_model if name == "openai" else config.ollama_model)
+            # Resolve actual model for display: use provided model, or fetch from KV store
+            if model:
+                actual_model = model
+            elif name == "openai":
+                actual_model = config.openai_model
+            else:
+                # Fetch from KV store (LLM_KEY_CLASSIFIER_MODEL) for non-openai providers
+                actual_model = None
+                if self.session_factory is not None:
+                    async with self.session_factory() as db:
+                        actual_model = await get_setting(LLM_KEY_CLASSIFIER_MODEL, db)
+                if not actual_model:
+                    actual_model = f"{name}:default"
             try:
                 provider = await self._build_provider_by_name(name, config, model)
                 result = await provider.classify(document, config_dict)

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import base64
-import httpx
 import asyncio
 import json
 import logging
@@ -15,22 +14,14 @@ from typing import Optional, Dict, List, Any
 from PIL import Image
 from pdf2image import convert_from_bytes
 
-from app.services.llm import (
-    llm_completion,
-)
-from app.services.llm.lock import (
-    acquire as ollama_acquire,
-    release as ollama_release,
-    is_locked as ollama_is_locked,
-    current_holder as ollama_holder,
-)
-from app.services.llm.protocol import LLMService
+from app.services.llm import LLMService
 
 from .state import (
-    DEFAULT_OLLAMA_URL,
     DEFAULT_OCR_MODEL,
     OcrState,
     OcrDocumentProgress,
+    OcrCompareSlot,
+    OcrCompareState,
     PageProgress,
     TAG_RUN_OCR,
     TAG_OCR_FINISH,
@@ -57,76 +48,54 @@ logger = logging.getLogger(__name__)
 
 
 class OcrService:
-    """Service for OCR using Ollama Vision models."""
+    """Vision OCR service."""
 
     def __init__(
         self,
-        ollama_url: str = DEFAULT_OLLAMA_URL,
-        model: str = DEFAULT_OCR_MODEL,
-        max_image_size: int = 2048,
         state: OcrState | None = None,
         llm_service: LLMService | None = None,
+        session_factory=None,
     ):
-        self.ollama_urls: List[str] = [s.strip() for s in ollama_url.split(",")]
-        self.url_index: int = 0
-        self.model = model
-        self.max_image_size = max_image_size
-        self._config_lock = asyncio.Lock()
-        self._configured = False
         self.state: OcrState = state or OcrState()
         self.llm_service = llm_service
+        self.session_factory = session_factory
 
-    def get_current_url(self) -> str:
-        return self.ollama_urls[self.url_index % len(self.ollama_urls)]
+    async def _get_provider(self) -> str:
+        """Read OCR provider from KV store."""
+        from app.routers.settings import get_setting
+        async with self.session_factory() as db:
+            provider = await get_setting("ocr_provider", db)
+            if not provider:
+                raise ValueError("ocr_provider is not configured")
+            return provider
 
-    def rotate_url(self) -> None:
-        self.url_index = (self.url_index + 1) % len(self.ollama_urls)
+    async def _get_model(self) -> str:
+        """Read OCR model from KV store."""
+        from app.routers.settings import get_setting
+        async with self.session_factory() as db:
+            return await get_setting("ocr_model", db) or DEFAULT_OCR_MODEL
 
-    async def find_best_server(self) -> bool:
-        """Check which server responds fastest and set it as primary."""
-        best_idx = 0
-        best_latency = float("inf")
+    async def _get_max_image_size(self) -> int:
+        """Lazy-load max image size from KV store."""
+        from app.routers.settings import get_setting
+        async with self.session_factory() as db:
+            val = await get_setting("max_image_size", db)
+            return int(val) if val else 2048
 
-        for i, url in enumerate(self.ollama_urls):
-            try:
-                async with httpx.AsyncClient(timeout=5.0) as client:
-                    start = time.time()
-                    response = await client.get(f"{url}/api/tags")
-                    latency = time.time() - start
-                    if response.status_code == 200:
-                        if latency < best_latency:
-                            best_latency = latency
-                            best_idx = i
-                        logger.info(f"[OCR] Server {url} responded in {latency:.2f}s")
-            except Exception as e:
-                logger.warning(f"[OCR] Server {url} check failed: {e}")
+    async def _get_smart_skip_enabled(self) -> bool:
+        """Lazy-load smart skip setting from KV store."""
+        from app.routers.settings import get_setting
+        async with self.session_factory() as db:
+            val = await get_setting("smart_skip_enabled", db)
+            return val != "false" if val else True
 
-        if best_latency < float("inf"):
-            self.url_index = best_idx
-            logger.info(f"[OCR] Selected best server: {self.get_current_url()} (latency: {best_latency:.2f}s)")
-            return True
-        return False
-
-    async def _ensure_config(self) -> None:
-        """Ensure Ollama is configured and accessible (called once per service instance)."""
-        if self._configured:
-            return
-        async with self._config_lock:
-            if self._configured:
-                return
-            if not self.ollama_urls:
-                raise ValueError("No Ollama URLs configured")
-            for url in self.ollama_urls:
-                try:
-                    async with httpx.AsyncClient(timeout=10.0) as client:
-                        response = await client.get(f"{url}/api/tags")
-                        if response.status_code == 200:
-                            self._configured = True
-                            logger.info(f"[OCR] Ollama connected at {url}")
-                            return
-                except Exception:
-                    pass
-            raise ConnectionError(f"Kein Ollama-Server erreichbar unter {self.ollama_urls}")
+    async def _ensure_provider_ready(self, provider: str) -> None:
+        """Check that the OCR provider is accessible."""
+        if self.llm_service is None:
+            raise RuntimeError("OcrService.llm_service not injected - cannot perform OCR")
+        ready = await self.llm_service.check_provider_health(provider)
+        if not ready:
+            raise ConnectionError(f"OCR provider '{provider}' ist nicht erreichbar")
 
     @staticmethod
     def get_model_params(model: str) -> Dict[str, Any]:
@@ -204,7 +173,7 @@ class OcrService:
         }
 
     @staticmethod
-    def _prepare_image_for_ollama(image: Image.Image, max_size: int = 1280) -> bytes:
+    def _prepare_image(image: Image.Image, max_size: int = 1280) -> bytes:
         """Resize image to max dimension and convert to JPEG bytes for Ollama.
 
         Reduces image size to save tokens and speed up OCR without losing text legibility.
@@ -257,17 +226,17 @@ class OcrService:
                     return before
         return text
 
-    def _build_ocr_prompt(self, page_num: int = 0, total_pages: int = 0) -> str:
+    def _build_ocr_prompt(self, model: str, page_num: int = 0, total_pages: int = 0) -> str:
         """Build model-specific OCR prompt.
 
         Based on paperless-gpt's proven universal prompt as baseline.
         Model-specific adjustments only where absolutely needed:
         - deepseek-ocr: Minimal prompt (echoes anything longer)
         - glm-ocr: Keyword format per official docs
-        - gemma3: Shorter version (echoes long prompts)
+        - gemma3: Shorter version (echoes/repeats long prompts)
         - minicpm-v / qwen (default): Full paperless-gpt style prompt
         """
-        name = (self.model or "").lower()
+        name = (model or "").lower()
 
         # deepseek-ocr: ultra-minimal, NO <|grounding|> (that's for bounding boxes!)
         if "deepseek-ocr" in name:
@@ -333,7 +302,7 @@ class OcrService:
                 run_count += 1
                 if run_count >= 20:
                     lines = lines[:run_start]
-                    print(f"[OCR] Instruction echo detected at line {run_start}, truncating")
+                    logger.info(f"Instruction echo detected at line {run_start}, truncating")
                     break
             else:
                 run_start = i
@@ -362,22 +331,32 @@ class OcrService:
         original_lines = len(lines)
         cleaned_lines = len(cleaned)
         if original_lines - cleaned_lines > 5:
-            print(f"[OCR] Repetition cleanup: {original_lines} -> {cleaned_lines} lines (removed {original_lines - cleaned_lines} repeated lines)")
+            logger.info(f"Repetition cleanup: {original_lines} -> {cleaned_lines} lines (removed {original_lines - cleaned_lines} repeated lines)")
 
         return '\n'.join(cleaned)
 
-    async def _ocr_single_image(self, image_bytes: bytes, page_num: int = 0, total_pages: int = 0, timeout: float = 300.0) -> str:
+    async def _ocr_single_image(
+        self,
+        image_bytes: bytes,
+        model: str,
+        provider: str,
+        page_num: int = 0,
+        total_pages: int = 0,
+        timeout: float = 300.0,
+    ) -> str:
         """Run OCR on a single prepared image bytes block.
 
         Uses model-specific parameters from get_model_params().
         If a repetition loop is detected, retries with anti-loop parameters.
         """
         image_b64 = base64.b64encode(image_bytes).decode("utf-8")
-        prompt_text = self._build_ocr_prompt(page_num, total_pages)
-        model_params = self.get_model_params(self.model)
+        prompt_text = self._build_ocr_prompt(model, page_num, total_pages)
+        model_params = self.get_model_params(model)
 
         # First attempt with standard parameters
-        text = await self._run_ollama_ocr(image_b64, prompt_text, model_params, timeout)
+        text = await self._run_vision_ocr(
+            image_b64, model, provider, prompt_text, model_params, timeout
+        )
 
         if not text:
             return None
@@ -387,7 +366,7 @@ class OcrService:
         loop_ratio = text.get("_loop_ratio", 0) if isinstance(text, dict) else 0
 
         if loop_ratio > 0.6:
-            print(f"[OCR] Loop detected ({loop_ratio:.0%} wasted). Retrying with anti-table prompt...")
+            logger.info(f"Loop detected ({loop_ratio:.0%} wasted). Retrying with anti-table prompt...")
             retry_params = {**model_params}
             retry_params["num_predict"] = min(model_params["num_predict"], 4096)
 
@@ -398,104 +377,94 @@ class OcrService:
                 "Include every single line of text: headers, items, prices, totals, footer, company details, IBAN."
             )
 
-            retry_text = await self._run_ollama_ocr(image_b64, anti_table_prompt, retry_params, timeout)
+            retry_text = await self._run_vision_ocr(
+                image_b64, model, provider, anti_table_prompt, retry_params, timeout
+            )
             if retry_text:
                 retry_cleaned = retry_text["_cleaned"] if isinstance(retry_text, dict) else retry_text
                 retry_ratio = retry_text.get("_loop_ratio", 0) if isinstance(retry_text, dict) else 0
 
                 if len(retry_cleaned) > len(cleaned):
-                    print(f"[OCR] Anti-table retry improved: {len(cleaned)} -> {len(retry_cleaned)} chars (loop: {retry_ratio:.0%})")
+                    logger.info(f"Anti-table retry improved: {len(cleaned)} -> {len(retry_cleaned)} chars (loop: {retry_ratio:.0%})")
                     return retry_cleaned
                 else:
-                    print(f"[OCR] Retry not better ({len(retry_cleaned)} vs {len(cleaned)} chars), keeping original")
+                    logger.info(f"Retry not better ({len(retry_cleaned)} vs {len(cleaned)} chars), keeping original")
 
         return cleaned
 
-    async def _run_ollama_ocr(self, image_b64: str, prompt_text: str, model_params: dict, timeout: float) -> dict | str | None:
-        """Execute a single Ollama OCR request via LiteLLM."""
-        name_lower = (self.model or "").lower()
+    async def _run_vision_ocr(
+        self,
+        image_b64: str,
+        model: str,
+        provider: str,
+        prompt_text: str,
+        model_params: dict,
+        timeout: float,
+    ) -> dict | str | None:
+        """Execute a single vision OCR request via LiteLLM."""
+        if self.llm_service is None:
+            raise RuntimeError("OcrService.llm_service not injected - cannot perform OCR")
+
+        name_lower = (model or "").lower()
         use_think_param = "qwen3" in name_lower
 
-        print(f"[OCR][DEBUG] Model: {self.model}, repeat_pen={model_params['repeat_penalty']}, predict={model_params['num_predict']}")
+        logger.debug(f"Model: {model}, repeat_pen={model_params['repeat_penalty']}, predict={model_params['num_predict']}")
 
-        attempts = len(self.ollama_urls)
-        last_error = None
+        try:
+            system_msg = (
+                "You are a precise OCR module. Output ONLY the verbatim transcribed text from the image – nothing else. "
+                "No summaries, no descriptions, no commentary, no 'Let me...', no 'Here is...'. "
+                "Every number, every EUR amount, every date, every code must appear EXACTLY as printed. "
+                "For tables: every row, every column, every cell value. "
+                "Missing a single number is a critical OCR failure. Raw verbatim transcription only."
+            )
 
-        for _ in range(attempts):
-            url = self.get_current_url()
-            try:
-                system_msg = (
-                    "You are a precise OCR module. Output ONLY the verbatim transcribed text from the image – nothing else. "
-                    "No summaries, no descriptions, no commentary, no 'Let me...', no 'Here is...'. "
-                    "Every number, every EUR amount, every date, every code must appear EXACTLY as printed. "
-                    "For tables: every row, every column, every cell value. "
-                    "Missing a single number is a critical OCR failure. Raw verbatim transcription only."
-                )
+            # LiteLLM multimodal format (OpenAI-compatible, works with Ollama vision)
+            user_content = [
+                {"type": "text", "text": prompt_text},
+                {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{image_b64}"}},
+            ]
 
-                # LiteLLM multimodal format (OpenAI-compatible, works with Ollama vision)
-                user_content = [
-                    {"type": "text", "text": prompt_text},
-                    {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{image_b64}"}},
-                ]
+            result = await self.llm_service.complete(
+                provider=provider,
+                model=model,
+                messages=[
+                    {"role": "system", "content": system_msg},
+                    {"role": "user",   "content": user_content},
+                ],
+                temperature=model_params["temperature"],
+                repeat_penalty=model_params["repeat_penalty"],
+                num_ctx=model_params["num_ctx"],
+                num_predict=model_params["num_predict"],
+                keep_alive="30m",
+                think=False if use_think_param else None,
+                timeout=timeout,
+            )
 
-                extra_body: dict = {
-                    "options": {
-                        "temperature":    model_params["temperature"],
-                        "repeat_penalty": model_params["repeat_penalty"],
-                        "num_ctx":        model_params["num_ctx"],
-                        "num_predict":    model_params["num_predict"],
-                    },
-                    "keep_alive": "30m",
-                }
-                if use_think_param:
-                    extra_body["think"] = False
+            text_content = (result.content or "").strip()
+            text_content = self._strip_reasoning(text_content)
+            text_content = self._strip_ocr_commentary(text_content)
 
-                response = await llm_completion(
-                    model=self.model,
-                    provider="ollama",
-                    messages=[
-                        {"role": "system", "content": system_msg},
-                        {"role": "user",   "content": user_content},
-                    ],
-                    api_base=url,
-                    extra_body=extra_body,
-                    timeout=timeout,
-                )
+            raw_len = len(text_content) if text_content else 0
+            if text_content:
+                text_content = self._clean_repetitions(text_content)
+            cleaned_len = len(text_content) if text_content else 0
+            loop_ratio = 1 - (cleaned_len / raw_len) if raw_len > 0 else 0
 
-                text_content = (response.choices[0].message.content or "").strip()
-                text_content = self._strip_reasoning(text_content)
-                text_content = self._strip_ocr_commentary(text_content)
+            if raw_len != cleaned_len:
+                logger.info(f"Repetition cleanup: {raw_len} -> {cleaned_len} chars ({loop_ratio:.0%} removed)")
 
-                raw_len = len(text_content) if text_content else 0
-                if text_content:
-                    text_content = self._clean_repetitions(text_content)
-                cleaned_len = len(text_content) if text_content else 0
-                loop_ratio = 1 - (cleaned_len / raw_len) if raw_len > 0 else 0
+            return {
+                "_cleaned": text_content,
+                "_raw":     text_content,
+                "_loop_ratio": loop_ratio,
+            }
 
-                if raw_len != cleaned_len:
-                    print(f"[OCR] Repetition cleanup: {raw_len} -> {cleaned_len} chars ({loop_ratio:.0%} removed)")
+        except Exception as e:
+            logger.error(f"Error during OCR request: {e}")
+            return None
 
-                eval_count = 0
-                if response.usage:
-                    eval_count = response.usage.completion_tokens or 0
-                if eval_count >= 8000:
-                    print(f"[OCR] WARNING: Token limit likely hit ({eval_count} tokens)")
-
-                return {
-                    "_cleaned": text_content,
-                    "_raw":     text_content,
-                    "_loop_ratio": loop_ratio,
-                }
-
-            except Exception as e:
-                last_error = e
-                print(f"[OCR] Error on {url}: {e}")
-                self.rotate_url()
-
-        print(f"[OCR] All URLs failed. Last error: {last_error}")
-        return None
-
-    def save_stats(self, doc_id: int, duration: float, pages: int, chars: int, success: bool = True):
+    def save_stats(self, doc_id: int, duration: float, pages: int, chars: int, success: bool = True, model: str = ""):
         """Save OCR statistics to JSON file."""
         from datetime import datetime
 
@@ -506,8 +475,7 @@ class OcrService:
             "duration": round(duration, 2),
             "pages": pages,
             "chars": chars,
-            "model": self.model,
-            "server": self.get_current_url(),
+            "model": model,
             "success": success
         }
 
@@ -539,7 +507,7 @@ class OcrService:
                 pass
         return []
 
-    def _extract_text_from_pdf(self, file_bytes: bytes) -> Optional[str]:
+    def _extract_text_from_pdf(self, file_bytes: bytes, smart_skip_enabled: bool = True) -> Optional[str]:
         """Extract text from PDF bytes using pypdf.
 
         Refined Logic (v1.1.7):
@@ -547,7 +515,7 @@ class OcrService:
         - If metadata indicates previous OCR (Abbyy, Tesseract, Paperless), return None (force new Vision OCR).
         - If metadata indicates 'Digital Born' (Word, LaTeX, Invoice Systems), return the text (Skip OCR).
         """
-        if not self.smart_skip_enabled:
+        if not smart_skip_enabled:
             logger.info("Smart-Skip disabled in settings. Forcing OCR.")
             return None
 
@@ -577,9 +545,15 @@ class OcrService:
 
     async def ocr_document(self, paperless_client, document_id: int, force: bool = False, db_session=None) -> Dict[str, Any]:
         """OCR a document with page-level persistence. Supports resume after failures."""
-        await self._ensure_config()
+        # Fetch provider config at runtime
+        provider = await self._get_provider()
+        model = await self._get_model()
+        max_image_size = await self._get_max_image_size()
+        smart_skip_enabled = await self._get_smart_skip_enabled()
+
+        await self._ensure_provider_ready(provider)
         start_time = time.time()
-        print(f"[OCR] Starting OCR for document {document_id}")
+        logger.info(f"Starting OCR for document {document_id}")
 
         self.state.page_progress[document_id] = OcrDocumentProgress(
             total_pages=0, done=0, errors=0,
@@ -600,7 +574,6 @@ class OcrService:
             file_bytes = await paperless_client.download_document_file(document_id)
             file_mb = len(file_bytes) / 1_048_576
             logger.info(f"Downloaded document {document_id}: {len(file_bytes)} bytes ({file_mb:.1f} MB)")
-            print(f"[OCR] Downloaded {len(file_bytes)} bytes ({file_mb:.1f} MB)")
 
             if file_mb > MAX_FILE_SIZE_MB:
                 self.state.page_progress.pop(document_id, None)
@@ -633,10 +606,9 @@ class OcrService:
             raise ValueError(f"Download fehlgeschlagen: {e}")
 
         if not force:
-            native_text = self._extract_text_from_pdf(file_bytes)
+            native_text = self._extract_text_from_pdf(file_bytes, smart_skip_enabled)
             if native_text and len(native_text) > 50:
                 logger.info(f"Found native text in PDF ({len(native_text)} chars). Skipping OCR.")
-                print(f"[OCR] Native text found ({len(native_text)} chars). Skipping vision OCR.")
                 self.state.page_progress.pop(document_id, None)
                 duration = time.time() - start_time
                 return {
@@ -647,7 +619,7 @@ class OcrService:
                 }
 
         self.state.page_progress[document_id].status = "converting"
-        images = await self._convert_to_images(file_bytes, doc, document_id, title)
+        images = await self._convert_to_images(file_bytes, doc, document_id, title, model)
         if not images:
             self.state.page_progress.pop(document_id, None)
             raise ValueError("Keine Seiten aus dem Dokument extrahiert")
@@ -661,11 +633,11 @@ class OcrService:
         if db_session:
             if force:
                 await self._cleanup_page_results(db_session, document_id)
-                print(f"[OCR] Force mode: cleared DB page cache for doc {document_id}, starting fresh")
+                logger.info(f"Force mode: cleared DB page cache for doc {document_id}, starting fresh")
             else:
                 completed_pages = await self._load_completed_pages(db_session, document_id, total_pages)
                 if completed_pages:
-                    print(f"[OCR] Resume: found {len(completed_pages)} completed pages in DB")
+                    logger.info(f"Resume: found {len(completed_pages)} completed pages in DB")
                     for pg_num, pg_text in completed_pages.items():
                         idx = pg_num - 1
                         if idx < len(self.state.page_progress[document_id].pages):
@@ -683,15 +655,15 @@ class OcrService:
 
             if page_num in completed_pages:
                 full_text_parts[page_num] = completed_pages[page_num]
-                print(f"[OCR] Page {page_num}/{total_pages}: resumed from DB ({len(completed_pages[page_num])} chars)")
+                logger.info(f"Page {page_num}/{total_pages}: resumed from DB ({len(completed_pages[page_num])} chars)")
                 continue
 
             self.state.page_progress[document_id].current_page = page_num
             self.state.page_progress[document_id].pages[i].status = "processing"
 
-            model_params = self.get_model_params(self.model)
-            optimal_size = max(self.max_image_size, model_params["max_image_size"])
-            prepared_bytes = self._prepare_image_for_ollama(img, max_size=optimal_size)
+            model_params = self.get_model_params(model)
+            optimal_size = max(max_image_size, model_params["max_image_size"])
+            prepared_bytes = self._prepare_image(img, max_size=optimal_size)
 
             page_text = None
             last_error = None
@@ -701,10 +673,9 @@ class OcrService:
                     page_start = time.time()
                     msg = f"Processing page {page_num}/{total_pages} (attempt {attempt})"
                     logger.info(msg)
-                    print(f"[OCR] {msg}")
 
                     page_text = await self._ocr_single_image(
-                        prepared_bytes, page_num=page_num, total_pages=total_pages
+                        prepared_bytes, model, provider, page_num=page_num, total_pages=total_pages
                     )
 
                     if not page_text or not page_text.strip():
@@ -723,13 +694,12 @@ class OcrService:
                         page=page_num, status="done", chars=len(page_text)
                     )
                     self.state.page_progress[document_id].done += 1
-                    print(f"[OCR] Page {page_num}: OK ({len(page_text)} chars, {page_duration:.1f}s)")
+                    logger.info(f"Page {page_num}: OK ({len(page_text)} chars, {page_duration:.1f}s)")
                     break
 
                 except Exception as e:
                     last_error = str(e)
                     logger.warning(f"OCR page {page_num} attempt {attempt} failed: {e}")
-                    print(f"[OCR] Page {page_num} attempt {attempt} failed: {e}")
 
                     if attempt < MAX_PAGE_RETRIES:
                         await asyncio.sleep(2)
@@ -745,7 +715,7 @@ class OcrService:
                     )
                     self.state.page_progress[document_id].errors += 1
                 failed_pages.append(page_num)
-                print(f"[OCR] Page {page_num}: FAILED after {MAX_PAGE_RETRIES} attempts")
+                logger.warning(f"Page {page_num}: FAILED after {MAX_PAGE_RETRIES} attempts")
 
         if failed_pages:
             self.state.page_progress[document_id].status = "partial"
@@ -770,9 +740,9 @@ class OcrService:
             "ocr_duration": duration, "ocr_pages": total_pages,
         }
 
-    async def _convert_to_images(self, file_bytes: bytes, doc: dict, document_id: int, title: str) -> list:
+    async def _convert_to_images(self, file_bytes: bytes, doc: dict, document_id: int, title: str, model: str) -> list:
         """Convert file to list of PIL images."""
-        model_params = self.get_model_params(self.model)
+        model_params = self.get_model_params(model)
         render_dpi = model_params.get("render_dpi", 200)
         is_pdf = file_bytes[:4] == b'%PDF'
         mime_type = doc.get("mime_type", "unknown")
@@ -782,17 +752,17 @@ class OcrService:
                 try:
                     loop = asyncio.get_running_loop()
                     dpi = render_dpi if attempt == 0 else max(100, render_dpi - 50)
-                    print(f"[OCR] Converting PDF at {dpi} DPI (attempt {attempt+1})…")
+                    logger.warning(f"Converting PDF at {dpi} DPI (attempt {attempt+1})…")
                     images = await asyncio.wait_for(
                         loop.run_in_executor(
                             None, lambda d=dpi: convert_from_bytes(file_bytes, dpi=d)
                         ),
                         timeout=300
                     )
-                    print(f"[OCR] Converted PDF to {len(images)} pages at {dpi} DPI")
+                    logger.info(f"Converted PDF to {len(images)} pages at {dpi} DPI")
                     return images
                 except asyncio.TimeoutError:
-                    print(f"[OCR] PDF conversion timed out after 5 min (attempt {attempt+1})")
+                    logger.warning(f"PDF conversion timed out after 5 min (attempt {attempt+1})")
                     if attempt == 0:
                         logger.warning(f"PDF conversion timeout for doc {document_id}, retrying at lower DPI")
                         continue
@@ -810,7 +780,7 @@ class OcrService:
                             save_ocr_ignore_list(ignore_list)
                         raise ValueError(f"{error_msg} Dokument wird künftig übersprungen.")
                     if attempt == 0:
-                        print(f"[OCR] PDF conversion failed (attempt 1), retrying: {e}")
+                        logger.warning(f"PDF conversion failed (attempt 1), retrying: {e}")
                         await asyncio.sleep(2)
                     else:
                         raise ValueError(f"PDF-Konvertierung fehlgeschlagen nach 2 Versuchen ({mime_type}): {e}")
@@ -818,7 +788,7 @@ class OcrService:
             try:
                 img = Image.open(io.BytesIO(file_bytes))
                 img.load()
-                print(f"[OCR] Loaded as single image ({img.format}, {img.size[0]}x{img.size[1]})")
+                logger.info(f"Loaded as single image ({img.format}, {img.size[0]}x{img.size[1]})")
                 return [img]
             except Exception as e:
                 raise ValueError(f"Dateiformat nicht unterstützt ({mime_type}, {len(file_bytes)} bytes): {e}")
@@ -892,19 +862,35 @@ class OcrService:
                 delete(OcrPageResult).where(OcrPageResult.document_id == document_id)
             )
             await db_session.commit()
-            print(f"[OCR] Cleaned up page cache for document {document_id}")
+            logger.info(f"Cleaned up page cache for document {document_id}")
         except Exception as e:
             logger.warning(f"Failed to cleanup page results: {e}")
 
     async def ocr_image(self, image_bytes: bytes) -> str:
         """Legacy method for backward compat or single image bytes."""
         try:
+            provider = await self._get_provider()
+            model = await self._get_model()
+            max_size = await self._get_max_image_size()
             img = Image.open(io.BytesIO(image_bytes))
-            prepared = self._prepare_image_for_ollama(img)
-            return await self._ocr_single_image(prepared)
+            prepared = self._prepare_image(img, max_size=max_size)
+            return await self._ocr_single_image(prepared, model, provider)
         except Exception as e:
             logger.error(f"Legacy ocr_image failed: {e}")
             raise
+
+    async def test_connection(self) -> Dict[str, Any]:
+        """Test OCR provider connection and return status."""
+        try:
+            provider = await self._get_provider()
+            model = await self._get_model()
+            connected = await self.llm_service.check_provider_health(provider)
+            return {
+                "connected": connected,
+                "model": model,
+            }
+        except Exception as e:
+            return {"connected": False, "error": str(e)}
 
     async def apply_ocr_result(
         self,
@@ -915,6 +901,8 @@ class OcrService:
     ) -> Dict[str, Any]:
         """Apply OCR result to document and optionally set ocrfinish tag."""
         start_time = time.time()
+
+        model = await self._get_model()
 
         await paperless_client.update_document(document_id, {"content": new_content})
 
@@ -940,7 +928,7 @@ class OcrService:
 
         duration = time.time() - start_time
         try:
-            self.save_stats(document_id, duration, 0, len(new_content), success=tag_success)
+            self.save_stats(document_id, duration, 0, len(new_content), success=tag_success, model=model)
         except Exception:
             pass
 
@@ -965,18 +953,9 @@ class OcrService:
         self.state.batch.mode = mode
         self.state.batch.paused = False
 
-        lock_acquired = False
-        try:
-            if ollama_is_locked():
-                holder = ollama_holder()
-                self.state.batch.log.append(f"⏳ Warte auf {holder} (Ollama belegt)...")
-                logger.info(f"[OCR-Batch] Ollama belegt durch {holder}, warte...")
-            lock_acquired = await ollama_acquire("ocr-batch", timeout=600)
-            if not lock_acquired:
-                self.state.batch.log.append("❌ Ollama-Lock nicht erhalten nach 10 Min – Abbruch.")
-                self.state.batch.running = False
-                return
+        model = await self._get_model()
 
+        try:
             ocrfinish_tag = await paperless_client.get_or_create_tag(TAG_OCR_FINISH)
             ocrfinish_tag_id = ocrfinish_tag.get("id")
 
@@ -994,11 +973,8 @@ class OcrService:
 
             documents = []
 
-            self.state.batch.log.append("🔎 Prüfe verfügbare Ollama-Server...")
-            if await self.find_best_server():
-                self.state.batch.log.append(f"🚀 Verbunden mit: {self.get_current_url()}")
-            else:
-                self.state.batch.log.append(f"⚠️ Warnung: Kein Server antwortet schnell. Nutze {self.get_current_url()}")
+            # Provider config resolved at runtime - health check happens per-call in _ensure_provider_ready
+            self.state.batch.log.append("🔎 Starte Batch-OCR (Provider-spezifische URL wird zur Laufzeit ermittelt)...")
 
             if mode == "all":
                 self.state.batch.log.append("⏳ Lade Dokumentenliste von Paperless (das kann dauern)...")
@@ -1065,7 +1041,7 @@ class OcrService:
                 skipped = before_count - len(documents)
                 if skipped > 0:
                     self.state.batch.log.append(f"🚫 {skipped} Dokument(e) übersprungen (OCR Ignore-Liste)")
-                    print(f"[OCR] Skipped {skipped} ignored documents")
+                    logger.info(f"Skipped {skipped} ignored documents")
 
             self.state.batch.total = len(documents)
 
@@ -1113,7 +1089,7 @@ class OcrService:
                             self.state.batch.log.append(
                                 f"🔁 {doc_title}: Qualitätscheck fehlgeschlagen ({ratio}% des Originals) → Automatischer Retry..."
                             )
-                            print(f"[OCR] Quality check failed for {doc_id} ({ratio}%), retrying OCR...")
+                            logger.warning(f"Quality check failed for {doc_id} ({ratio}%), retrying OCR...")
 
                             await asyncio.sleep(3)
 
@@ -1130,7 +1106,7 @@ class OcrService:
                                     self.state.batch.log.append(
                                         f"🔁 {doc_title}: Retry lieferte besseres Ergebnis ({retry_len} vs {new_len - (retry_len - new_len)} Zeichen)"
                                     )
-                                    print(f"[OCR] Retry improved: {retry_len} chars (was {new_len - (retry_len - new_len)})")
+                                    logger.info(f"Retry improved: {retry_len} chars (was {new_len - (retry_len - new_len)})")
                                 elif retry_content:
                                     if retry_len >= new_len:
                                         new_content = retry_content
@@ -1139,12 +1115,12 @@ class OcrService:
                                     self.state.batch.log.append(
                                         f"🔁 {doc_title}: Retry ähnliches Ergebnis ({retry_len} Zeichen)"
                                     )
-                                    print(f"[OCR] Retry similar: {retry_len} chars")
+                                    logger.info(f"Retry similar: {retry_len} chars")
                             except Exception as retry_err:
                                 self.state.batch.log.append(
                                     f"🔁 {doc_title}: Retry fehlgeschlagen - {str(retry_err)}"
                                 )
-                                print(f"[OCR] Retry failed for {doc_id}: {retry_err}")
+                                logger.warning(f"Retry failed for {doc_id}: {retry_err}")
 
                             new_len = len(new_content) if new_content else 0
                             if old_len > 100 and new_len < old_len * QUALITY_THRESHOLD:
@@ -1185,7 +1161,7 @@ class OcrService:
                                 self.state.batch.log.append(
                                     f"✅ {doc_title}: Retry erfolgreich! Qualität jetzt OK ({new_len} Zeichen)"
                                 )
-                                print(f"[OCR] Retry fixed quality for {doc_id}: {new_len} chars now passes threshold")
+                                logger.info(f"Retry fixed quality for {doc_id}: {new_len} chars now passes threshold")
 
                         if not needs_review:
                             reset_ocr_error(doc_id)
@@ -1221,7 +1197,7 @@ class OcrService:
                                             self.state.batch.log.append(f"⚠️ {doc_title}: Tag-Update 2x fehlgeschlagen: {e}")
 
                             try:
-                                self.save_stats(doc_id, ocr_duration, ocr_pages, new_len, success=tag_success)
+                                self.save_stats(doc_id, ocr_duration, ocr_pages, new_len, success=tag_success, model=model)
                             except Exception:
                                 pass
 
@@ -1235,7 +1211,7 @@ class OcrService:
 
                 except Exception as e:
                     try:
-                        self.save_stats(doc_id, 0, 0, 0, success=False)
+                        self.save_stats(doc_id, 0, 0, 0, success=False, model=model)
                     except Exception:
                         pass
                     error_msg = f"❌ {doc_title}: Fehler - {str(e)}"
@@ -1267,7 +1243,7 @@ class OcrService:
                             self.state.batch.log.append(
                                 f"🚫 {doc_title}: {err_count}x fehlgeschlagen → Tag 'ocrfehler' gesetzt, wird nicht mehr verarbeitet"
                             )
-                            print(f"[OCR] Doc {doc_id} permanently marked as failed ({err_count} failures)")
+                            logger.error(f"Doc {doc_id} permanently marked as failed ({err_count} failures)")
                         except Exception as tag_err:
                             logger.error(f"Failed to set ocrfehler tag for {doc_id}: {tag_err}")
                     else:
@@ -1291,17 +1267,194 @@ class OcrService:
             self.state.batch.log.append(f"Traceback: {error_details}")
             logger.error(f"Batch OCR critical error: {e}\n{error_details}")
         finally:
-            if lock_acquired:
-                ollama_release("ocr-batch")
             self.state.batch.running = False
             self.state.batch.current_document = None
 
-    async def watchdog_loop(self, paperless_client):
+    async def _unload_model_from_vram(self, model: str) -> None:
+        try:
+            await self.llm_service.unload_local_model("ollama", model)
+            logger.info(f"Unloaded {model} from VRAM")
+        except Exception:
+            pass
+
+    async def _wait_for_provider_ready(self, provider: str, max_wait: int = 60) -> bool:
+        waited = 0
+        interval = 3
+        while waited < max_wait:
+            try:
+                if await self.llm_service.check_provider_health(provider):
+                    if waited > 0:
+                        logger.info(f"{provider} wieder erreichbar nach {waited}s Wartezeit")
+                    return True
+            except Exception:
+                pass
+            logger.warning(f"{provider} nicht erreichbar, warte {interval}s... ({waited}/{max_wait}s)")
+            await asyncio.sleep(interval)
+            waited += interval
+        logger.warning(f"{provider} nach {max_wait}s immer noch nicht erreichbar!")
+        return False
+
+    async def run_compare_job(
+        self,
+        paperless_client,
+        document_id: int,
+        slots: list[OcrCompareSlot],
+        target_page: int,
+        compare_state: OcrCompareState,
+    ) -> None:
+        """Run an OCR model comparison job. Designed to be launched as a background task."""
+        job_start = time.time()
+        compare_state.job_start = job_start
+
+        try:
+            compare_state.phase = "download"
+            doc = await paperless_client.get_document(document_id)
+            if not doc:
+                raise ValueError(f"Dokument {document_id} nicht gefunden")
+
+            compare_state.title = doc.get("title", f"Dokument {document_id}")
+            compare_state.old_content = doc.get("content", "") or ""
+
+            file_bytes = await paperless_client.download_document_file(document_id)
+            logger.info(f"Downloaded doc {document_id}: {len(file_bytes)} bytes")
+
+            compare_state.phase = "convert"
+            is_pdf = True
+            try:
+                loop = asyncio.get_running_loop()
+                preview_images = await loop.run_in_executor(
+                    None, lambda: convert_from_bytes(file_bytes, dpi=150)
+                )
+                total_pages = len(preview_images)
+                logger.info(f"Document has {total_pages} pages")
+            except Exception:
+                is_pdf = False
+                preview_images = [Image.open(io.BytesIO(file_bytes))]
+                total_pages = 1
+
+            if total_pages == 0:
+                raise ValueError("Keine Seiten extrahiert")
+
+            compare_state.total_pages = total_pages
+
+            if target_page > 0 and target_page <= total_pages:
+                page_indices = [target_page - 1]
+                compare_state.compared_page = target_page
+            else:
+                page_indices = list(range(total_pages))
+                compare_state.compared_page = 0
+
+            dpi_image_cache: dict = {}
+
+            for model_idx, slot in enumerate(slots):
+                model_name = slot.model
+                provider = slot.provider
+                compare_state.current_model = model_name
+                compare_state.current_model_index = model_idx
+                compare_state.current_page = 0
+                compare_state.elapsed_seconds = round(time.time() - job_start, 1)
+
+                compare_state.phase = "health_check"
+                logger.info(f"Checking {provider} health before model: {model_name}")
+                provider_ready = await self._wait_for_provider_ready(provider, max_wait=60)
+                if not provider_ready:
+                    error_msg = f"{provider} nicht erreichbar - ueberspringe {model_name}"
+                    logger.warning(f"{model_name} SKIPPED: provider not reachable")
+                    compare_state.results.append({
+                        "model": model_name, "text": "", "chars": 0,
+                        "duration_seconds": 0, "pages_processed": 0, "error": error_msg,
+                    })
+                    continue
+
+                model_params = self.get_model_params(model_name)
+                optimal_image_size = model_params["max_image_size"]
+                render_dpi = model_params.get("render_dpi", 200)
+
+                compare_state.phase = "model_loading"
+                logger.info(f"Testing model: {model_name} (image: {optimal_image_size}px, DPI: {render_dpi}, ctx: {model_params['num_ctx']}, repeat_pen: {model_params['repeat_penalty']})")
+
+                if is_pdf and render_dpi not in dpi_image_cache:
+                    compare_state.phase = "convert"
+                    logger.info(f"Rendering PDF at {render_dpi} DPI for {model_name}")
+                    dpi_images = await asyncio.get_running_loop().run_in_executor(
+                        None, lambda dpi=render_dpi: convert_from_bytes(file_bytes, dpi=dpi)
+                    )
+                    dpi_image_cache[render_dpi] = dpi_images
+
+                source_images = dpi_image_cache.get(render_dpi, preview_images) if is_pdf else preview_images
+                pages_to_process = [(idx, source_images[idx]) for idx in page_indices]
+
+                prepared_pages = []
+                for idx, img in pages_to_process:
+                    src_w, src_h = img.size
+                    prepared_bytes = self._prepare_image(img, max_size=optimal_image_size)
+                    debug_img = Image.open(io.BytesIO(prepared_bytes))
+                    prep_w, prep_h = debug_img.size
+                    logger.debug(f"{model_name} page {idx+1}: source={src_w}x{src_h}, prepared={prep_w}x{prep_h}, bytes={len(prepared_bytes)}, format={debug_img.format}")
+                    prepared_pages.append((idx, prepared_bytes))
+
+                model_start = time.time()
+                page_texts = []
+                error_msg = None
+
+                try:
+                    for page_idx, prepared_bytes in prepared_pages:
+                        compare_state.phase = "ocr_page"
+                        compare_state.current_page = page_idx + 1
+                        compare_state.elapsed_seconds = round(time.time() - job_start, 1)
+
+                        page_text = await self._ocr_single_image(
+                            prepared_bytes, model_name, provider,
+                            page_num=page_idx + 1, total_pages=total_pages, timeout=300.0,
+                        )
+                        preview = page_text[:200].replace('\n', ' ') if page_text else "(empty)"
+                        logger.debug(f"{model_name} page {page_idx+1} result: {len(page_text)} chars, preview: {preview}")
+                        page_texts.append(page_text)
+                except Exception as e:
+                    error_msg = str(e)
+                    error_type = type(e).__name__
+                    logger.error(f"[Compare] Model {model_name} failed ({error_type}): {e}")
+                    logger.error(f"{model_name} FAILED ({error_type}): {e}")
+
+                model_duration = time.time() - model_start
+                full_text = "\n\n".join(page_texts) if page_texts else ""
+
+                compare_state.results.append({
+                    "model": model_name,
+                    "text": full_text,
+                    "chars": len(full_text),
+                    "duration_seconds": round(model_duration, 2),
+                    "pages_processed": len(page_texts),
+                    "error": error_msg,
+                })
+                logger.info(f"{model_name}: {len(full_text)} chars in {model_duration:.1f}s")
+
+                compare_state.phase = "unloading"
+                compare_state.elapsed_seconds = round(time.time() - job_start, 1)
+                await self._unload_model_from_vram(model_name)
+
+                if error_msg:
+                    logger.error("Modell hatte Fehler, warte 5s auf Recovery...")
+                    await asyncio.sleep(5)
+
+            compare_state.phase = "done"
+            compare_state.elapsed_seconds = round(time.time() - job_start, 1)
+            logger.info(f"All {len(slots)} models done in {compare_state.elapsed_seconds}s")
+
+        except Exception as e:
+            compare_state.phase = "error"
+            compare_state.error = str(e)
+            compare_state.elapsed_seconds = round(time.time() - job_start, 1)
+            logger.error(f"[Compare] Job failed: {e}")
+        finally:
+            compare_state.running = False
+
+    async def processor_loop(self, paperless_client):
         """Continuous background loop to check for new documents."""
         from datetime import datetime
 
-        logger.info("Watchdog started")
-        print("[OCR] Watchdog started")
+        logger.info("Processor started")
+        logger.info("Processor started")
 
         _ocrfinish_tag = None
         _ocrpruefen_tag = None
@@ -1323,16 +1476,15 @@ class OcrService:
             except Exception:
                 return []
 
-        while self.state.watchdog.enabled:
+        while self.state.processor.enabled:
             try:
-                self.state.watchdog.running = True
+                self.state.processor.running = True
 
-                if self.state.batch.running or self.state.is_locked() or ollama_is_locked():
-                    reason = "Batch" if self.state.batch.running else "Single-OCR" if self.state.is_locked() else f"Ollama belegt ({ollama_holder()})"
-                    logger.info(f"Watchdog: {reason} aktiv, ueberspringe diesen Zyklus")
+                if self.state.batch.running:
+                    logger.info("Processor: Batch aktiv, ueberspringe diesen Zyklus")
                 else:
-                    logger.info("Watchdog checking for new documents...")
-                    print(f"[OCR] Watchdog check at {datetime.now().isoformat()}")
+                    logger.info("Processor checking for new documents...")
+                    logger.info(f"Processor check at {datetime.now().isoformat()}")
 
                     should_run = True
                     try:
@@ -1342,12 +1494,12 @@ class OcrService:
                                 tags_id_none=exclude_ids
                             )
                             if pending_count == 0:
-                                logger.info("Watchdog: Keine neuen Dokumente – überspringe diesen Zyklus")
+                                logger.info("Processor: Keine neuen Dokumente – überspringe diesen Zyklus")
                                 should_run = False
                             else:
-                                logger.info(f"Watchdog: ~{pending_count} Dokument(e) ohne OCR gefunden, starte Batch...")
+                                logger.info(f"Processor: ~{pending_count} Dokument(e) ohne OCR gefunden, starte Batch...")
                     except Exception as check_err:
-                        logger.warning(f"Watchdog: Pre-Check fehlgeschlagen, starte Batch trotzdem: {check_err}")
+                        logger.warning(f"Processor: Pre-Check fehlgeschlagen, starte Batch trotzdem: {check_err}")
 
                     if should_run:
                         await self.batch_ocr(
@@ -1357,19 +1509,19 @@ class OcrService:
                             remove_runocr_tag=True
                         )
 
-                self.state.watchdog.last_run = datetime.now().isoformat()
+                self.state.processor.last_run = datetime.now().isoformat()
 
             except Exception as e:
-                logger.error(f"Watchdog error: {e}")
-                print(f"[OCR] Watchdog error: {e}")
+                logger.error(f"Processor error: {e}")
+                logger.info(f"Processor error: {e}")
 
-            self.state.watchdog.running = False
-            interval_min = self.state.watchdog.get("interval_minutes", 1)
+            self.state.processor.running = False
+            interval_min = self.state.processor.get("interval_minutes", 1)
             for _ in range(interval_min * 60):
-                if not self.state.watchdog.enabled:
+                if not self.state.processor.enabled:
                     break
                 await asyncio.sleep(1)
 
-        self.state.watchdog.running = False
-        logger.info("Watchdog stopped")
-        print("[OCR] Watchdog stopped")
+        self.state.processor.running = False
+        logger.info("Processor stopped")
+        logger.info("Processor stopped")

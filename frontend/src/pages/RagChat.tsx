@@ -7,6 +7,7 @@ import {
 import clsx from 'clsx'
 import * as ragApi from '../services/ragApi'
 import { getPaperlessSettings } from '../services/api'
+import ProviderModelSelector, { ProviderModelValue } from '../components/ProviderModelSelector'
 
 interface LocalMessage {
   role: 'user' | 'assistant'
@@ -464,22 +465,24 @@ export default function RagChat() {
             <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">
               <div>
                 <label className="block text-xs font-medium text-surface-400 mb-1">Embedding-Modell</label>
-                <input
-                  type="text"
-                  value={config.embedding_model}
-                  onChange={(e) => setConfig({ ...config, embedding_model: e.target.value })}
-                  onBlur={() => saveConfig({ embedding_model: config.embedding_model })}
-                  className="w-full px-2 py-1.5 bg-surface-700 border border-surface-600 rounded text-sm text-surface-100 focus:outline-none focus:border-primary-500"
+                <ProviderModelSelector
+                  value={{ provider: config.embedding_provider, model: config.embedding_model }}
+                  onChange={(v: ProviderModelValue) => {
+                    setConfig({ ...config, embedding_provider: v.provider, embedding_model: v.model })
+                    saveConfig({ embedding_provider: v.provider, embedding_model: v.model })
+                  }}
+                  configuredOnly={true}
                 />
               </div>
               <div>
                 <label className="block text-xs font-medium text-surface-400 mb-1">Chat-Modell</label>
-                <input
-                  type="text"
-                  value={config.chat_model}
-                  onChange={(e) => setConfig({ ...config, chat_model: e.target.value })}
-                  onBlur={() => saveConfig({ chat_model: config.chat_model })}
-                  className="w-full px-2 py-1.5 bg-surface-700 border border-surface-600 rounded text-sm text-surface-100 focus:outline-none focus:border-primary-500"
+                <ProviderModelSelector
+                  value={{ provider: config.chat_model_provider, model: config.chat_model }}
+                  onChange={(v: ProviderModelValue) => {
+                    setConfig({ ...config, chat_model_provider: v.provider, chat_model: v.model })
+                    saveConfig({ chat_model_provider: v.provider, chat_model: v.model })
+                  }}
+                  configuredOnly={true}
                 />
               </div>
               <div>

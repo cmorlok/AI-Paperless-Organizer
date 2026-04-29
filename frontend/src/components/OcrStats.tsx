@@ -207,7 +207,6 @@ export default function OcrStats() {
                                     <th className="px-6 py-4 font-medium text-center">Seiten</th>
                                     <th className="px-6 py-4 font-medium text-center">Zeichen</th>
                                     <th className="px-6 py-4 font-medium text-right">Dauer</th>
-                                    <th className="px-6 py-4 font-medium">Server</th>
                                 </tr>
                             </thead>
                             <tbody className="divide-y divide-surface-700/30">
@@ -235,9 +234,6 @@ export default function OcrStats() {
                                         </td>
                                         <td className="px-6 py-4 text-right font-mono text-primary-300">
                                             {stat.duration ? stat.duration.toFixed(1) : '-'}s
-                                        </td>
-                                        <td className="px-6 py-4 text-xs text-surface-500 truncate max-w-[150px] font-mono" title={stat.server}>
-                                            {stat.server ? stat.server.replace('http://', '').replace('https://', '') : '-'}
                                         </td>
                                     </tr>
                                 ))}

@@ -8,43 +8,39 @@ from app.services.ocr.state import (
     OcrState,
     OcrBatchProgress,
     OcrDocumentProgress,
-    OcrWatchdogProgress,
+    OcrProcessorProgress,
     PageProgress,
 )
 
 
 class TestOcrStateFields:
-    def test_ocr_state_has_batch_watchdog_page_progress_lock_holder(self):
+    def test_ocr_state_has_batch_processor_page_progress(self):
         state = OcrState()
         assert hasattr(state, "batch")
-        assert hasattr(state, "watchdog")
+        assert hasattr(state, "processor")
         assert hasattr(state, "page_progress")
-        assert hasattr(state, "lock_holder")
         assert isinstance(state.batch, OcrBatchProgress)
-        assert isinstance(state.watchdog, OcrWatchdogProgress)
+        assert isinstance(state.processor, OcrProcessorProgress)
         assert isinstance(state.page_progress, dict)
-        assert state.lock_holder is None
 
 
 class TestOcrStateReset:
-    def test_reset_clears_batch_and_watchdog_preserves_identity(self):
+    def test_reset_clears_batch_and_processor_preserves_identity(self):
         state = OcrState()
         state.batch.running = True
         state.batch.total = 10
         state.batch.processed = 5
-        state.watchdog.enabled = True
-        state.watchdog.running = True
+        state.processor.enabled = True
+        state.processor.running = True
         state.page_progress[1] = OcrDocumentProgress(total_pages=3, done=1)
-        state.lock_holder = "batch"
         original_id = id(state)
         state.reset()
         assert state.batch.running is False
         assert state.batch.total == 0
         assert state.batch.processed == 0
-        assert state.watchdog.enabled is False
-        assert state.watchdog.running is False
+        assert state.processor.enabled is False
+        assert state.processor.running is False
         assert len(state.page_progress) == 0
-        assert state.lock_holder is None
         assert id(state) == original_id
 
     def test_reset_clears_cancellation(self):
@@ -90,36 +86,11 @@ class TestModelDumpExclusion:
         dumped = state.model_dump()
         assert "_lock" not in dumped
 
-    def test_model_dump_excludes_watchdog_task(self):
+    def test_model_dump_excludes_processor_task(self):
         state = OcrState()
         dumped = state.model_dump()
-        watchdog_dumped = dumped.get("watchdog", {})
-        assert "task" not in watchdog_dumped
-
-
-class TestOcrStateLock:
-    def test_acquire_lock(self):
-        state = OcrState()
-        assert state.acquire_lock("batch") is True
-        assert state.is_locked()
-        assert state.current_lock_holder() == "batch"
-
-    def test_acquire_lock_fails_if_already_held(self):
-        state = OcrState()
-        state.acquire_lock("batch")
-        assert state.acquire_lock("single") is False
-        assert state.current_lock_holder() == "batch"
-
-    def test_release_lock(self):
-        state = OcrState()
-        state.acquire_lock("single")
-        state.release_lock()
-        assert not state.is_locked()
-        assert state.current_lock_holder() is None
-
-    def test_is_locked_false_initially(self):
-        state = OcrState()
-        assert not state.is_locked()
+        processor_dumped = dumped.get("processor", {})
+        assert "task" not in processor_dumped
 
 
 class TestOcrStateCancel:

@@ -34,7 +34,8 @@ interface Estimate {
   items_info?: string
   estimated_tokens: number
   token_limit?: number
-  model?: string
+  is_cloud?: boolean
+  is_external?: boolean
   recommended_batches: number
   warning?: string
 }
@@ -208,14 +209,13 @@ export default function CorrespondentManager() {
     try {
       const est = await api.estimateCorrespondents()
       // Check if external LLM
-      const isExternal = est.model ? !est.model.toLowerCase().includes('llama') && !est.model.toLowerCase().includes('mistral') && !est.model.toLowerCase().includes('local') : true
-      setConfirmEstimate({ ...est, is_external: isExternal } as any)
+      setConfirmEstimate({ ...est, is_external: est.is_cloud ?? true } as any)
     } catch (e) {
       setConfirmEstimate({
         items_info: `${correspondents.length} Korrespondenten`,
         estimated_tokens: correspondents.length * 20,
         token_limit: 128000,
-        model: 'Unbekannt',
+        is_cloud: true,
         recommended_batches: 1
       })
     } finally {
@@ -904,8 +904,8 @@ export default function CorrespondentManager() {
               <>
                 <div className="bg-surface-700/50 rounded-lg p-4 mb-4 space-y-3">
                   <div className="flex items-center justify-between">
-                    <span className="text-surface-400">Modell</span>
-                    <span className="text-primary-400 font-medium">{confirmEstimate.model || 'Unbekannt'}</span>
+                    <span className="text-surface-400">Provider</span>
+                    <span className="text-primary-400 font-medium">{confirmEstimate.is_external ? 'Cloud' : 'Lokal'}</span>
                   </div>
                   <div className="flex items-center justify-between">
                     <span className="text-surface-400">Daten</span>

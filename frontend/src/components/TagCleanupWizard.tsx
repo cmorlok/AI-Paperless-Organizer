@@ -142,7 +142,7 @@ export default function TagCleanupWizard() {
     items_info: string
     estimated_tokens: number
     token_limit: number
-    model: string
+    is_cloud: boolean
     is_external: boolean
     warning?: string
   } | null>(null)
@@ -491,15 +491,14 @@ export default function TagCleanupWizard() {
     try {
       const estimate = await api.estimateTags(info.type)
       // Check if external LLM (not Ollama)
-      const isExternal = estimate.model ? !estimate.model.toLowerCase().includes('llama') && !estimate.model.toLowerCase().includes('mistral') && !estimate.model.toLowerCase().includes('local') : true
-      setConfirmEstimate({ ...estimate, is_external: isExternal })
+      setConfirmEstimate({ ...estimate, is_external: estimate.is_cloud ?? true })
     } catch (e) {
       console.error('Error loading estimate:', e)
       setConfirmEstimate({
         items_info: `${tags.length} Tags`,
         estimated_tokens: tags.length * 20,
         token_limit: 128000,
-        model: 'Unbekannt',
+        is_cloud: true,
         is_external: true
       })
     } finally {
@@ -1874,8 +1873,8 @@ export default function TagCleanupWizard() {
                 {/* Token Info */}
                 <div className="bg-surface-700/50 rounded-lg p-4 mb-4 space-y-3">
                   <div className="flex items-center justify-between">
-                    <span className="text-surface-400">Modell</span>
-                    <span className="text-primary-400 font-medium">{confirmEstimate.model}</span>
+                    <span className="text-surface-400">Provider</span>
+                    <span className="text-primary-400 font-medium">{confirmEstimate.is_cloud ? 'Cloud' : 'Lokal'}</span>
                   </div>
                   <div className="flex items-center justify-between">
                     <span className="text-surface-400">Daten</span>

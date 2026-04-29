@@ -2,24 +2,18 @@
 
 from typing import Protocol, runtime_checkable, Any, List, Dict
 
-# Import PaperlessClient — cross-service, use package-level
 from app.services.paperless import PaperlessClient
+from .state import OcrCompareSlot, OcrCompareState
 
 
 @runtime_checkable
 class OcrService(Protocol):
     """Protocol for OCR service."""
 
-    @property
-    def model(self) -> str: ...
-
-    @property
-    def max_image_size(self) -> int: ...
-
     @staticmethod
     def get_model_params(model_name: str) -> dict: ...
 
-    async def watchdog_loop(self, paperless_client: PaperlessClient) -> None: ...
+    async def processor_loop(self, paperless_client: PaperlessClient) -> None: ...
 
     async def batch_ocr(
         self,
@@ -38,26 +32,23 @@ class OcrService(Protocol):
         db_session: Any = None,
     ) -> Dict[str, Any]: ...
 
+    async def run_compare_job(
+        self,
+        paperless_client: PaperlessClient,
+        document_id: int,
+        slots: list[OcrCompareSlot],
+        target_page: int,
+        compare_state: OcrCompareState,
+    ) -> None: ...
+
     async def test_connection(self) -> Dict[str, Any]: ...
 
     async def apply_ocr_result(
         self,
         paperless_client: PaperlessClient,
         document_id: int,
-        content: str,
+        new_content: str,
         set_finish_tag: bool = True,
-    ) -> None: ...
+    ) -> Dict[str, Any]: ...
 
     def get_stats(self) -> List[Dict[str, Any]]: ...
-
-    def get_current_url(self) -> str: ...
-
-    def _prepare_image_for_ollama(self, img: Any, max_size: int = None) -> bytes: ...
-
-    async def _ocr_single_image(
-        self,
-        image_bytes: bytes,
-        page_num: int = 0,
-        total_pages: int = 0,
-        timeout: float = 300.0,
-    ) -> str: ...

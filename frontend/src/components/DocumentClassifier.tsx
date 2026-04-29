@@ -8,6 +8,7 @@ import {
 } from 'lucide-react'
 import clsx from 'clsx'
 import * as api from '../services/api'
+import ProviderModelSelector from './ProviderModelSelector'
 
 type Tab = 'classify' | 'benchmark' | 'settings' | 'history' | 'review' | 'tag_ideas'
 
@@ -45,9 +46,6 @@ export default function DocumentClassifier() {
 
   // Settings tab state
   const [settingsSaving, setSettingsSaving] = useState(false)
-  const [ollamaModels, setOllamaModels] = useState<api.OllamaModelsResponse | null>(null)
-  const [ollamaLoading, setOllamaLoading] = useState(false)
-  const [, setOllamaTestResult] = useState<api.OllamaTestResponse | null>(null)
 
   // Collapsible sections
   const [expandedSections, setExpandedSections] = useState<Record<string, boolean>>({})
@@ -351,9 +349,6 @@ export default function DocumentClassifier() {
     if (activeTab === 'settings' && paperlessTags.length === 0) {
       loadPaperlessItems()
     }
-    if ((activeTab === 'settings' || activeTab === 'benchmark') && !ollamaModels) {
-      loadOllamaModels()
-    }
   }, [activeTab])
 
   const toggleExclusion = (type: 'excluded_tag_ids' | 'excluded_correspondent_ids' | 'excluded_document_type_ids', id: number) => {
@@ -397,21 +392,6 @@ export default function DocumentClassifier() {
     }
   }
 
-  const loadOllamaModels = async () => {
-    setOllamaLoading(true)
-    setOllamaTestResult(null)
-    try {
-      const models = await api.getClassifierOllamaModels()
-      setOllamaModels(models)
-    } catch (e) {
-      console.error('Failed to load Ollama models:', e)
-      setOllamaModels({ connected: false, ollama_host: '', installed: [], suggestions: [], top_recommendation: null })
-    } finally {
-      setOllamaLoading(false)
-    }
-  }
-
-
   const handleSaveConfig = async () => {
     if (!config) return
     setSettingsSaving(true)
@@ -424,12 +404,8 @@ export default function DocumentClassifier() {
     }
   }
 
-  const updateBenchSlot = (idx: number, field: 'provider' | 'model', value: string) => {
-    setBenchSlots(prev => prev.map((s, i) => {
-      if (i !== idx) return s
-      if (field === 'provider') return { provider: value, model: '' }
-      return { ...s, model: value }
-    }))
+  const updateBenchSlot = (idx: number, newValue: { provider: string; model: string }) => {
+    setBenchSlots(prev => prev.map((s, i) => i === idx ? newValue : s))
   }
 
   const addBenchSlot = () => {
@@ -1222,65 +1198,11 @@ export default function DocumentClassifier() {
                     style={{ background: `color-mix(in srgb, var(--color-${c}-500) 5%, transparent)`, borderColor: `color-mix(in srgb, var(--color-${c}-500) 20%, transparent)` }}
                   >
                     <span className="text-xs font-bold text-surface-400 w-5 shrink-0">{idx + 1}</span>
-                    <select
-                      value={slot.provider}
-                      onChange={(e) => updateBenchSlot(idx, 'provider', e.target.value)}
-                      className="input text-sm py-1.5 w-36 shrink-0"
-                    >
-                      <option value="openai">OpenAI</option>
-                      <option value="mistral">Mistral</option>
-                      <option value="openrouter">OpenRouter</option>
-                      <option value="anthropic">Anthropic</option>
-                      <option value="ollama">Ollama</option>
-                    </select>
-                    {slot.provider === 'openai' ? (
-                      <select value={slot.model} onChange={(e) => updateBenchSlot(idx, 'model', e.target.value)} className="input text-sm py-1.5 flex-1">
-                        <option value="">Standard</option>
-                        <option value="gpt-4o-mini">gpt-4o-mini</option>
-                        <option value="gpt-4o">gpt-4o</option>
-                      </select>
-                    ) : slot.provider === 'mistral' ? (
-                        <select value={slot.model} onChange={(e) => updateBenchSlot(idx, 'model', e.target.value)} className="input text-sm py-1.5 flex-1">
-                        <option value="">Standard</option>
-                        <option value="mistral-small-latest">mistral-small</option>
-                        <option value="mistral-medium-latest">mistral-medium</option>
-                        <option value="mistral-large-latest">mistral-large</option>
-                        <option value="open-mistral-nemo">open-mistral-nemo</option>
-                        <option value="ministral-8b-latest">ministral-8b</option>
-                        <option value="codestral-latest">codestral</option>
-                      </select>
-                    ) : slot.provider === 'openrouter' || slot.provider === 'anthropic' ? (
-                      <input
-                        type="text"
-                        value={slot.model}
-                        onChange={(e) => updateBenchSlot(idx, 'model', e.target.value)}
-                        className="input text-sm py-1.5 flex-1"
-                        placeholder="Modellname eingeben"
-                      />
-                    ) : (
-                      <select value={slot.model} onChange={(e) => updateBenchSlot(idx, 'model', e.target.value)} className="input text-sm py-1.5 flex-1">
-                        {ollamaLoading ? (
-                          <option value="">Lade Modelle...</option>
-                        ) : ollamaModels?.installed && ollamaModels.installed.length > 0 ? (
-                          <>
-                            <option value="">Standard</option>
-                            {ollamaModels.installed
-                              .sort((a: any, b: any) => {
-                                if (a.is_thinking && !b.is_thinking) return 1
-                                if (!a.is_thinking && b.is_thinking) return -1
-                                return a.name.localeCompare(b.name)
-                              })
-                              .map((m: any) => (
-                              <option key={m.name} value={m.name}>
-                                {m.is_thinking ? '\u26A0 ' : ''}{m.name} ({m.size_gb}GB)
-                              </option>
-                            ))}
-                          </>
-                        ) : (
-                          <option value="">Keine Modelle -- Ollama pruefen</option>
-                        )}
-                      </select>
-                    )}
+                    <ProviderModelSelector
+                      value={slot}
+                      onChange={(newValue) => updateBenchSlot(idx, newValue)}
+                      configuredOnly={true}
+                    />
                     {benchSlots.length > 2 && (
                       <button onClick={() => removeBenchSlot(idx)} className="p-1 text-surface-500 hover:text-red-400 transition-colors" title="Entfernen">
                         <Minus className="w-4 h-4" />
@@ -1327,11 +1249,6 @@ export default function DocumentClassifier() {
               <p className="text-xs text-amber-400 mt-2 flex items-center gap-1">
                 <Loader2 className="w-3 h-3 animate-spin" />
                 {benchSlots.length} Provider laufen nacheinander -- das kann je nach Anzahl etwas dauern.
-              </p>
-            )}
-            {!ollamaModels?.connected && (
-              <p className="text-xs text-surface-500 mt-2">
-                Tipp: Lade Ollama-Modelle unter Einstellungen, damit du sie hier auswaehlen kannst.
               </p>
             )}
           </div>

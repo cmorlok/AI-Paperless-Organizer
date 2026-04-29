@@ -1,124 +1,60 @@
-"""OCR Router - Endpoints for OCR via Ollama Vision models."""
+"""OCR Router - Endpoints for vision OCR."""
 
 import asyncio
 import json
 import logging
 import time
 import traceback
-from pathlib import Path
 from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
 from fastapi.responses import Response
 from pydantic import BaseModel
 from typing import Optional, List
-
-import httpx
 
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import get_db
 from dishka.integrations.fastapi import inject
 from dishka import FromDishka
 
-from app.services.paperless.protocol import PaperlessClient
-from app.services.ocr.protocol import OcrService
-from app.services.ocr.state import OcrState
-from app.services.ocr.service import (
-    load_review_queue,
-    save_review_queue,
-    DEFAULT_OLLAMA_URL,
+from app.services.paperless import PaperlessClient
+from app.models.settings_model import LLM_KEY_CLASSIFIER_PROVIDER
+from app.routers.settings import get_setting
+from app.services.ocr import (
+    OcrService,
+    OcrState,
+    OcrCompareState,
+    OcrCompareSlot,
     DEFAULT_OCR_MODEL,
     TAG_OCR_REVIEW,
     TAG_OCR_FINISH,
     TAG_OCR_ERROR,
-)
-from app.services.ocr.ignore import (
+    load_review_queue,
+    save_review_queue,
     load_ocr_ignore_list,
     save_ocr_ignore_list,
-)
-from app.services.ocr.error import (
     load_ocr_error_list,
     save_ocr_error_list,
     load_ocr_error_counts,
     save_ocr_error_counts,
 )
-from app.services.llm.protocol import LLMService as LLMProviderService
-from app.services.ocr.state import OcrCompareState
+from app.services.llm import LLMService
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-# Persistent OCR settings file
-SETTINGS_FILE = Path("/app/data/ocr_settings.json")
-
 
 def load_ocr_settings() -> dict:
-    """Load OCR settings from file + key-value store (LLM-08), or return defaults."""
-    defaults = {
-        "ollama_url": DEFAULT_OLLAMA_URL, 
-        "ollama_urls": [DEFAULT_OLLAMA_URL],
+    """Load OCR settings defaults."""
+    return {
         "model": DEFAULT_OCR_MODEL,
         "max_image_size": 1344,
         "smart_skip_enabled": True
     }
-    
-    # Load from file
-    file_settings = {}
-    if SETTINGS_FILE.exists():
-        try:
-            with open(SETTINGS_FILE, "r") as f:
-                file_settings = json.load(f)
-                if "ollama_urls" not in file_settings:
-                    file_settings["ollama_urls"] = [file_settings.get("ollama_url", DEFAULT_OLLAMA_URL)]
-        except Exception:
-            pass
-    
-    # Merge: file settings as base
-    # Note: KV store overrides are loaded lazily at runtime (LLM-08)
-    # to avoid asyncio issues during module load
-    return {**defaults, **file_settings}
-
-
-def reload_ocr_settings_with_kv(db) -> dict:
-    """Reload settings with KV store overrides. Call from async context."""
-    import asyncio
-    from app.routers.settings import get_setting
-    from app.models.settings_model import LLM_KEY_OCR_MODEL, LLM_KEY_OCR_PROVIDER
-    
-    settings = load_ocr_settings()
-    
-    async def _load_kv():
-        model = await get_setting(LLM_KEY_OCR_MODEL, db)
-        provider = await get_setting(LLM_KEY_OCR_PROVIDER, db)
-        return model, provider
-    
-    model, provider = asyncio.get_running_loop().run_until_complete(_load_kv())
-    
-    if model:
-        settings["model"] = model
-    if provider:
-        settings["ollama_url"] = provider
-        if "ollama_urls" not in settings:
-            settings["ollama_urls"] = [provider]
-    
-    return settings
-
-
-def save_ocr_settings_to_file(settings: dict):
-    """Save OCR settings to file."""
-    SETTINGS_FILE.parent.mkdir(parents=True, exist_ok=True)
-    with open(SETTINGS_FILE, "w") as f:
-        json.dump(settings, f)
-
-
-# Load on startup
-ocr_settings = load_ocr_settings()
 
 
 # --- Pydantic Models ---
 
 class OcrSettingsRequest(BaseModel):
-    ollama_url: str = DEFAULT_OLLAMA_URL
-    ollama_urls: Optional[List[str]] = None
     model: str = DEFAULT_OCR_MODEL
     max_image_size: int = 1344
     smart_skip_enabled: bool = True
@@ -138,7 +74,7 @@ class BatchOcrRequest(BaseModel):
 
 class OcrCompareRequest(BaseModel):
     document_id: int
-    models: List[str]
+    slots: List[OcrCompareSlot]
     page: int = 1  # Which page to compare (1-based, 0 = all pages)
 
 
@@ -156,104 +92,87 @@ class OcrEvaluateRequest(BaseModel):
 @inject
 async def get_ocr_settings(state: FromDishka[OcrState] = None):
     """Get current OCR settings."""
-    settings = ocr_settings.copy()
-    settings["watchdog_enabled"] = state.watchdog.enabled
-    settings["watchdog_interval"] = state.watchdog.interval_minutes
+    settings = load_ocr_settings()
+    settings["processor_enabled"] = state.processor.enabled
+    settings["processor_interval"] = state.processor.interval_minutes
     return settings
 
 
 @router.post("/settings")
 @inject
-async def save_ocr_settings_endpoint(request: OcrSettingsRequest, client: FromDishka[PaperlessClient] = None):
-    """Save OCR settings."""
-    ocr_settings["ollama_url"] = request.ollama_url
-    if request.ollama_urls:
-         ocr_settings["ollama_urls"] = request.ollama_urls
-    else:
-         ocr_settings["ollama_urls"] = [request.ollama_url]
-         
-    ocr_settings["model"] = request.model
-    ocr_settings["max_image_size"] = request.max_image_size
-    ocr_settings["smart_skip_enabled"] = request.smart_skip_enabled
-    
-    # Handle watchdog settings if present (need to update Pydantic model first)
-    # For now, we assume they might be in request if we update model
-    
-    save_ocr_settings_to_file(ocr_settings)
-    return {"success": True, **ocr_settings}
+async def save_ocr_settings_endpoint(request: OcrSettingsRequest, db: AsyncSession = Depends(get_db), client: FromDishka[PaperlessClient] = None):
+    """Save OCR settings to KV store."""
+    from app.routers.settings import set_setting
+    from app.models.settings_model import LLM_KEY_OCR_MODEL
 
-# --- Watchdog Endpoints ---
+    await set_setting("ocr_model", request.model, "str", db)
+    await set_setting("max_image_size", str(request.max_image_size), "int", db)
+    await set_setting("smart_skip_enabled", str(request.smart_skip_enabled).lower(), "bool", db)
+    await db.commit()
 
-# Persist enabled flag to AppSettings KV store (STATE-08)
+    return {"success": True, "model": request.model, "max_image_size": request.max_image_size, "smart_skip_enabled": request.smart_skip_enabled}
 
-async def _persist_ocr_watchdog_enabled(enabled: bool, db: AsyncSession) -> None:
-    """Persist ocr_watchdog_enabled flag to AppSettings."""
+# --- Processor Endpoints ---
+
+# Persist enabled flag to AppSettings KV store
+
+async def _persist_ocr_processor_enabled(enabled: bool, db: AsyncSession) -> None:
+    """Persist ocr_processor_enabled flag to AppSettings."""
     from app.routers.settings import set_setting
     await set_setting(
-        "ocr_watchdog_enabled",
+        "ocr_processor_enabled",
         "true" if enabled else "false",
         "bool",
         db
     )
 
 
-class WatchdogSettingsRequest(BaseModel):
+class ProcessorSettingsRequest(BaseModel):
     enabled: bool
     interval_minutes: int = 5
 
-@router.get("/watchdog/status")
+@router.get("/processor/status")
 @inject
-async def get_watchdog_status(state: FromDishka[OcrState] = None):
-    """Get watchdog status."""
+async def get_processor_status(state: FromDishka[OcrState] = None):
+    """Get processor status."""
     return {
-        "enabled": state.watchdog.enabled,
-        "running": state.watchdog.running,
-        "interval_minutes": state.watchdog.interval_minutes,
-        "last_run": state.watchdog.last_run
+        "enabled": state.processor.enabled,
+        "running": state.processor.running,
+        "interval_minutes": state.processor.interval_minutes,
+        "last_run": state.processor.last_run
     }
 
-@router.post("/watchdog/settings")
+@router.post("/processor/settings")
 @inject
-async def set_watchdog_settings(
-    request: WatchdogSettingsRequest,
+async def set_processor_settings(
+    request: ProcessorSettingsRequest,
     background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
     client: FromDishka[PaperlessClient] = None,
     service: FromDishka[OcrService] = None,
     state: FromDishka[OcrState] = None,
 ):
-    """Enable/Disable watchdog and set interval."""
-    state.watchdog.interval_minutes = max(1, request.interval_minutes)
-    
-    # Update persistence to file (backward compatibility)
-    ocr_settings["watchdog_enabled"] = request.enabled
-    ocr_settings["watchdog_interval"] = request.interval_minutes
-    save_ocr_settings_to_file(ocr_settings)
-    
-    # Persist to AppSettings KV store (STATE-08)
+    """Enable/Disable processor and set interval."""
+    state.processor.interval_minutes = max(1, request.interval_minutes)
+
+    # Persist to AppSettings KV store
     try:
-        await _persist_ocr_watchdog_enabled(request.enabled, db)
+        await _persist_ocr_processor_enabled(request.enabled, db)
     except Exception as e:
-        logger.warning(f"Could not persist ocr_watchdog_enabled to KV: {e}")
-    
-    if request.enabled and not state.watchdog.enabled:
-        # Start watchdog
-        state.watchdog.enabled = True
-        # We need to run this as a long-running background task
-        # background_tasks is for one-off. For permanent loop, we need asyncio.create_task?
-        # But we don't have the loop handy easily here? 
-        # Actually background_tasks.add_task works for long running too, but better manage it.
-        
-        # We attach it to the event loop
+        logger.warning(f"Could not persist ocr_processor_enabled to KV: {e}")
+
+    if request.enabled and not state.processor.enabled:
+        # Start processor
+        state.processor.enabled = True
         loop = asyncio.get_running_loop()
-        state.watchdog.task = loop.create_task(service.watchdog_loop(client))
-        
-    elif not request.enabled and state.watchdog.enabled:
-        # Stop watchdog
-        state.watchdog.enabled = False
+        state.processor.task = loop.create_task(service.processor_loop(client))
+
+    elif not request.enabled and state.processor.enabled:
+        # Stop processor
+        state.processor.enabled = False
         # Task will exit on next loop
-        
-    return get_watchdog_status()
+
+    return get_processor_status()
 
 
 # --- Batch Control Endpoints ---
@@ -302,12 +221,8 @@ async def ensure_ocr_tags(
 @router.post("/test-connection")
 @inject
 async def test_ocr_connection(service: FromDishka[OcrService] = None):
-    """Test connection to Ollama."""
-    result = await service.test_connection()
-    # Add model name to result for UI feedback
-    result["model"] = service.model
-    result["url"] = service.get_current_url()
-    return result
+    """Test connection to OCR provider."""
+    return await service.test_connection()
 
 
 @router.get("/stats")
@@ -462,7 +377,7 @@ async def start_batch_ocr(
 @inject
 async def get_batch_status(
     state: FromDishka[OcrState] = None,
-    llm_service: FromDishka[LLMProviderService] = None,
+    llm_service: FromDishka[LLMService] = None,
 ):
     """Get current batch OCR job status, including page-level progress for current document."""
     current_doc = state.batch.current_document
@@ -811,265 +726,6 @@ async def get_document_thumbnail(
         raise HTTPException(status_code=404, detail="Thumbnail not found")
 
 
-# --- OCR Model Comparison ---
-
-@router.get("/models")
-async def get_ollama_models():
-    """Get all available models from all configured Ollama servers."""
-    urls = ocr_settings.get("ollama_urls", [ocr_settings.get("ollama_url", DEFAULT_OLLAMA_URL)])
-    all_models = set()
-    
-    for url in urls:
-        url = url.rstrip("/")
-        try:
-            async with httpx.AsyncClient(timeout=10.0) as client:
-                response = await client.get(f"{url}/api/tags")
-                if response.status_code == 200:
-                    models = response.json().get("models", [])
-                    for m in models:
-                        name = m.get("name", "")
-                        if name:
-                            all_models.add(name)
-        except Exception as e:
-            logger.warning(f"Could not fetch models from {url}: {e}")
-    
-    sorted_models = sorted(all_models)
-    current_model = ocr_settings.get("model", DEFAULT_OCR_MODEL)
-    
-    return {
-        "models": sorted_models,
-        "current_model": current_model
-    }
-
-
-async def _unload_model_from_vram(model: str):
-    """Send keep_alive=0 to Ollama to immediately unload model from VRAM."""
-    urls = ocr_settings.get("ollama_urls", [ocr_settings.get("ollama_url", DEFAULT_OLLAMA_URL)])
-    for url in urls:
-        url = url.rstrip("/")
-        try:
-            async with httpx.AsyncClient(timeout=10.0) as client:
-                await client.post(
-                    f"{url}/api/chat",
-                    json={"model": model, "messages": [], "keep_alive": 0}
-                )
-                print(f"[Compare] Unloaded {model} from VRAM")
-                return
-        except Exception:
-            pass
-
-
-async def _wait_for_ollama_ready(max_wait: int = 60) -> bool:
-    """Wait until at least one Ollama server responds. Returns True if ready."""
-    urls = ocr_settings.get("ollama_urls", [ocr_settings.get("ollama_url", DEFAULT_OLLAMA_URL)])
-    waited = 0
-    interval = 3
-    
-    while waited < max_wait:
-        for url in urls:
-            url = url.rstrip("/")
-            try:
-                async with httpx.AsyncClient(timeout=5.0) as client:
-                    resp = await client.get(f"{url}/api/tags")
-                    if resp.status_code == 200:
-                        if waited > 0:
-                            print(f"[Compare] Ollama wieder erreichbar nach {waited}s Wartezeit ({url})")
-                        return True
-            except Exception:
-                pass
-        
-        print(f"[Compare] Ollama nicht erreichbar, warte {interval}s... ({waited}/{max_wait}s)")
-        await asyncio.sleep(interval)
-        waited += interval
-    
-    print(f"[Compare] Ollama nach {max_wait}s immer noch nicht erreichbar!")
-    return False
-
-
-async def _run_compare_job(ocr_service: OcrService, paperless_client, document_id: int, models: list, target_page: int, compare_state: OcrCompareState):
-    """Background task that runs the actual model comparison."""
-    import io
-    from PIL import Image
-    from pdf2image import convert_from_bytes
-
-    job_start = time.time()
-    compare_state.job_start = job_start
-
-    # Save original service settings to restore after job
-    original_model = ocr_service.model
-    original_max_image_size = ocr_service.max_image_size
-
-    try:
-        # Phase: Download
-        compare_state.phase = "download"
-        doc = await paperless_client.get_document(document_id)
-        if not doc:
-            raise ValueError(f"Dokument {document_id} nicht gefunden")
-
-        compare_state.title = doc.get("title", f"Dokument {document_id}")
-        compare_state.old_content = doc.get("content", "") or ""
-
-        file_bytes = await paperless_client.download_document_file(document_id)
-        print(f"[Compare] Downloaded doc {document_id}: {len(file_bytes)} bytes")
-
-        # Phase: Initial convert (for page count detection)
-        compare_state.phase = "convert"
-        is_pdf = True
-        try:
-            loop = asyncio.get_running_loop()
-            preview_images = await loop.run_in_executor(
-                None, lambda: convert_from_bytes(file_bytes, dpi=150)
-            )
-            total_pages = len(preview_images)
-            print(f"[Compare] Document has {total_pages} pages")
-        except Exception:
-            is_pdf = False
-            img = Image.open(io.BytesIO(file_bytes))
-            preview_images = [img]
-            total_pages = 1
-
-        if total_pages == 0:
-            raise ValueError("Keine Seiten extrahiert")
-
-        compare_state.total_pages = total_pages
-
-        # Select page indices
-        if target_page > 0 and target_page <= total_pages:
-            page_indices = [target_page - 1]
-            compare_state.compared_page = target_page
-        else:
-            page_indices = list(range(total_pages))
-            compare_state.compared_page = 0
-
-        # Cache for DPI-specific image conversions (avoid re-rendering same DPI)
-        dpi_image_cache = {}
-
-        # Run each model with model-specific image preparation
-        for model_idx, model_name in enumerate(models):
-            compare_state.current_model = model_name
-            compare_state.current_model_index = model_idx
-            compare_state.current_page = 0
-            compare_state.elapsed_seconds = round(time.time() - job_start, 1)
-
-            # Health check: wait for Ollama to be ready before starting each model
-            compare_state.phase = "health_check"
-            print(f"[Compare] Checking Ollama health before model: {model_name}")
-            ollama_ok = await _wait_for_ollama_ready(max_wait=60)
-            if not ollama_ok:
-                error_msg = f"Ollama nicht erreichbar - überspringe {model_name}"
-                print(f"[Compare] {model_name} SKIPPED: Ollama not reachable")
-                compare_state.results.append({
-                    "model": model_name,
-                    "text": "",
-                    "chars": 0,
-                    "duration_seconds": 0,
-                    "pages_processed": 0,
-                    "error": error_msg
-                })
-                continue
-
-            # Get model-specific optimal parameters
-            model_params = OcrService.get_model_params(model_name)
-            optimal_image_size = model_params["max_image_size"]
-            render_dpi = model_params.get("render_dpi", 200)
-
-            compare_state.phase = "model_loading"
-            print(f"[Compare] Testing model: {model_name} (image: {optimal_image_size}px, DPI: {render_dpi}, ctx: {model_params['num_ctx']}, repeat_pen: {model_params['repeat_penalty']})")
-
-            # Temporarily configure service for this model
-            ocr_service.model = model_name
-            ocr_service.max_image_size = optimal_image_size
-
-            # Convert PDF at the right DPI for this model (cached)
-            if is_pdf and render_dpi not in dpi_image_cache:
-                compare_state.phase = "convert"
-                print(f"[Compare] Rendering PDF at {render_dpi} DPI for {model_name}")
-                dpi_images = await asyncio.get_running_loop().run_in_executor(
-                    None, lambda dpi=render_dpi: convert_from_bytes(file_bytes, dpi=dpi)
-                )
-                dpi_image_cache[render_dpi] = dpi_images
-
-            source_images = dpi_image_cache.get(render_dpi, preview_images) if is_pdf else preview_images
-            pages_to_process = [(idx, source_images[idx]) for idx in page_indices]
-
-            # Prepare images at the optimal resolution for THIS model
-            prepared_pages = []
-            for idx, img in pages_to_process:
-                src_w, src_h = img.size
-                prepared_bytes = ocr_service._prepare_image_for_ollama(img, max_size=optimal_image_size)
-                # Debug: log exact image info
-                from PIL import Image as PilImage
-                debug_img = PilImage.open(io.BytesIO(prepared_bytes))
-                prep_w, prep_h = debug_img.size
-                print(f"[Compare][DEBUG] {model_name} page {idx+1}: source={src_w}x{src_h}, prepared={prep_w}x{prep_h}, bytes={len(prepared_bytes)}, format={debug_img.format}")
-                prepared_pages.append((idx, prepared_bytes))
-
-            model_start = time.time()
-            page_texts = []
-            error_msg = None
-
-            try:
-                for page_idx, prepared_bytes in prepared_pages:
-                    compare_state.phase = "ocr_page"
-                    compare_state.current_page = page_idx + 1
-                    compare_state.elapsed_seconds = round(time.time() - job_start, 1)
-
-                    page_text = await ocr_service._ocr_single_image(
-                        prepared_bytes,
-                        page_num=page_idx + 1,
-                        total_pages=total_pages,
-                        timeout=300.0
-                    )
-                    # Debug: log first 200 chars of OCR result
-                    preview = page_text[:200].replace('\n', ' ') if page_text else "(empty)"
-                    print(f"[Compare][DEBUG] {model_name} page {page_idx+1} result: {len(page_text)} chars, preview: {preview}")
-                    page_texts.append(page_text)
-            except Exception as e:
-                error_msg = str(e)
-                error_type = type(e).__name__
-                logger.error(f"[Compare] Model {model_name} failed ({error_type}): {e}")
-                print(f"[Compare] {model_name} FAILED ({error_type}): {e}")
-
-            model_duration = time.time() - model_start
-            full_text = "\n\n".join(page_texts) if page_texts else ""
-
-            compare_state.results.append({
-                "model": model_name,
-                "text": full_text,
-                "chars": len(full_text),
-                "duration_seconds": round(model_duration, 2),
-                "pages_processed": len(page_texts),
-                "error": error_msg
-            })
-
-            print(f"[Compare] {model_name}: {len(full_text)} chars in {model_duration:.1f}s")
-
-            # Unload model from VRAM before loading the next
-            compare_state.phase = "unloading"
-            compare_state.elapsed_seconds = round(time.time() - job_start, 1)
-            await _unload_model_from_vram(model_name)
-
-            # If model had an error, wait for Ollama to recover before next model
-            if error_msg:
-                print("[Compare] Modell hatte Fehler, warte 5s auf Ollama-Recovery...")
-                await asyncio.sleep(5)
-
-        compare_state.phase = "done"
-        compare_state.elapsed_seconds = round(time.time() - job_start, 1)
-        print(f"[Compare] All {len(models)} models done in {compare_state.elapsed_seconds}s")
-
-    except Exception as e:
-        compare_state.phase = "error"
-        compare_state.error = str(e)
-        compare_state.elapsed_seconds = round(time.time() - job_start, 1)
-        logger.error(f"[Compare] Job failed: {e}")
-    finally:
-        compare_state.running = False
-        # Restore original service settings
-        ocr_service.model = original_model
-        ocr_service.max_image_size = original_max_image_size
-
-
 @router.post("/compare")
 @inject
 async def start_compare(
@@ -1082,22 +738,22 @@ async def start_compare(
     if compare_state.running:
         raise HTTPException(status_code=409, detail="Ein Vergleich läuft bereits")
 
-    models = request.models
-    if not models or len(models) == 0:
+    slots = request.slots
+    if not slots or len(slots) == 0:
         raise HTTPException(status_code=400, detail="Mindestens ein Modell auswählen")
-    if len(models) > 5:
+    if len(slots) > 5:
         raise HTTPException(status_code=400, detail="Maximal 5 Modelle gleichzeitig")
 
     compare_state.reset()
     compare_state.running = True
     compare_state.document_id = request.document_id
-    compare_state.models = models
-    compare_state.total_models = len(models)
+    compare_state.models = [s.model for s in slots]
+    compare_state.total_models = len(slots)
     compare_state.phase = "starting"
 
-    asyncio.create_task(_run_compare_job(service, client, request.document_id, models, request.page, compare_state))
+    asyncio.create_task(service.run_compare_job(client, request.document_id, slots, request.page, compare_state))
 
-    return {"started": True, "models": len(models)}
+    return {"started": True, "models": len(slots)}
 
 
 @router.get("/compare/status")
@@ -1129,23 +785,25 @@ async def get_compare_status(
 @inject
 async def evaluate_ocr_results(
     request: OcrEvaluateRequest,
-    llm_service: FromDishka[LLMProviderService] = None
+    llm_service: FromDishka[LLMService] = None,
+    db: AsyncSession = Depends(get_db),
 ):
     """Send OCR comparison results to an external LLM for quality evaluation.
-    
+
     WARNING: This sends document text to a cloud API (OpenAI, Anthropic, etc.)!
     Uses a thorough multi-criteria evaluation inspired by professional OCR benchmarks.
     """
-    if not llm_service.provider:
+    eval_provider = await get_setting(LLM_KEY_CLASSIFIER_PROVIDER, db)
+    if not eval_provider:
         raise HTTPException(
-            status_code=400, 
+            status_code=400,
             detail="Kein LLM-Provider konfiguriert. Bitte zuerst unter Einstellungen einen Provider (z.B. OpenAI) einrichten."
         )
-    
+
     results = request.results
     if not results or len(results) < 1:
         raise HTTPException(status_code=400, detail="Keine OCR-Ergebnisse zum Auswerten")
-    
+
     eval_model = request.evaluation_model or None
     
     # Build the evaluation prompt with full texts
@@ -1252,12 +910,14 @@ WICHTIG:
 
     try:
         used_model = eval_model or "gpt-4o"
-        print(f"[Evaluate] Sending {len(results)} OCR results to {llm_service.provider.name} / {used_model}")
-        
-        raw_response = await llm_service.complete(prompt, model_override=eval_model)
-        
-        # Parse JSON from response (handle markdown code blocks)
-        cleaned = raw_response.strip()
+        print(f"[Evaluate] Sending {len(results)} OCR results to {eval_provider} / {used_model}")
+
+        result = await llm_service.complete(
+            provider=eval_provider,
+            model=eval_model,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        cleaned = (result.content or "").strip()
         if cleaned.startswith("```"):
             lines = cleaned.split("\n")
             lines = [line for line in lines if not line.strip().startswith("```")]
@@ -1279,12 +939,12 @@ WICHTIG:
                     "parse_error": "LLM-Antwort konnte nicht als JSON geparst werden"
                 }
         
-        print(f"[Evaluate] Successfully evaluated with {llm_service.provider.name} / {used_model}")
-        
+        print(f"[Evaluate] Successfully evaluated with {eval_provider} / {used_model}")
+
         return {
             "success": True,
             "evaluation": evaluation,
-            "provider": llm_service.provider.name,
+            "provider": eval_provider,
             "model": used_model
         }
         

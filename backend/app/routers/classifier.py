@@ -1,7 +1,6 @@
 """API Router for the KI-Klassifizierer feature."""
 
 import asyncio
-import httpx
 import logging
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
@@ -15,15 +14,15 @@ from dishka import FromDishka
 from app.container import container as di_container
 
 from app.database import get_db
-from app.services.paperless.protocol import PaperlessClient
-from app.services.classifier.protocol import DocumentClassifierService
+from app.services.paperless import PaperlessClient
+from app.services.classifier import DocumentClassifierService
 from app.services.classifier import AutoClassifyState, auto_classify_loop
 from app.models.classifier import (
     ClassificationHistory,
 )
 from app.models.settings_model import LLM_KEY_CLASSIFIER_MODEL
 from app.routers.settings import get_setting
-from app.services.llm.protocol import LLMService as LLMProviderService
+from app.services.llm import LLMService
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -117,7 +116,7 @@ async def get_config(
     from app.models import AppSettings as _AppSettings
     app_s = await db.execute(select(_AppSettings).where(_AppSettings.id == 1))
     app_settings = app_s.scalar_one_or_none()
-    active_provider = (getattr(app_settings, "classifier_provider", None) or "ollama") if app_settings else "ollama"
+    active_provider = getattr(app_settings, "classifier_provider", None) or ""
 
     # Read model from AppSettings key-value store (LLM-09)
     active_model = await get_setting(LLM_KEY_CLASSIFIER_MODEL, db) or ""
@@ -179,7 +178,7 @@ async def update_config(
 @router.get("/prompt-defaults")
 async def get_prompt_defaults():
     """Return the default per-field prompt rules for display in the UI."""
-    from app.services.classifier.prompts import FIELD_DEFAULTS
+    from app.services.classifier import FIELD_DEFAULTS
     return FIELD_DEFAULTS
 
 
@@ -418,11 +417,11 @@ async def get_document_types_from_paperless(
     return types
 
 
-# --- Ollama ---
+# --- Local Models ---
 
 THINKING_MODEL_PREFIXES = ("qwen3", "deepseek-r1", "qwq")
 
-OLLAMA_RECOMMENDED_MODELS = {
+LOCAL_RECOMMENDED_MODELS = {
     "qwen2.5:3b": {
         "text": "★ TOP-EMPFEHLUNG -- Schnell (~5-10s), praezises JSON, ideal fuer Klassifizierung",
         "category": "standard",
@@ -502,149 +501,6 @@ OLLAMA_RECOMMENDED_MODELS = {
         "quality": "gut",
     },
 }
-
-
-@router.get("/ollama/models")
-async def get_ollama_models(
-    db: AsyncSession = Depends(get_db),
-):
-    """List installed Ollama models with recommendations and thinking-model warnings."""
-    from app.models import LLMProvider as _LLP
-    llp_res = await db.execute(select(_LLP).where(_LLP.name == "ollama"))
-    ollama_prov = llp_res.scalar_one_or_none()
-    ollama_host = ((ollama_prov.api_base_url if ollama_prov else None) or "http://localhost:11434").rstrip("/")
-
-    installed = []
-    connected = False
-
-    try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.get(f"{ollama_host}/api/tags")
-            resp.raise_for_status()
-            data = resp.json()
-            connected = True
-
-            for model in data.get("models", []):
-                name = model.get("name", "")
-                size_bytes = model.get("size", 0)
-                size_gb = round(size_bytes / (1024 ** 3), 1) if size_bytes else 0
-                param_size = model.get("details", {}).get("parameter_size", "")
-                family = model.get("details", {}).get("family", "")
-
-                is_thinking = any(name.startswith(p) for p in THINKING_MODEL_PREFIXES)
-
-                rec_info = None
-                for rec_name, rec_data in OLLAMA_RECOMMENDED_MODELS.items():
-                    if name.startswith(rec_name.split(":")[0]) and (
-                        ":" not in rec_name or name == rec_name or name.startswith(rec_name)
-                    ):
-                        rec_info = rec_data
-                        break
-
-                installed.append({
-                    "name": name,
-                    "size_gb": size_gb,
-                    "parameter_size": param_size,
-                    "family": family,
-                    "is_thinking": is_thinking,
-                    "recommendation": rec_info.get("text") if rec_info else None,
-                    "category": rec_info.get("category", "thinking" if is_thinking else "standard") if rec_info else ("thinking" if is_thinking else "standard"),
-                    "speed": rec_info.get("speed") if rec_info else None,
-                    "quality": rec_info.get("quality") if rec_info else None,
-                })
-
-    except Exception as e:
-        logger.warning(f"Could not connect to Ollama at {ollama_host}: {e}")
-
-    suggestions = []
-    installed_names = {m["name"] for m in installed}
-    for rec_name, rec_data in OLLAMA_RECOMMENDED_MODELS.items():
-        if rec_data.get("category") == "thinking":
-            continue
-        if not any(rec_name.split(":")[0] in n for n in installed_names):
-            suggestions.append({
-                "name": rec_name,
-                "recommendation": rec_data["text"],
-                "category": rec_data["category"],
-                "speed": rec_data.get("speed"),
-                "quality": rec_data.get("quality"),
-                "install_command": f"ollama pull {rec_name}",
-            })
-
-    return {
-        "connected": connected,
-        "ollama_host": ollama_host,
-        "installed": installed,
-        "suggestions": suggestions[:5],
-        "top_recommendation": "qwen2.5:3b" if "qwen2.5:3b" not in installed_names else "qwen2.5:7b",
-    }
-
-
-@router.post("/ollama/test")
-async def test_ollama_connection(
-    model: Optional[str] = None,
-    host: Optional[str] = None,
-    db: AsyncSession = Depends(get_db),
-):
-    """Test Ollama connection and selected model. Reads config from central LLM table."""
-    from app.models import LLMProvider as _LLP
-    llp_res = await db.execute(select(_LLP).where(_LLP.name == "ollama"))
-    ollama_prov = llp_res.scalar_one_or_none()
-    ollama_host = (host or (ollama_prov.api_base_url if ollama_prov else None) or "http://localhost:11434").rstrip("/")
-    model = model or await get_setting(LLM_KEY_CLASSIFIER_MODEL, db) or "qwen3:4b"
-
-    try:
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            # Test connection
-            resp = await client.get(f"{ollama_host}/api/tags")
-            resp.raise_for_status()
-            data = resp.json()
-
-            model_names = [m.get("name", "") for m in data.get("models", [])]
-            model_found = any(model in n or n.startswith(model) for n in model_names)
-
-            if not model_found:
-                return {
-                    "connected": True,
-                    "model_available": False,
-                    "model": model,
-                    "installed_models": model_names,
-                    "message": f"Modell '{model}' nicht installiert. Verfuegbar: {', '.join(model_names[:10])}",
-                    "install_hint": f"ollama pull {model}",
-                }
-
-            # Quick test generation
-            resp = await client.post(
-                f"{ollama_host}/api/generate",
-                json={"model": model, "prompt": "Antworte mit OK", "stream": False},
-                timeout=30.0,
-            )
-            resp.raise_for_status()
-
-            return {
-                "connected": True,
-                "model_available": True,
-                "model": model,
-                "message": f"Ollama verbunden, Modell '{model}' funktioniert.",
-            }
-
-    except httpx.ConnectError:
-        return {
-            "connected": False,
-            "model_available": False,
-            "model": model,
-            "message": f"Keine Verbindung zu Ollama unter {ollama_host}. Laeuft Ollama?",
-        }
-    except Exception as e:
-        return {
-            "connected": False,
-            "model_available": False,
-            "model": model,
-            "message": f"Fehler: {str(e)}",
-        }
-
-
-
 
 
 # --- Storage Path Profiles ---
@@ -1042,7 +898,7 @@ async def stop_auto_classify(
 @inject
 async def get_auto_classify_status(
     state: FromDishka[AutoClassifyState] = None,
-    llm_service: FromDishka[LLMProviderService] = None,
+    llm_service: FromDishka[LLMService] = None,
 ):
     """Get current status of the auto-classification job."""
     lock_status = llm_service.get_lock_status() if llm_service else {}

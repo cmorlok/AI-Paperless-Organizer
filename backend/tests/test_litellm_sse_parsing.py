@@ -199,7 +199,7 @@ class TestRAGServiceIntegration:
         """Verify RAGService imports without errors."""
         from unittest.mock import AsyncMock
         from app.services.rag.service import RAGService
-        service = RAGService(session_factory=None, paperless_client=AsyncMock())
+        service = RAGService(session_factory=None, paperless_client=AsyncMock(), llm_service=AsyncMock())
         assert hasattr(service, "_stream_llm")
         assert hasattr(service, "_rewrite_query_llm")
 

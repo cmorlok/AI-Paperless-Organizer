@@ -70,8 +70,8 @@ class AppProvider(Provider):
         return PaperlessClientImpl(session_factory=session_factory)
 
     @provide(scope=Scope.APP)
-    def llm_service(self, session_factory: async_sessionmaker) -> LLMService:
-        return LitellmService(session_factory=session_factory)
+    def llm_service(self) -> LLMService:
+        return LitellmService()
 
     @provide(scope=Scope.APP)
     def similarity_service(
@@ -108,11 +108,13 @@ class AppProvider(Provider):
     def ocr_service(
         self,
         state: OcrState,
+        llm_service: LLMService,
+        session_factory: async_sessionmaker,
     ) -> OcrService:
         return OcrServiceImpl(
-            ollama_url="http://localhost:11434",
-            model="qwen2.5vl:7b",
             state=state,
+            llm_service=llm_service,
+            session_factory=session_factory,
         )
 
     @provide(scope=Scope.APP)
@@ -134,11 +136,13 @@ class AppProvider(Provider):
         paperless_client: PaperlessClient,
         session_factory: async_sessionmaker,
         state: AutoClassifyState,
+        llm_service: LLMService,
     ) -> DocumentClassifierService:
         return DocumentClassifierServiceImpl(
             paperless=paperless_client,
             session_factory=session_factory,
             state=state,
+            llm_service=llm_service,
         )
 
     @provide(scope=Scope.APP)

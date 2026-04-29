@@ -12,8 +12,7 @@ from app.services.rag.embedding_service import EmbeddingService
 from app.services.rag.search_engine import SearchEngine, SearchResult
 from app.services.rag.indexer import Indexer
 from app.services.rag.rerank_service import RerankService
-from app.services.llm.service import LLMLockTimeoutError
-from app.services.llm.protocol import LLMService
+from app.services.llm import LLMService, LLMLockTimeoutError
 
 logger = logging.getLogger(__name__)
 
@@ -23,7 +22,7 @@ class RAGService:
 
     def __init__(self, session_factory, paperless_client, llm_service: LLMService):
         self.search_engine = SearchEngine()
-        self.indexer = Indexer(self.search_engine, paperless_client=paperless_client)
+        self.indexer = Indexer(self.search_engine, paperless_client=paperless_client, llm_service=llm_service)
         self._initialized = False
         self.session_factory = session_factory or async_session
         self.paperless_client = paperless_client
@@ -52,6 +51,7 @@ class RAGService:
         return EmbeddingService(
             provider=config.embedding_provider,
             model=config.embedding_model,
+            llm_service=self.llm_service,
         )
 
     async def search(
@@ -450,36 +450,24 @@ class RAGService:
         yield json.dumps({"type": "done"})
 
     async def _stream_llm(self, config: RagConfig, messages: list) -> AsyncGenerator[str, None]:
-        """Stream LLM response via LiteLLM — unified path for all providers."""
+        """Stream LLM response via stream — yields str chunks directly."""
         model_name = config.chat_model or "gpt-4o-mini"
         provider_name = getattr(config, "chat_model_provider", "openai") or "openai"
 
         try:
-            # D-18: 30s timeout for RAG — fail fast with clear error to user
-            stream_response = await self.llm_service.complete_llm(
+            async for token in await self.llm_service.stream(
+                provider=provider_name,
                 model=model_name,
                 messages=messages,
-                timeout=30.0,  # D-18: fail fast for RAG
-                stream=True,   # Streaming MUST be preserved
+                timeout=30.0,
                 temperature=0.2,
                 num_ctx=max(8192, (getattr(config, "max_context_tokens", 4000) or 4000) * 2),
                 keep_alive="10m",
                 think=False,
-                provider=provider_name,
-            )
-
-            # stream_response is a LiteLLM response object for iteration
-            async for chunk in stream_response:
-                delta = chunk.choices[0].delta if chunk.choices else None
-                content = getattr(delta, "content", None) or ""
-                finish = getattr(chunk.choices[0], "finish_reason", None)
-                if content:
-                    yield content
-                if finish is not None and finish != "length":
-                    break
+            ):
+                yield token
 
         except LLMLockTimeoutError:
-            # D-18: fail fast for RAG — return clear error to user
             yield "\n\n[Ollama ist gerade belegt (Klassifizierung läuft). Bitte in 30 Sekunden erneut versuchen.]"
         except Exception as e:
             logger.warning(f"Streaming error: {e}")
@@ -523,20 +511,18 @@ class RAGService:
         provider_name = getattr(config, "chat_model_provider", "openai") or "openai"
 
         try:
-            result = await self.llm_service.complete_llm(
+            result = await self.llm_service.complete(
+                provider=provider_name,
                 model=model_name,
                 messages=messages,
                 timeout=30.0,
-                stream=False,
                 temperature=0.0,
                 max_tokens=200,
                 num_ctx=4096,
                 keep_alive="5m",
                 think=False,
-                provider=provider_name,
             )
-            # complete_llm returns string when stream=False
-            rewritten = result.strip() if isinstance(result, str) else (result.choices[0].message.content or "").strip()
+            rewritten = (result.content or "").strip()
             # Strip any markdown fences or explanatory text
             rewritten = re.sub(r'^```.*?\n|```$', '', rewritten, flags=re.DOTALL).strip()
             return rewritten if rewritten else question
@@ -611,27 +597,25 @@ class RAGService:
 
     async def get_config_dict(self) -> dict:
         config = await self._get_config()
-        
-        # Merge RagConfig DB values with AppSettings key-value overrides (LLM-08)
-        from app.models.settings_model import LLM_KEY_CLASSIFIER_PROVIDER, LLM_KEY_CLASSIFIER_MODEL
 
         async with self.session_factory() as db:
             from app.routers.settings import get_setting
-            chat_provider = await get_setting(LLM_KEY_CLASSIFIER_PROVIDER, db)
-            chat_model = await get_setting(LLM_KEY_CLASSIFIER_MODEL, db)
-        
+            emb_provider = await get_setting("rag_embedding_provider", db)
+            emb_model = await get_setting("rag_embedding_model", db)
+            chat_provider = await get_setting("rag_chat_provider", db)
+            chat_model = await get_setting("rag_chat_model", db)
+
         return {
-            "embedding_provider": config.embedding_provider,
-            "embedding_model": config.embedding_model,
+            "embedding_provider": emb_provider or config.embedding_provider or "",
+            "embedding_model": emb_model or config.embedding_model or "",
             "chunk_size": config.chunk_size,
             "chunk_overlap": config.chunk_overlap,
             "bm25_weight": config.bm25_weight,
             "semantic_weight": config.semantic_weight,
             "max_sources": config.max_sources,
             "max_context_tokens": config.max_context_tokens,
-            # Use key-value store first, fall back to RagConfig (LLM-08)
-            "chat_model_provider": chat_provider or config.chat_model_provider or "openai",
-            "chat_model": chat_model or config.chat_model or "gpt-4o-mini",
+            "chat_model_provider": chat_provider or config.chat_model_provider or "",
+            "chat_model": chat_model or config.chat_model or "",
             "chat_system_prompt": config.chat_system_prompt,
             "auto_index_enabled": config.auto_index_enabled,
             "auto_index_interval": config.auto_index_interval,
@@ -640,6 +624,8 @@ class RAGService:
         }
 
     async def update_config(self, updates: dict) -> dict:
+        from app.routers.settings import set_setting
+
         async with self.session_factory() as db:
             result = await db.execute(sa_select(RagConfig).where(RagConfig.id == 1))
             config = result.scalar_one_or_none()
@@ -647,16 +633,21 @@ class RAGService:
                 config = RagConfig(id=1)
                 db.add(config)
 
-            allowed = {
+            kv_keys = {
                 "embedding_provider", "embedding_model",
-                "chunk_size", "chunk_overlap", "bm25_weight", "semantic_weight",
-                "max_sources", "max_context_tokens", "chat_model_provider",
-                "chat_model", "chat_system_prompt", "auto_index_enabled",
-                "auto_index_interval", "query_rewrite_enabled",
-                "contextual_retrieval_enabled",
+                "chat_model_provider", "chat_model",
             }
+            db_keys = {
+                "chunk_size", "chunk_overlap", "bm25_weight", "semantic_weight",
+                "max_sources", "max_context_tokens", "chat_system_prompt",
+                "auto_index_enabled", "auto_index_interval",
+                "query_rewrite_enabled", "contextual_retrieval_enabled",
+            }
+
             for key, value in updates.items():
-                if key in allowed and hasattr(config, key):
+                if key in kv_keys:
+                    await set_setting(f"rag_{key}", value, db)
+                elif key in db_keys and hasattr(config, key):
                     setattr(config, key, value)
 
             await db.commit()

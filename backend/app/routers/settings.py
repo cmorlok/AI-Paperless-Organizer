@@ -11,7 +11,10 @@ from app.models.settings_model import (
     LLM_KEY_CLASSIFIER_MODEL,
     LLM_KEY_OCR_MODEL,
 )
-from app.services.llm import list_llm_models, list_llm_providers, PROVIDER_DISPLAY_NAMES
+from dishka.integrations.fastapi import inject
+from dishka import FromDishka
+
+from app.services.llm import LLMService, PROVIDER_DISPLAY_NAMES
 from app.prompts.default_prompts import DEFAULT_PROMPTS
 
 router = APIRouter()
@@ -162,23 +165,23 @@ async def get_llm_providers_from_db(db: AsyncSession = Depends(get_db)):
 
 # LLM Providers - LiteLLM-based (for SettingsPanel UI)
 @router.get("/llm-providers")
-async def get_llm_providers_from_litellm():
-    """Get all LiteLLM-supported providers from litellm.provider_list."""
-    return list_llm_providers()
+@inject
+async def get_llm_providers_from_litellm(
+    llm_service: FromDishka[LLMService] = None,
+):
+    """Get all LiteLLM-supported providers."""
+    return llm_service.list_providers()
 
 
 @router.get("/llm-providers/models")
-async def get_llm_provider_models(provider: str, db: AsyncSession = Depends(get_db)):
-    """Get available models for a specific LiteLLM provider.
-    
-    For local providers (ollama, lm_studio, vllm): queries the provider's
-    API directly using configured base_url from the database.
-    
-    For other providers: falls back to litellm.model_list filtered by 
-    provider prefix (e.g., "openai/").
-    """
+@inject
+async def get_llm_provider_models(
+    provider: str,
+    llm_service: FromDishka[LLMService] = None,
+):
+    """Get available models for a specific LiteLLM provider."""
     try:
-        models = await list_llm_models(provider, db)
+        models = await llm_service.list_models(provider)
         return {"provider": provider, "models": models}
     except Exception as e:
         return {"provider": provider, "models": [], "error": str(e)}

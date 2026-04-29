@@ -228,7 +228,7 @@ export const changePassword = (currentPassword: string, newPassword: string) =>
 export const getCorrespondents = () => fetchJson<any[]>('/correspondents/')
 
 export const estimateCorrespondents = () =>
-  fetchJson<{ items_info?: string; estimated_tokens: number; token_limit?: number; model?: string; recommended_batches: number; warning?: string }>('/correspondents/estimate')
+  fetchJson<{ items_info?: string; estimated_tokens: number; token_limit?: number; is_cloud?: boolean; recommended_batches: number; warning?: string }>('/correspondents/estimate')
 
 export const analyzeCorrespondents = (batchSize: number = 200) =>
   fetchJson<{ groups: any[]; stats?: any; error?: string }>('/correspondents/analyze', {
@@ -291,7 +291,7 @@ export const estimateTags = (analysisType: 'nonsense' | 'correspondent' | 'docty
     items_info: string
     estimated_tokens: number
     token_limit: number
-    model: string
+    is_cloud: boolean
     recommended_batches: number
     warning?: string
   }>(`/tags/estimate?analysis_type=${analysisType}`)
@@ -396,7 +396,7 @@ export const markTagGroupProcessed = (groupIndex: number) =>
 export const getDocumentTypes = () => fetchJson<any[]>('/document-types/')
 
 export const estimateDocumentTypes = () =>
-  fetchJson<{ items_info?: string; estimated_tokens: number; token_limit?: number; model?: string; recommended_batches: number; warning?: string }>('/document-types/estimate')
+  fetchJson<{ items_info?: string; estimated_tokens: number; token_limit?: number; is_cloud?: boolean; recommended_batches: number; warning?: string }>('/document-types/estimate')
 
 export const analyzeDocumentTypes = (batchSize: number = 200) =>
   fetchJson<{ groups: any[]; stats?: any; error?: string }>('/document-types/analyze', {
@@ -534,7 +534,7 @@ export interface BatchOcrStatus {
   mode?: string
 }
 
-export interface WatchdogStatus {
+export interface ProcessorStatus {
   enabled: boolean
   running: boolean
   interval_minutes: number
@@ -549,15 +549,26 @@ export interface OcrStats {
   pages: number
   chars: number
   duration: number
-  server: string
   success?: boolean
 }
 
 // OCR Settings
 export const getOcrSettings = () =>
-  fetchJson<{ ollama_url: string; ollama_urls: string[]; model: string; max_image_size: number; smart_skip_enabled: boolean; watchdog_enabled?: boolean; watchdog_interval?: number }>('/ocr/settings')
+  fetchJson<{
+    provider: string;
+    model: string;
+    max_image_size: number;
+    smart_skip_enabled: boolean;
+    processor_enabled?: boolean;
+    processor_interval?: number
+  }>('/ocr/settings')
 
-export const saveOcrSettings = (data: { ollama_url: string; ollama_urls?: string[]; model: string; max_image_size: number; smart_skip_enabled: boolean }) =>
+export const saveOcrSettings = (data: {
+  provider?: string;
+  model: string;
+  max_image_size?: number;
+  smart_skip_enabled?: boolean
+}) =>
   fetchJson<{ success: boolean }>('/ocr/settings', {
     method: 'POST',
     body: JSON.stringify(data)
@@ -640,12 +651,12 @@ export const pauseBatchOcr = () =>
 export const resumeBatchOcr = () =>
   fetchJson<{ success: boolean }>('/ocr/batch/resume', { method: 'POST' })
 
-// Watchdog
-export const getWatchdogStatus = () =>
-  fetchJson<WatchdogStatus>('/ocr/watchdog/status')
+// Processor
+export const getProcessorStatus = () =>
+  fetchJson<ProcessorStatus>('/ocr/processor/status')
 
-export const setWatchdogSettings = (enabled: boolean, intervalMinutes: number = 1) =>
-  fetchJson<{ success: boolean }>('/ocr/watchdog/settings', {
+export const setProcessorSettings = (enabled: boolean, intervalMinutes: number = 1) =>
+  fetchJson<{ success: boolean }>('/ocr/processor/settings', {
     method: 'POST',
     body: JSON.stringify({ enabled, interval_minutes: intervalMinutes })
   })
@@ -777,13 +788,10 @@ export interface OcrCompareResponse {
   results: OcrModelCompareResult[]
 }
 
-export const getOllamaModels = () =>
-  fetchJson<{ models: string[]; current_model: string }>('/ocr/models')
-
-export const startOcrCompare = (documentId: number, models: string[], page: number = 1) =>
+export const startOcrCompare = (documentId: number, slots: {provider: string; model: string}[], page: number = 1) =>
   fetchJson<{ started: boolean; models: number }>('/ocr/compare', {
     method: 'POST',
-    body: JSON.stringify({ document_id: documentId, models, page })
+    body: JSON.stringify({ document_id: documentId, slots, page })
   })
 
 export interface OcrCompareStatus {
@@ -1099,17 +1107,6 @@ export const getClassifierCorrespondents = () =>
 
 export const getClassifierDocumentTypes = () =>
   fetchJson<PaperlessDocumentType[]>('/classifier/document-types')
-
-export const getClassifierOllamaModels = () =>
-  fetchJson<OllamaModelsResponse>('/classifier/ollama/models')
-
-export const testClassifierOllama = (model?: string, host?: string) => {
-  const params = new URLSearchParams()
-  if (model) params.set('model', model)
-  if (host) params.set('host', host)
-  const qs = params.toString() ? `?${params.toString()}` : ''
-  return fetchJson<OllamaTestResponse>(`/classifier/ollama/test${qs}`, { method: 'POST' })
-}
 
 export const getStoragePathsFromPaperless = () =>
   fetchJson<any[]>('/classifier/storage-paths')

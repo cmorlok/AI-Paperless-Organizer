@@ -10,7 +10,7 @@ from dishka import AsyncContainer
 
 from app.services.paperless import PaperlessClient
 # Import CloudImportService from protocol (not service/impl) — fixed bug
-from app.services.cloud_import.protocol import CloudImportService
+from app.services.cloud_import import CloudImportService
 # CloudSyncState is internal — keep deep import
 from app.services.cloud_import.state import CloudSyncState
 

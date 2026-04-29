@@ -1,7 +1,6 @@
-import { useState, useEffect, useRef, useCallback } from 'react'
+import { useState, useRef, useCallback } from 'react'
 import {
     FlaskConical,
-    Play,
     Loader2,
     Clock,
     FileText,
@@ -15,62 +14,49 @@ import {
     Star,
     Zap,
     ThumbsUp,
-    ThumbsDown
+    ThumbsDown,
+    Minus,
+    Plus,
+    Scale
 } from 'lucide-react'
 import clsx from 'clsx'
 import * as api from '../services/api'
+import ProviderModelSelector from './ProviderModelSelector'
 
 export default function OcrCompare() {
     const [docId, setDocId] = useState('')
     const [page, setPage] = useState(1)
-    const [availableModels, setAvailableModels] = useState<string[]>([])
-    const [currentModel, setCurrentModel] = useState('')
-    const [selectedModels, setSelectedModels] = useState<string[]>([])
-    const [loadingModels, setLoadingModels] = useState(false)
+    const [benchSlots, setBenchSlots] = useState<{provider: string; model: string}[]>([
+        { provider: '', model: '' }
+    ])
     const [running, setRunning] = useState(false)
     const [status, setStatus] = useState<api.OcrCompareStatus | null>(null)
     const [result, setResult] = useState<api.OcrCompareResponse | null>(null)
     const [error, setError] = useState('')
     const [expandedResults, setExpandedResults] = useState<Set<number>>(new Set())
-    const [showModelPicker, setShowModelPicker] = useState(false)
     const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
-    
+
     // Evaluation state
     const [evaluating, setEvaluating] = useState(false)
     const [evaluation, setEvaluation] = useState<api.OcrEvaluateResponse | null>(null)
     const [evalError, setEvalError] = useState('')
     const [showEvalWarning, setShowEvalWarning] = useState(false)
-    const [evalModel, setEvalModel] = useState('')  // Override model for evaluation
+    const [evalModel, setEvalModel] = useState('')
 
-    useEffect(() => {
-        loadModels()
-        return () => { if (pollRef.current) clearInterval(pollRef.current) }
-    }, [])
+    const updateBenchSlot = (idx: number, newValue: { provider: string; model: string }) => {
+        setBenchSlots(prev => prev.map((s, i) => i === idx ? newValue : s))
+    }
 
-    const loadModels = async () => {
-        setLoadingModels(true)
-        try {
-            const data = await api.getOllamaModels()
-            setAvailableModels(data.models)
-            setCurrentModel(data.current_model)
-            if (data.current_model && data.models.includes(data.current_model)) {
-                setSelectedModels([data.current_model])
-            }
-        } catch (e: any) {
-            setError('Modelle konnten nicht geladen werden: ' + e.message)
-        } finally {
-            setLoadingModels(false)
+    const addBenchSlot = () => {
+        if (benchSlots.length < 5) {
+            setBenchSlots(prev => [...prev, { provider: '', model: '' }])
         }
     }
 
-    const toggleModel = (model: string) => {
-        setSelectedModels(prev => {
-            if (prev.includes(model)) {
-                return prev.filter(m => m !== model)
-            }
-            if (prev.length >= 5) return prev
-            return [...prev, model]
-        })
+    const removeBenchSlot = (idx: number) => {
+        if (benchSlots.length > 1) {
+            setBenchSlots(prev => prev.filter((_, i) => i !== idx))
+        }
     }
 
     const stopPolling = useCallback(() => {
@@ -115,8 +101,9 @@ export default function OcrCompare() {
             setError('Bitte eine gültige Dokument-ID eingeben')
             return
         }
-        if (selectedModels.length === 0) {
-            setError('Bitte mindestens ein Modell auswählen')
+        const validSlots = benchSlots.filter(s => s.provider !== '' && s.model !== '')
+        if (validSlots.length === 0) {
+            setError('Bitte mindestens ein Provider/Modell auswählen')
             return
         }
 
@@ -128,7 +115,7 @@ export default function OcrCompare() {
         setExpandedResults(new Set())
 
         try {
-            await api.startOcrCompare(id, selectedModels, page)
+            await api.startOcrCompare(id, validSlots, page)
             startPolling()
         } catch (e: any) {
             setError(e.message || 'Vergleich konnte nicht gestartet werden')
@@ -168,8 +155,8 @@ export default function OcrCompare() {
             case 'starting': return 'Starte...'
             case 'download': return 'Dokument herunterladen...'
             case 'convert': return 'PDF in Bilder konvertieren...'
-            case 'health_check': return 'Ollama Health-Check...'
-            case 'waiting_ollama': return 'Warte auf Ollama-Neustart...'
+            case 'health_check': return 'Provider Health-Check...'
+            case 'restarting': return 'Provider wird neu gestartet...'
             case 'model_loading': return 'Modell wird geladen...'
             case 'ocr_page': return 'OCR läuft...'
             case 'unloading': return 'Modell wird entladen...'
@@ -274,143 +261,78 @@ export default function OcrCompare() {
                         <div>
                             <h3 className="font-bold text-lg text-white">OCR Modell-Vergleich</h3>
                             <p className="text-sm text-surface-400">
-                                Teste verschiedene Ollama-Modelle auf demselben Dokument
+                                Teste verschiedene Modelle auf demselben Dokument
                             </p>
                         </div>
                     </div>
                 </div>
 
                 <div className="p-6 space-y-5">
-                    {/* Document ID + Page Input */}
-                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-                        <div className="sm:col-span-2">
-                            <label className="text-xs font-medium text-surface-400 ml-1 mb-1 block">
-                                Dokument-ID
-                            </label>
-                            <input
-                                type="number"
-                                value={docId}
-                                onChange={(e) => setDocId(e.target.value)}
-                                placeholder="z.B. 42"
-                                className="w-full input bg-surface-900/50 border-surface-700 focus:border-violet-500 text-lg"
-                                disabled={running}
-                                min={1}
-                            />
-                        </div>
-                        <div>
-                            <label className="text-xs font-medium text-surface-400 ml-1 mb-1 block">
-                                Seite (0 = alle)
-                            </label>
-                            <input
-                                type="number"
-                                value={page}
-                                onChange={(e) => setPage(parseInt(e.target.value) || 0)}
-                                placeholder="1"
-                                className="w-full input bg-surface-900/50 border-surface-700 focus:border-violet-500 text-lg"
-                                disabled={running}
-                                min={0}
-                            />
-                        </div>
+                    {/* Provider/Model Slots - like classifier benchmark */}
+                    <div className="space-y-2 mb-4">
+                        {benchSlots.map((slot, idx) => {
+                            const colors = ['violet', 'emerald', 'sky', 'amber', 'rose', 'teal']
+                            const c = colors[idx % colors.length]
+                            return (
+                                <div key={idx} className="flex items-center gap-2 p-2 rounded-lg border bg-surface-800/50 border-surface-700"
+                                    style={{ borderColor: `var(--color-${c}-500, #8b5cf6)` }}
+                                >
+                                    <span className="text-xs font-bold text-surface-400 w-5 shrink-0">{idx + 1}</span>
+                                    <ProviderModelSelector
+                                        value={slot}
+                                        onChange={(newValue) => updateBenchSlot(idx, newValue)}
+                                        configuredOnly={true}
+                                    />
+                                    {benchSlots.length > 1 && (
+                                        <button onClick={() => removeBenchSlot(idx)} className="p-1 text-surface-500 hover:text-red-400 transition-colors" title="Entfernen">
+                                            <Minus className="w-4 h-4" />
+                                        </button>
+                                    )}
+                                </div>
+                            )
+                        })}
+                        {benchSlots.length < 5 && (
+                            <button
+                                onClick={addBenchSlot}
+                                className="flex items-center gap-2 text-sm text-surface-400 hover:text-violet-400 transition-colors p-2 w-full rounded-lg border border-dashed border-surface-700/50 hover:border-violet-500/30"
+                            >
+                                <Plus className="w-4 h-4" /> Modell hinzufuegen
+                            </button>
+                        )}
                     </div>
 
-                    {/* Model Picker */}
-                    <div>
-                        <label className="text-xs font-medium text-surface-400 ml-1 mb-2 block">
-                            Modelle auswählen (max. 5)
-                        </label>
-
-                        {loadingModels ? (
-                            <div className="flex items-center gap-2 text-surface-400 text-sm py-4">
+                    {/* Document + Page + Start */}
+                    <div className="flex gap-3">
+                        <input
+                            type="number"
+                            value={docId}
+                            onChange={(e) => setDocId(e.target.value)}
+                            placeholder="Dokument-ID eingeben..."
+                            className="input flex-1"
+                            min={1}
+                            disabled={running}
+                        />
+                        <input
+                            type="number"
+                            value={page}
+                            onChange={(e) => setPage(parseInt(e.target.value) || 0)}
+                            placeholder="Seite (0=alle)"
+                            className="input w-32"
+                            min={0}
+                            disabled={running}
+                        />
+                        <button
+                            onClick={startCompare}
+                            disabled={running || !docId || benchSlots.filter(s => s.provider && s.model).length === 0}
+                            className="btn btn-primary flex items-center gap-2"
+                        >
+                            {running ? (
                                 <Loader2 className="w-4 h-4 animate-spin" />
-                                Lade verfügbare Modelle...
-                            </div>
-                        ) : availableModels.length === 0 ? (
-                            <div className="text-amber-400 text-sm py-2">
-                                Keine Modelle gefunden. Ist Ollama erreichbar?
-                            </div>
-                        ) : (
-                            <div>
-                                <button
-                                    onClick={() => setShowModelPicker(!showModelPicker)}
-                                    className="w-full flex items-center justify-between px-4 py-3 rounded-xl bg-surface-900/50 border border-surface-700 hover:border-violet-500/50 transition-colors"
-                                    disabled={running}
-                                >
-                                    <span className="text-sm text-surface-300">
-                                        {selectedModels.length === 0
-                                            ? 'Modelle auswählen...'
-                                            : `${selectedModels.length} Modell${selectedModels.length > 1 ? 'e' : ''} ausgewählt`
-                                        }
-                                    </span>
-                                    {showModelPicker
-                                        ? <ChevronUp className="w-4 h-4 text-surface-500" />
-                                        : <ChevronDown className="w-4 h-4 text-surface-500" />
-                                    }
-                                </button>
-
-                                {showModelPicker && (
-                                    <div className="mt-2 p-2 rounded-xl bg-surface-900/80 border border-surface-700 max-h-64 overflow-y-auto custom-scrollbar animate-in fade-in slide-in-from-top-2 duration-200">
-                                        {availableModels.map((model) => {
-                                            const isSelected = selectedModels.includes(model)
-                                            const isCurrent = model === currentModel
-                                            return (
-                                                <button
-                                                    key={model}
-                                                    onClick={() => toggleModel(model)}
-                                                    disabled={running || (!isSelected && selectedModels.length >= 5)}
-                                                    className={clsx(
-                                                        'w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-left transition-all text-sm',
-                                                        isSelected
-                                                            ? 'bg-violet-500/20 text-violet-200 border border-violet-500/30'
-                                                            : 'text-surface-300 hover:bg-surface-800 hover:text-white border border-transparent',
-                                                        !isSelected && selectedModels.length >= 5 && 'opacity-40 cursor-not-allowed'
-                                                    )}
-                                                >
-                                                    <div className={clsx(
-                                                        'w-5 h-5 rounded-md border-2 flex items-center justify-center flex-shrink-0 transition-colors',
-                                                        isSelected
-                                                            ? 'bg-violet-500 border-violet-500'
-                                                            : 'border-surface-600'
-                                                    )}>
-                                                        {isSelected && <Check className="w-3.5 h-3.5 text-white" />}
-                                                    </div>
-                                                    <span className="font-mono text-sm truncate">{model}</span>
-                                                    {isCurrent && (
-                                                        <span className="ml-auto text-[10px] px-1.5 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 flex-shrink-0">
-                                                            aktiv
-                                                        </span>
-                                                    )}
-                                                </button>
-                                            )
-                                        })}
-                                    </div>
-                                )}
-
-                                {/* Selected tags */}
-                                {selectedModels.length > 0 && (
-                                    <div className="flex flex-wrap gap-2 mt-3">
-                                        {selectedModels.map((model, i) => (
-                                            <span
-                                                key={model}
-                                                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-violet-500/15 text-violet-200 text-xs font-mono border border-violet-500/30"
-                                            >
-                                                <span className="w-4 h-4 rounded-full bg-violet-500/30 text-[10px] font-bold flex items-center justify-center text-violet-300">
-                                                    {i + 1}
-                                                </span>
-                                                {model}
-                                                {!running && (
-                                                    <button
-                                                        onClick={() => toggleModel(model)}
-                                                        className="ml-1 text-violet-400 hover:text-white transition-colors"
-                                                    >
-                                                        ×
-                                                    </button>
-                                                )}
-                                            </span>
-                                        ))}
-                                    </div>
-                                )}
-                            </div>
-                        )}
+                            ) : (
+                                <Scale className="w-4 h-4" />
+                            )}
+                            {running ? 'Laeuft...' : 'Vergleichen'}
+                        </button>
                     </div>
 
                     {/* Error */}
@@ -420,25 +342,6 @@ export default function OcrCompare() {
                             {error}
                         </div>
                     )}
-
-                    {/* Start Button */}
-                    <button
-                        onClick={startCompare}
-                        disabled={running || selectedModels.length === 0 || !docId}
-                        className="w-full btn py-4 flex justify-center items-center gap-2 shadow-lg text-lg font-medium bg-violet-600 hover:bg-violet-700 text-white border-0 disabled:opacity-50 disabled:cursor-not-allowed"
-                    >
-                        {running ? (
-                            <>
-                                <Loader2 className="w-5 h-5 animate-spin" />
-                                Vergleich läuft...
-                            </>
-                        ) : (
-                            <>
-                                <Play className="w-5 h-5 fill-current" />
-                                Vergleich starten ({selectedModels.length} Modell{selectedModels.length !== 1 ? 'e' : ''})
-                            </>
-                        )}
-                    </button>
 
                     {/* Live Progress */}
                     {running && status && (

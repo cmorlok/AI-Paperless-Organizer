@@ -9,8 +9,7 @@ from typing import Dict, List, Optional
 from sqlalchemy import select as sa_select, text
 
 from app.models.duplicates import DuplicateInvoiceCache
-from app.models.rag import RagConfig
-from app.services.llm import acquire as ollama_acquire, release as ollama_release, llm_completion
+from app.services.llm import LLMService
 
 logger = logging.getLogger(__name__)
 
@@ -19,6 +18,7 @@ async def scan_invoices(
     paperless_client,
     session_factory,
     scan_state,
+    llm_service: LLMService,
 ) -> List[Dict]:
     """Find duplicate invoices by extracting invoice number + amount via LLM.
 
@@ -52,7 +52,7 @@ async def scan_invoices(
     corr_map = await _build_correspondent_map(paperless_client)
 
     # Load LLM config
-    chat_model = await _get_chat_model(session_factory)
+    chat_provider, chat_model = await _get_chat_provider_and_model(session_factory)
 
     # Load cached extractions
     cached: Dict[int, Dict] = {}
@@ -90,7 +90,7 @@ async def scan_invoices(
         # Truncate content to avoid huge prompts
         content_trimmed = content[:3000]
 
-        extraction = await _extract_invoice_data(content_trimmed, chat_model)
+        extraction = await _extract_invoice_data(content_trimmed, chat_model, chat_provider, llm_service)
         if extraction:
             extractions[doc_id] = extraction
             # Cache result
@@ -141,51 +141,41 @@ async def _build_correspondent_map(paperless_client) -> Dict[int, str]:
     return {c["id"]: c.get("name", "") for c in correspondents}
 
 
-async def _get_chat_model(session_factory) -> str:
-    """Get the configured chat model from RagConfig."""
+async def _get_chat_provider_and_model(session_factory) -> tuple[str, str]:
+    """Get the configured chat provider and model from KV store."""
+    from app.routers.settings import get_setting
     async with session_factory() as db:
-        result = await db.execute(
-            sa_select(RagConfig).where(RagConfig.id == 1)
-        )
-        config = result.scalar_one_or_none()
-    if config and config.chat_model:
-        return config.chat_model
-    return "qwen3.5:4b"
+        provider = await get_setting("duplicate_chat_provider", db)
+        model = await get_setting("duplicate_chat_model", db)
+    if not provider or not model:
+        raise ValueError("duplicate_chat_provider and duplicate_chat_model must be configured")
+    return provider, model
 
 
-async def _extract_invoice_data(content: str, model: str) -> Optional[Dict]:
+async def _extract_invoice_data(content: str, model: str, provider: str, llm_service: LLMService) -> Optional[Dict]:
     """Extract invoice number and amount from document content via LiteLLM."""
-    got = await ollama_acquire("duplicates", timeout=120)
-    if not got:
-        logger.warning("Could not acquire OllamaLock for invoice extraction")
-        return None
+    prompt = (
+        "Extrahiere aus dem folgenden Dokumenttext die Rechnungsnummer und den Gesamtbetrag.\n"
+        "Antworte NUR mit einem JSON-Objekt im Format:\n"
+        '{"invoice_number": "...", "amount": "..."}\n'
+        "Wenn du keine Rechnungsnummer findest, sette den Wert auf einen leeren String.\n"
+        "Wenn du keinen Betrag findest, sette den Wert auf einen leeren String.\n\n"
+        f"Dokumenttext:\n{content}"
+    )
 
     try:
-        prompt = (
-            "Extrahiere aus dem folgenden Dokumenttext die Rechnungsnummer und den Gesamtbetrag.\n"
-            "Antworte NUR mit einem JSON-Objekt im Format:\n"
-            '{"invoice_number": "...", "amount": "..."}\n'
-            "Wenn du keine Rechnungsnummer findest, setze den Wert auf einen leeren String.\n"
-            "Wenn du keinen Betrag findest, setze den Wert auf einen leeren String.\n\n"
-            f"Dokumenttext:\n{content}"
-        )
-
-        response = await llm_completion(
+        result = await llm_service.complete(
+            provider=provider,
             model=model,
-            provider="ollama",
             messages=[{"role": "user", "content": prompt}],
             temperature=0,
-            num_ctx=4096,
             timeout=60.0,
         )
-        reply = response.choices[0].message.content or ""
-        return _parse_invoice_json(reply)
+        return _parse_invoice_json(result.content or "")
 
     except Exception as e:
         logger.error(f"Invoice extraction failed: {e}")
         return None
-    finally:
-        ollama_release("duplicates")
 
 
 def _parse_invoice_json(text: str) -> Optional[Dict]:
