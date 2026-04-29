@@ -302,7 +302,7 @@ class OcrService:
                 run_count += 1
                 if run_count >= 20:
                     lines = lines[:run_start]
-                    print(f"[OCR] Instruction echo detected at line {run_start}, truncating")
+                    logger.info(f"Instruction echo detected at line {run_start}, truncating")
                     break
             else:
                 run_start = i
@@ -331,7 +331,7 @@ class OcrService:
         original_lines = len(lines)
         cleaned_lines = len(cleaned)
         if original_lines - cleaned_lines > 5:
-            print(f"[OCR] Repetition cleanup: {original_lines} -> {cleaned_lines} lines (removed {original_lines - cleaned_lines} repeated lines)")
+            logger.info(f"Repetition cleanup: {original_lines} -> {cleaned_lines} lines (removed {original_lines - cleaned_lines} repeated lines)")
 
         return '\n'.join(cleaned)
 
@@ -366,7 +366,7 @@ class OcrService:
         loop_ratio = text.get("_loop_ratio", 0) if isinstance(text, dict) else 0
 
         if loop_ratio > 0.6:
-            print(f"[OCR] Loop detected ({loop_ratio:.0%} wasted). Retrying with anti-table prompt...")
+            logger.info(f"Loop detected ({loop_ratio:.0%} wasted). Retrying with anti-table prompt...")
             retry_params = {**model_params}
             retry_params["num_predict"] = min(model_params["num_predict"], 4096)
 
@@ -385,10 +385,10 @@ class OcrService:
                 retry_ratio = retry_text.get("_loop_ratio", 0) if isinstance(retry_text, dict) else 0
 
                 if len(retry_cleaned) > len(cleaned):
-                    print(f"[OCR] Anti-table retry improved: {len(cleaned)} -> {len(retry_cleaned)} chars (loop: {retry_ratio:.0%})")
+                    logger.info(f"Anti-table retry improved: {len(cleaned)} -> {len(retry_cleaned)} chars (loop: {retry_ratio:.0%})")
                     return retry_cleaned
                 else:
-                    print(f"[OCR] Retry not better ({len(retry_cleaned)} vs {len(cleaned)} chars), keeping original")
+                    logger.info(f"Retry not better ({len(retry_cleaned)} vs {len(cleaned)} chars), keeping original")
 
         return cleaned
 
@@ -408,7 +408,7 @@ class OcrService:
         name_lower = (model or "").lower()
         use_think_param = "qwen3" in name_lower
 
-        print(f"[OCR][DEBUG] Model: {model}, repeat_pen={model_params['repeat_penalty']}, predict={model_params['num_predict']}")
+        logger.debug(f"Model: {model}, repeat_pen={model_params['repeat_penalty']}, predict={model_params['num_predict']}")
 
         try:
             system_msg = (
@@ -452,7 +452,7 @@ class OcrService:
             loop_ratio = 1 - (cleaned_len / raw_len) if raw_len > 0 else 0
 
             if raw_len != cleaned_len:
-                print(f"[OCR] Repetition cleanup: {raw_len} -> {cleaned_len} chars ({loop_ratio:.0%} removed)")
+                logger.info(f"Repetition cleanup: {raw_len} -> {cleaned_len} chars ({loop_ratio:.0%} removed)")
 
             return {
                 "_cleaned": text_content,
@@ -461,7 +461,7 @@ class OcrService:
             }
 
         except Exception as e:
-            print(f"[OCR] Error during OCR request: {e}")
+            logger.error(f"Error during OCR request: {e}")
             return None
 
     def save_stats(self, doc_id: int, duration: float, pages: int, chars: int, success: bool = True, model: str = ""):
@@ -553,7 +553,7 @@ class OcrService:
 
         await self._ensure_provider_ready(provider)
         start_time = time.time()
-        print(f"[OCR] Starting OCR for document {document_id}")
+        logger.info(f"Starting OCR for document {document_id}")
 
         self.state.page_progress[document_id] = OcrDocumentProgress(
             total_pages=0, done=0, errors=0,
@@ -574,7 +574,6 @@ class OcrService:
             file_bytes = await paperless_client.download_document_file(document_id)
             file_mb = len(file_bytes) / 1_048_576
             logger.info(f"Downloaded document {document_id}: {len(file_bytes)} bytes ({file_mb:.1f} MB)")
-            print(f"[OCR] Downloaded {len(file_bytes)} bytes ({file_mb:.1f} MB)")
 
             if file_mb > MAX_FILE_SIZE_MB:
                 self.state.page_progress.pop(document_id, None)
@@ -610,7 +609,6 @@ class OcrService:
             native_text = self._extract_text_from_pdf(file_bytes, smart_skip_enabled)
             if native_text and len(native_text) > 50:
                 logger.info(f"Found native text in PDF ({len(native_text)} chars). Skipping OCR.")
-                print(f"[OCR] Native text found ({len(native_text)} chars). Skipping vision OCR.")
                 self.state.page_progress.pop(document_id, None)
                 duration = time.time() - start_time
                 return {
@@ -635,11 +633,11 @@ class OcrService:
         if db_session:
             if force:
                 await self._cleanup_page_results(db_session, document_id)
-                print(f"[OCR] Force mode: cleared DB page cache for doc {document_id}, starting fresh")
+                logger.info(f"Force mode: cleared DB page cache for doc {document_id}, starting fresh")
             else:
                 completed_pages = await self._load_completed_pages(db_session, document_id, total_pages)
                 if completed_pages:
-                    print(f"[OCR] Resume: found {len(completed_pages)} completed pages in DB")
+                    logger.info(f"Resume: found {len(completed_pages)} completed pages in DB")
                     for pg_num, pg_text in completed_pages.items():
                         idx = pg_num - 1
                         if idx < len(self.state.page_progress[document_id].pages):
@@ -657,7 +655,7 @@ class OcrService:
 
             if page_num in completed_pages:
                 full_text_parts[page_num] = completed_pages[page_num]
-                print(f"[OCR] Page {page_num}/{total_pages}: resumed from DB ({len(completed_pages[page_num])} chars)")
+                logger.info(f"Page {page_num}/{total_pages}: resumed from DB ({len(completed_pages[page_num])} chars)")
                 continue
 
             self.state.page_progress[document_id].current_page = page_num
@@ -675,7 +673,6 @@ class OcrService:
                     page_start = time.time()
                     msg = f"Processing page {page_num}/{total_pages} (attempt {attempt})"
                     logger.info(msg)
-                    print(f"[OCR] {msg}")
 
                     page_text = await self._ocr_single_image(
                         prepared_bytes, model, provider, page_num=page_num, total_pages=total_pages
@@ -697,13 +694,12 @@ class OcrService:
                         page=page_num, status="done", chars=len(page_text)
                     )
                     self.state.page_progress[document_id].done += 1
-                    print(f"[OCR] Page {page_num}: OK ({len(page_text)} chars, {page_duration:.1f}s)")
+                    logger.info(f"Page {page_num}: OK ({len(page_text)} chars, {page_duration:.1f}s)")
                     break
 
                 except Exception as e:
                     last_error = str(e)
                     logger.warning(f"OCR page {page_num} attempt {attempt} failed: {e}")
-                    print(f"[OCR] Page {page_num} attempt {attempt} failed: {e}")
 
                     if attempt < MAX_PAGE_RETRIES:
                         await asyncio.sleep(2)
@@ -719,7 +715,7 @@ class OcrService:
                     )
                     self.state.page_progress[document_id].errors += 1
                 failed_pages.append(page_num)
-                print(f"[OCR] Page {page_num}: FAILED after {MAX_PAGE_RETRIES} attempts")
+                logger.warning(f"Page {page_num}: FAILED after {MAX_PAGE_RETRIES} attempts")
 
         if failed_pages:
             self.state.page_progress[document_id].status = "partial"
@@ -756,17 +752,17 @@ class OcrService:
                 try:
                     loop = asyncio.get_running_loop()
                     dpi = render_dpi if attempt == 0 else max(100, render_dpi - 50)
-                    print(f"[OCR] Converting PDF at {dpi} DPI (attempt {attempt+1})…")
+                    logger.warning(f"Converting PDF at {dpi} DPI (attempt {attempt+1})…")
                     images = await asyncio.wait_for(
                         loop.run_in_executor(
                             None, lambda d=dpi: convert_from_bytes(file_bytes, dpi=d)
                         ),
                         timeout=300
                     )
-                    print(f"[OCR] Converted PDF to {len(images)} pages at {dpi} DPI")
+                    logger.info(f"Converted PDF to {len(images)} pages at {dpi} DPI")
                     return images
                 except asyncio.TimeoutError:
-                    print(f"[OCR] PDF conversion timed out after 5 min (attempt {attempt+1})")
+                    logger.warning(f"PDF conversion timed out after 5 min (attempt {attempt+1})")
                     if attempt == 0:
                         logger.warning(f"PDF conversion timeout for doc {document_id}, retrying at lower DPI")
                         continue
@@ -784,7 +780,7 @@ class OcrService:
                             save_ocr_ignore_list(ignore_list)
                         raise ValueError(f"{error_msg} Dokument wird künftig übersprungen.")
                     if attempt == 0:
-                        print(f"[OCR] PDF conversion failed (attempt 1), retrying: {e}")
+                        logger.warning(f"PDF conversion failed (attempt 1), retrying: {e}")
                         await asyncio.sleep(2)
                     else:
                         raise ValueError(f"PDF-Konvertierung fehlgeschlagen nach 2 Versuchen ({mime_type}): {e}")
@@ -792,7 +788,7 @@ class OcrService:
             try:
                 img = Image.open(io.BytesIO(file_bytes))
                 img.load()
-                print(f"[OCR] Loaded as single image ({img.format}, {img.size[0]}x{img.size[1]})")
+                logger.info(f"Loaded as single image ({img.format}, {img.size[0]}x{img.size[1]})")
                 return [img]
             except Exception as e:
                 raise ValueError(f"Dateiformat nicht unterstützt ({mime_type}, {len(file_bytes)} bytes): {e}")
@@ -866,7 +862,7 @@ class OcrService:
                 delete(OcrPageResult).where(OcrPageResult.document_id == document_id)
             )
             await db_session.commit()
-            print(f"[OCR] Cleaned up page cache for document {document_id}")
+            logger.info(f"Cleaned up page cache for document {document_id}")
         except Exception as e:
             logger.warning(f"Failed to cleanup page results: {e}")
 
@@ -1045,7 +1041,7 @@ class OcrService:
                 skipped = before_count - len(documents)
                 if skipped > 0:
                     self.state.batch.log.append(f"🚫 {skipped} Dokument(e) übersprungen (OCR Ignore-Liste)")
-                    print(f"[OCR] Skipped {skipped} ignored documents")
+                    logger.info(f"Skipped {skipped} ignored documents")
 
             self.state.batch.total = len(documents)
 
@@ -1093,7 +1089,7 @@ class OcrService:
                             self.state.batch.log.append(
                                 f"🔁 {doc_title}: Qualitätscheck fehlgeschlagen ({ratio}% des Originals) → Automatischer Retry..."
                             )
-                            print(f"[OCR] Quality check failed for {doc_id} ({ratio}%), retrying OCR...")
+                            logger.warning(f"Quality check failed for {doc_id} ({ratio}%), retrying OCR...")
 
                             await asyncio.sleep(3)
 
@@ -1110,7 +1106,7 @@ class OcrService:
                                     self.state.batch.log.append(
                                         f"🔁 {doc_title}: Retry lieferte besseres Ergebnis ({retry_len} vs {new_len - (retry_len - new_len)} Zeichen)"
                                     )
-                                    print(f"[OCR] Retry improved: {retry_len} chars (was {new_len - (retry_len - new_len)})")
+                                    logger.info(f"Retry improved: {retry_len} chars (was {new_len - (retry_len - new_len)})")
                                 elif retry_content:
                                     if retry_len >= new_len:
                                         new_content = retry_content
@@ -1119,12 +1115,12 @@ class OcrService:
                                     self.state.batch.log.append(
                                         f"🔁 {doc_title}: Retry ähnliches Ergebnis ({retry_len} Zeichen)"
                                     )
-                                    print(f"[OCR] Retry similar: {retry_len} chars")
+                                    logger.info(f"Retry similar: {retry_len} chars")
                             except Exception as retry_err:
                                 self.state.batch.log.append(
                                     f"🔁 {doc_title}: Retry fehlgeschlagen - {str(retry_err)}"
                                 )
-                                print(f"[OCR] Retry failed for {doc_id}: {retry_err}")
+                                logger.warning(f"Retry failed for {doc_id}: {retry_err}")
 
                             new_len = len(new_content) if new_content else 0
                             if old_len > 100 and new_len < old_len * QUALITY_THRESHOLD:
@@ -1165,7 +1161,7 @@ class OcrService:
                                 self.state.batch.log.append(
                                     f"✅ {doc_title}: Retry erfolgreich! Qualität jetzt OK ({new_len} Zeichen)"
                                 )
-                                print(f"[OCR] Retry fixed quality for {doc_id}: {new_len} chars now passes threshold")
+                                logger.info(f"Retry fixed quality for {doc_id}: {new_len} chars now passes threshold")
 
                         if not needs_review:
                             reset_ocr_error(doc_id)
@@ -1247,7 +1243,7 @@ class OcrService:
                             self.state.batch.log.append(
                                 f"🚫 {doc_title}: {err_count}x fehlgeschlagen → Tag 'ocrfehler' gesetzt, wird nicht mehr verarbeitet"
                             )
-                            print(f"[OCR] Doc {doc_id} permanently marked as failed ({err_count} failures)")
+                            logger.error(f"Doc {doc_id} permanently marked as failed ({err_count} failures)")
                         except Exception as tag_err:
                             logger.error(f"Failed to set ocrfehler tag for {doc_id}: {tag_err}")
                     else:
@@ -1277,7 +1273,7 @@ class OcrService:
     async def _unload_model_from_vram(self, model: str) -> None:
         try:
             await self.llm_service.unload_local_model("ollama", model)
-            print(f"[Compare] Unloaded {model} from VRAM")
+            logger.info(f"Unloaded {model} from VRAM")
         except Exception:
             pass
 
@@ -1288,14 +1284,14 @@ class OcrService:
             try:
                 if await self.llm_service.check_provider_health(provider):
                     if waited > 0:
-                        print(f"[Compare] {provider} wieder erreichbar nach {waited}s Wartezeit")
+                        logger.info(f"{provider} wieder erreichbar nach {waited}s Wartezeit")
                     return True
             except Exception:
                 pass
-            print(f"[Compare] {provider} nicht erreichbar, warte {interval}s... ({waited}/{max_wait}s)")
+            logger.warning(f"{provider} nicht erreichbar, warte {interval}s... ({waited}/{max_wait}s)")
             await asyncio.sleep(interval)
             waited += interval
-        print(f"[Compare] {provider} nach {max_wait}s immer noch nicht erreichbar!")
+        logger.warning(f"{provider} nach {max_wait}s immer noch nicht erreichbar!")
         return False
 
     async def run_compare_job(
@@ -1320,7 +1316,7 @@ class OcrService:
             compare_state.old_content = doc.get("content", "") or ""
 
             file_bytes = await paperless_client.download_document_file(document_id)
-            print(f"[Compare] Downloaded doc {document_id}: {len(file_bytes)} bytes")
+            logger.info(f"Downloaded doc {document_id}: {len(file_bytes)} bytes")
 
             compare_state.phase = "convert"
             is_pdf = True
@@ -1330,7 +1326,7 @@ class OcrService:
                     None, lambda: convert_from_bytes(file_bytes, dpi=150)
                 )
                 total_pages = len(preview_images)
-                print(f"[Compare] Document has {total_pages} pages")
+                logger.info(f"Document has {total_pages} pages")
             except Exception:
                 is_pdf = False
                 preview_images = [Image.open(io.BytesIO(file_bytes))]
@@ -1359,11 +1355,11 @@ class OcrService:
                 compare_state.elapsed_seconds = round(time.time() - job_start, 1)
 
                 compare_state.phase = "health_check"
-                print(f"[Compare] Checking {provider} health before model: {model_name}")
+                logger.info(f"Checking {provider} health before model: {model_name}")
                 provider_ready = await self._wait_for_provider_ready(provider, max_wait=60)
                 if not provider_ready:
                     error_msg = f"{provider} nicht erreichbar - ueberspringe {model_name}"
-                    print(f"[Compare] {model_name} SKIPPED: provider not reachable")
+                    logger.warning(f"{model_name} SKIPPED: provider not reachable")
                     compare_state.results.append({
                         "model": model_name, "text": "", "chars": 0,
                         "duration_seconds": 0, "pages_processed": 0, "error": error_msg,
@@ -1375,11 +1371,11 @@ class OcrService:
                 render_dpi = model_params.get("render_dpi", 200)
 
                 compare_state.phase = "model_loading"
-                print(f"[Compare] Testing model: {model_name} (image: {optimal_image_size}px, DPI: {render_dpi}, ctx: {model_params['num_ctx']}, repeat_pen: {model_params['repeat_penalty']})")
+                logger.info(f"Testing model: {model_name} (image: {optimal_image_size}px, DPI: {render_dpi}, ctx: {model_params['num_ctx']}, repeat_pen: {model_params['repeat_penalty']})")
 
                 if is_pdf and render_dpi not in dpi_image_cache:
                     compare_state.phase = "convert"
-                    print(f"[Compare] Rendering PDF at {render_dpi} DPI for {model_name}")
+                    logger.info(f"Rendering PDF at {render_dpi} DPI for {model_name}")
                     dpi_images = await asyncio.get_running_loop().run_in_executor(
                         None, lambda dpi=render_dpi: convert_from_bytes(file_bytes, dpi=dpi)
                     )
@@ -1394,7 +1390,7 @@ class OcrService:
                     prepared_bytes = self._prepare_image(img, max_size=optimal_image_size)
                     debug_img = Image.open(io.BytesIO(prepared_bytes))
                     prep_w, prep_h = debug_img.size
-                    print(f"[Compare][DEBUG] {model_name} page {idx+1}: source={src_w}x{src_h}, prepared={prep_w}x{prep_h}, bytes={len(prepared_bytes)}, format={debug_img.format}")
+                    logger.debug(f"{model_name} page {idx+1}: source={src_w}x{src_h}, prepared={prep_w}x{prep_h}, bytes={len(prepared_bytes)}, format={debug_img.format}")
                     prepared_pages.append((idx, prepared_bytes))
 
                 model_start = time.time()
@@ -1412,13 +1408,13 @@ class OcrService:
                             page_num=page_idx + 1, total_pages=total_pages, timeout=300.0,
                         )
                         preview = page_text[:200].replace('\n', ' ') if page_text else "(empty)"
-                        print(f"[Compare][DEBUG] {model_name} page {page_idx+1} result: {len(page_text)} chars, preview: {preview}")
+                        logger.debug(f"{model_name} page {page_idx+1} result: {len(page_text)} chars, preview: {preview}")
                         page_texts.append(page_text)
                 except Exception as e:
                     error_msg = str(e)
                     error_type = type(e).__name__
                     logger.error(f"[Compare] Model {model_name} failed ({error_type}): {e}")
-                    print(f"[Compare] {model_name} FAILED ({error_type}): {e}")
+                    logger.error(f"{model_name} FAILED ({error_type}): {e}")
 
                 model_duration = time.time() - model_start
                 full_text = "\n\n".join(page_texts) if page_texts else ""
@@ -1431,19 +1427,19 @@ class OcrService:
                     "pages_processed": len(page_texts),
                     "error": error_msg,
                 })
-                print(f"[Compare] {model_name}: {len(full_text)} chars in {model_duration:.1f}s")
+                logger.info(f"{model_name}: {len(full_text)} chars in {model_duration:.1f}s")
 
                 compare_state.phase = "unloading"
                 compare_state.elapsed_seconds = round(time.time() - job_start, 1)
                 await self._unload_model_from_vram(model_name)
 
                 if error_msg:
-                    print("[Compare] Modell hatte Fehler, warte 5s auf Recovery...")
+                    logger.error("Modell hatte Fehler, warte 5s auf Recovery...")
                     await asyncio.sleep(5)
 
             compare_state.phase = "done"
             compare_state.elapsed_seconds = round(time.time() - job_start, 1)
-            print(f"[Compare] All {len(slots)} models done in {compare_state.elapsed_seconds}s")
+            logger.info(f"All {len(slots)} models done in {compare_state.elapsed_seconds}s")
 
         except Exception as e:
             compare_state.phase = "error"
@@ -1458,7 +1454,7 @@ class OcrService:
         from datetime import datetime
 
         logger.info("Processor started")
-        print("[OCR] Processor started")
+        logger.info("Processor started")
 
         _ocrfinish_tag = None
         _ocrpruefen_tag = None
@@ -1488,7 +1484,7 @@ class OcrService:
                     logger.info("Processor: Batch aktiv, ueberspringe diesen Zyklus")
                 else:
                     logger.info("Processor checking for new documents...")
-                    print(f"[OCR] Processor check at {datetime.now().isoformat()}")
+                    logger.info(f"Processor check at {datetime.now().isoformat()}")
 
                     should_run = True
                     try:
@@ -1517,7 +1513,7 @@ class OcrService:
 
             except Exception as e:
                 logger.error(f"Processor error: {e}")
-                print(f"[OCR] Processor error: {e}")
+                logger.info(f"Processor error: {e}")
 
             self.state.processor.running = False
             interval_min = self.state.processor.get("interval_minutes", 1)
@@ -1528,4 +1524,4 @@ class OcrService:
 
         self.state.processor.running = False
         logger.info("Processor stopped")
-        print("[OCR] Processor stopped")
+        logger.info("Processor stopped")
