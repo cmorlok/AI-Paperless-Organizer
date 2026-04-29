@@ -229,8 +229,9 @@ class SimilarityService:
         logger.info(f"[Similarity] Analyzing {len(items)} items, estimated tokens: {estimated_input_tokens}")
 
         token_warning = None
-        max_recommended = 8000
-        if estimated_input_tokens > max_recommended:
+        token_limit = await self.llm.get_token_limit(provider, model)
+        safe_limit = int(token_limit * 0.8)
+        if estimated_input_tokens > safe_limit:
             token_warning = f"Viele Items ({len(items)})! Geschätzte Tokens: ~{estimated_input_tokens}. Könnte das Limit überschreiten."
 
         logger.info("[Similarity] Sending request to LLM provider...")

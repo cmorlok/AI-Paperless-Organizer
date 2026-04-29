@@ -11,7 +11,7 @@ from app.services.similarity.protocol import SimilarityService
 from app.services.merge.protocol import MergeService
 from app.services.statistics.protocol import StatisticsService
 from app.services.llm.protocol import LLMService as LLMProviderService
-from app.models.settings_model import LLM_KEY_CLASSIFIER_PROVIDER
+from app.models.settings_model import LLM_KEY_CLASSIFIER_PROVIDER, LLM_KEY_CLASSIFIER_MODEL
 from app.routers.settings import get_setting
 from dishka.integrations.fastapi import inject
 from dishka import FromDishka
@@ -88,8 +88,9 @@ async def estimate_tags(
     estimated_tokens = estimated_chars // 4
     
     # Default token limit for batching decisions
-    token_limit = 8000
     provider = await get_setting(LLM_KEY_CLASSIFIER_PROVIDER, db) or ""
+    model = await get_setting(LLM_KEY_CLASSIFIER_MODEL, db) or ""
+    token_limit = await llm.get_token_limit(provider, model)
     is_cloud = not llm.is_local_provider(provider)
     safe_limit = int(token_limit * 0.8)
     needs_batching = estimated_tokens > safe_limit
