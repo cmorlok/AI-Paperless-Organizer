@@ -357,7 +357,7 @@ class LitellmService:
         **kwargs,
     ) -> list[list[float]]:
         """Generate embeddings via litellm.aembedding. No GPU lock needed."""
-        model_name = model if "/" in model else f"{provider}/{model}"
+        model_name = model if model.startswith(f"{provider}/") else f"{provider}/{model}"
         litellm_kwargs: dict = {"model": model_name, "input": input, "timeout": timeout, **kwargs}
         for k, v in (await self._resolve_credentials(provider)).items():
             litellm_kwargs.setdefault(k, v)
@@ -541,7 +541,7 @@ class LitellmService:
         stream: bool = False,
         **kwargs,
     ) -> dict:
-        model_name = model if "/" in model else f"{provider}/{model}"
+        model_name = model if model.startswith(f"{provider}/") else f"{provider}/{model}"
         litellm_kwargs: dict = {
             "model": model_name,
             "messages": messages,
@@ -720,7 +720,7 @@ class LitellmService:
 
         # 1. Try LiteLLM's model_info database first
         try:
-            model_name = model if "/" in model else f"{provider}/{model}"
+            model_name = model if model.startswith(f"{provider}/") else f"{provider}/{model}"
             model_info: Any = litellm.get_model_info(model=model_name)
             if model_info:
                 max_tokens: Optional[int] = model_info.get("max_input_tokens")
