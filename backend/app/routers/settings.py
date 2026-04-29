@@ -5,7 +5,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from app.database import get_db
 from app.models import PaperlessSettings, LLMProvider, CustomPrompt, IgnoredTag, AppSettings
-from app.models.auth_config import AuthConfig
 from app.models.settings_model import (
     LLM_KEY_CLASSIFIER_PROVIDER,
     LLM_KEY_CLASSIFIER_MODEL,
@@ -319,38 +318,8 @@ PROMPT_DISPLAY_NAMES = {
 @router.get("/prompts")
 async def get_prompts(db: AsyncSession = Depends(get_db)):
     """Get all custom prompts."""
-    result = await db.execute(select(CustomPrompt).order_by(CustomPrompt.entity_type))
-    prompts = result.scalars().all()
-    
-    # Get existing entity types
-    existing_types = {p.entity_type for p in prompts}
-    
-    # Add missing prompts from DEFAULT_PROMPTS
-    for entity_type, template in DEFAULT_PROMPTS.items():
-        if entity_type not in existing_types:
-            prompt = CustomPrompt(
-                entity_type=entity_type,
-                prompt_template=template,
-                is_active=True
-            )
-            db.add(prompt)
-    
-    # Commit if we added any
-    if len(existing_types) < len(DEFAULT_PROMPTS):
-        await db.commit()
-        result = await db.execute(select(CustomPrompt).order_by(CustomPrompt.entity_type))
-        prompts = result.scalars().all()
-    
-    return [
-        {
-            "id": p.id,
-            "entity_type": p.entity_type,
-            "display_name": PROMPT_DISPLAY_NAMES.get(p.entity_type, p.entity_type),
-            "prompt_template": p.prompt_template,
-            "is_active": p.is_active
-        }
-        for p in prompts
-    ]
+    from app.services.settings_service import get_prompts as _get
+    return await _get(db)
 
 
 @router.put("/prompts/{prompt_id}")
@@ -500,37 +469,8 @@ class AppSettingsSchema(BaseModel):
 @router.get("/app")
 async def get_app_settings(db: AsyncSession = Depends(get_db)):
     """Get application settings."""
-    result = await db.execute(select(AppSettings).where(AppSettings.id == 1))
-    settings = result.scalar_one_or_none()
-    
-    if not settings:
-        # Create default settings
-        settings = AppSettings(id=1)
-        db.add(settings)
-        await db.commit()
-        await db.refresh(settings)
-    
-    # Check key-value store for classifier_provider first (LLM-08)
-    kv_classifier_provider = await get_setting(LLM_KEY_CLASSIFIER_PROVIDER, db)
-    classifier_provider = kv_classifier_provider or ""
-    
-    # Get key-value settings for model fields (LLM-09)
-    kv_classifier_model = await get_setting(LLM_KEY_CLASSIFIER_MODEL, db)
-    kv_ocr_model = await get_setting(LLM_KEY_OCR_MODEL, db)
-
-    # AuthConfig is the source of truth for password_set (D-07 clean break)
-    auth_result = await db.execute(select(AuthConfig).where(AuthConfig.id == 1))
-    auth_config = auth_result.scalar_one_or_none()
-    password_set = bool(auth_config and auth_config.password_hash)
-    
-    return {
-        "password_set": password_set,
-        "show_debug_menu": settings.show_debug_menu,
-        "sidebar_compact": settings.sidebar_compact,
-        "classifier_provider": classifier_provider,
-        "classifier_model": kv_classifier_model or "",
-        "ocr_model": kv_ocr_model or "",
-    }
+    from app.services.settings_service import get_app_settings as _get
+    return await _get(db)
 
 
 @router.put("/app")
@@ -539,34 +479,15 @@ async def update_app_settings(
     db: AsyncSession = Depends(get_db)
 ):
     """Update application settings."""
-    result = await db.execute(select(AppSettings).where(AppSettings.id == 1))
-    settings = result.scalar_one_or_none()
-    
-    if not settings:
-        settings = AppSettings(id=1)
-        db.add(settings)
-    
-    if data.show_debug_menu is not None:
-        settings.show_debug_menu = data.show_debug_menu
-    
-    if data.sidebar_compact is not None:
-        settings.sidebar_compact = data.sidebar_compact
-
-    if data.classifier_provider is not None:
-        settings.classifier_provider = data.classifier_provider
-        # Also update the key-value store (LLM-08)
-        await set_setting(LLM_KEY_CLASSIFIER_PROVIDER, data.classifier_provider, "str", db)
-    
-    if data.classifier_model is not None:
-        # Store in key-value store (LLM-09)
-        await set_setting(LLM_KEY_CLASSIFIER_MODEL, data.classifier_model, "str", db)
-    
-    if data.ocr_model is not None:
-        # Store in key-value store (LLM-09)
-        await set_setting(LLM_KEY_OCR_MODEL, data.ocr_model, "str", db)
-    
-    await db.commit()
-    
+    from app.services.settings_service import update_app_settings as _update
+    await _update(
+        show_debug_menu=data.show_debug_menu,
+        sidebar_compact=data.sidebar_compact,
+        classifier_provider=data.classifier_provider,
+        classifier_model=data.classifier_model,
+        ocr_model=data.ocr_model,
+        db=db,
+    )
     return {"success": True}
 
 
