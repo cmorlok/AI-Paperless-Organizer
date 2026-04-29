@@ -4,6 +4,7 @@ from app.services.classifier.base_provider import BaseClassifierProvider, Classi
 from app.services.classifier.protocol import DocumentClassifierService
 from app.services.classifier.state import AutoClassifyState
 from app.services.classifier.auto_classify_loop import auto_classify_loop
+from app.services.classifier.prompts import FIELD_DEFAULTS
 
 __all__ = [
     "BaseClassifierProvider",
@@ -11,4 +12,5 @@ __all__ = [
     "DocumentClassifierService",
     "AutoClassifyState",
     "auto_classify_loop",
+    "FIELD_DEFAULTS",
 ]

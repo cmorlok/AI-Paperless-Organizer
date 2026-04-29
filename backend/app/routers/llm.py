@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Query
 from pydantic import BaseModel
 from typing import Optional
-from app.services.llm import LLMService as LLMProviderService
+from app.services.llm import LLMService
 from app.models.settings_model import LLM_KEY_CLASSIFIER_PROVIDER, LLM_KEY_CLASSIFIER_MODEL
 from app.routers.settings import get_setting
 from dishka.integrations.fastapi import inject
@@ -21,7 +21,7 @@ class TestPromptRequest(BaseModel):
 async def test_llm_connection(
     provider: Optional[str] = Query(None, description="Provider name to test (e.g. 'ollama')"),
     model: Optional[str] = Query(None, description="Model name to test (e.g. 'qwen2.5vl:7b')"),
-    llm_service: FromDishka[LLMProviderService] = None,
+    llm_service: FromDishka[LLMService] = None,
     db=None,
 ):
     """Test LLM provider connection. If provider/model given, tests that specific combo; otherwise tests active classifier provider."""
@@ -41,7 +41,7 @@ async def test_llm_connection(
 @inject
 async def test_prompt(
     request: TestPromptRequest,
-    llm_service: FromDishka[LLMProviderService] = None,
+    llm_service: FromDishka[LLMService] = None,
     db=None,
 ):
     """Test a prompt with the active LLM provider."""
@@ -61,7 +61,7 @@ async def test_prompt(
 @router.get("/status")
 @inject
 async def get_llm_status(
-    llm_service: FromDishka[LLMProviderService] = None,
+    llm_service: FromDishka[LLMService] = None,
 ) -> dict[str, dict]:
     """Get current LLM lock status for all local providers.
 

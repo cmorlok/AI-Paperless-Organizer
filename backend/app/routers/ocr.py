@@ -5,7 +5,6 @@ import json
 import logging
 import time
 import traceback
-from pathlib import Path
 from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
 from fastapi.responses import Response
 from pydantic import BaseModel
@@ -17,26 +16,26 @@ from dishka.integrations.fastapi import inject
 from dishka import FromDishka
 
 from app.services.paperless import PaperlessClient
-from app.services.ocr import OcrService
 from app.models.settings_model import LLM_KEY_CLASSIFIER_PROVIDER
 from app.routers.settings import get_setting
-from app.services.ocr.state import OcrState, DEFAULT_OCR_MODEL, TAG_OCR_REVIEW, TAG_OCR_FINISH, TAG_OCR_ERROR
-from app.services.ocr.service import (
+from app.services.ocr import (
+    OcrService,
+    OcrState,
+    OcrCompareState,
+    DEFAULT_OCR_MODEL,
+    TAG_OCR_REVIEW,
+    TAG_OCR_FINISH,
+    TAG_OCR_ERROR,
     load_review_queue,
     save_review_queue,
-)
-from app.services.ocr.ignore import (
     load_ocr_ignore_list,
     save_ocr_ignore_list,
-)
-from app.services.ocr.error import (
     load_ocr_error_list,
     save_ocr_error_list,
     load_ocr_error_counts,
     save_ocr_error_counts,
 )
-from app.services.llm import LLMService as LLMProviderService
-from app.services.ocr.state import OcrCompareState
+from app.services.llm import LLMService
 
 logger = logging.getLogger(__name__)
 
@@ -382,7 +381,7 @@ async def start_batch_ocr(
 @inject
 async def get_batch_status(
     state: FromDishka[OcrState] = None,
-    llm_service: FromDishka[LLMProviderService] = None,
+    llm_service: FromDishka[LLMService] = None,
 ):
     """Get current batch OCR job status, including page-level progress for current document."""
     current_doc = state.batch.current_document
@@ -962,7 +961,7 @@ async def start_compare(
     client: FromDishka[PaperlessClient] = None,
     service: FromDishka[OcrService] = None,
     compare_state: FromDishka[OcrCompareState] = None,
-    llm_service: FromDishka[LLMProviderService] = None,
+    llm_service: FromDishka[LLMService] = None,
 ):
     """Start OCR model comparison as background task."""
     if compare_state.running:
@@ -1015,7 +1014,7 @@ async def get_compare_status(
 @inject
 async def evaluate_ocr_results(
     request: OcrEvaluateRequest,
-    llm_service: FromDishka[LLMProviderService] = None,
+    llm_service: FromDishka[LLMService] = None,
     db: AsyncSession = Depends(get_db),
 ):
     """Send OCR comparison results to an external LLM for quality evaluation.

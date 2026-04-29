@@ -10,7 +10,7 @@ from app.services.paperless import PaperlessClient
 from app.services.similarity import SimilarityService
 from app.services.merge import MergeService
 from app.services.statistics import StatisticsService
-from app.services.llm import LLMService as LLMProviderService
+from app.services.llm import LLMService
 from app.models.settings_model import LLM_KEY_CLASSIFIER_PROVIDER, LLM_KEY_CLASSIFIER_MODEL
 from app.routers.settings import get_setting
 from dishka.integrations.fastapi import inject
@@ -44,7 +44,7 @@ async def list_tags(client: FromDishka[PaperlessClient] = None):
 async def estimate_tags(
     analysis_type: str = "nonsense",
     client: FromDishka[PaperlessClient] = None,
-    llm: FromDishka[LLMProviderService] = None,
+    llm: FromDishka[LLMService] = None,
     db: AsyncSession = Depends(get_db)
 ):
     """Estimate tokens needed for specific analysis type.

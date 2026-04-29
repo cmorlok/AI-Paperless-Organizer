@@ -22,7 +22,7 @@ from app.models.classifier import (
 )
 from app.models.settings_model import LLM_KEY_CLASSIFIER_MODEL
 from app.routers.settings import get_setting
-from app.services.llm import LLMService as LLMProviderService
+from app.services.llm import LLMService
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -178,7 +178,7 @@ async def update_config(
 @router.get("/prompt-defaults")
 async def get_prompt_defaults():
     """Return the default per-field prompt rules for display in the UI."""
-    from app.services.classifier.prompts import FIELD_DEFAULTS
+    from app.services.classifier import FIELD_DEFAULTS
     return FIELD_DEFAULTS
 
 
@@ -898,7 +898,7 @@ async def stop_auto_classify(
 @inject
 async def get_auto_classify_status(
     state: FromDishka[AutoClassifyState] = None,
-    llm_service: FromDishka[LLMProviderService] = None,
+    llm_service: FromDishka[LLMService] = None,
 ):
     """Get current status of the auto-classification job."""
     lock_status = llm_service.get_lock_status() if llm_service else {}

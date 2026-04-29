@@ -14,8 +14,7 @@ from app.models.settings_model import (
 from dishka.integrations.fastapi import inject
 from dishka import FromDishka
 
-from app.services.llm import LLMService
-from app.services.llm.service import PROVIDER_DISPLAY_NAMES
+from app.services.llm import LLMService, PROVIDER_DISPLAY_NAMES
 from app.prompts.default_prompts import DEFAULT_PROMPTS
 
 router = APIRouter()
