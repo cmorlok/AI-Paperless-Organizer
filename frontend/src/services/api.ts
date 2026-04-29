@@ -228,7 +228,7 @@ export const changePassword = (currentPassword: string, newPassword: string) =>
 export const getCorrespondents = () => fetchJson<any[]>('/correspondents/')
 
 export const estimateCorrespondents = () =>
-  fetchJson<{ items_info?: string; estimated_tokens: number; token_limit?: number; model?: string; recommended_batches: number; warning?: string }>('/correspondents/estimate')
+  fetchJson<{ items_info?: string; estimated_tokens: number; token_limit?: number; is_cloud?: boolean; recommended_batches: number; warning?: string }>('/correspondents/estimate')
 
 export const analyzeCorrespondents = (batchSize: number = 200) =>
   fetchJson<{ groups: any[]; stats?: any; error?: string }>('/correspondents/analyze', {
@@ -291,7 +291,7 @@ export const estimateTags = (analysisType: 'nonsense' | 'correspondent' | 'docty
     items_info: string
     estimated_tokens: number
     token_limit: number
-    model: string
+    is_cloud: boolean
     recommended_batches: number
     warning?: string
   }>(`/tags/estimate?analysis_type=${analysisType}`)
@@ -396,7 +396,7 @@ export const markTagGroupProcessed = (groupIndex: number) =>
 export const getDocumentTypes = () => fetchJson<any[]>('/document-types/')
 
 export const estimateDocumentTypes = () =>
-  fetchJson<{ items_info?: string; estimated_tokens: number; token_limit?: number; model?: string; recommended_batches: number; warning?: string }>('/document-types/estimate')
+  fetchJson<{ items_info?: string; estimated_tokens: number; token_limit?: number; is_cloud?: boolean; recommended_batches: number; warning?: string }>('/document-types/estimate')
 
 export const analyzeDocumentTypes = (batchSize: number = 200) =>
   fetchJson<{ groups: any[]; stats?: any; error?: string }>('/document-types/analyze', {

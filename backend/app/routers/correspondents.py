@@ -11,6 +11,8 @@ from app.services.similarity.protocol import SimilarityService
 from app.services.merge.protocol import MergeService
 from app.services.statistics.protocol import StatisticsService
 from app.services.llm.protocol import LLMService as LLMProviderService
+from app.models.settings_model import LLM_KEY_CLASSIFIER_PROVIDER
+from app.routers.settings import get_setting
 from dishka.integrations.fastapi import inject
 from dishka import FromDishka
 
@@ -49,7 +51,8 @@ async def list_correspondents(client: FromDishka[PaperlessClient] = None):
 @inject
 async def estimate_correspondents(
     client: FromDishka[PaperlessClient] = None,
-    llm: FromDishka[LLMProviderService] = None
+    llm: FromDishka[LLMProviderService] = None,
+    db: AsyncSession = Depends(get_db)
 ):
     """Estimate tokens needed for analysis."""
     correspondents = await client.get_correspondents_with_counts()
@@ -61,16 +64,17 @@ async def estimate_correspondents(
     
     # Default token limit for batching decisions
     token_limit = 8000
-    model_name = llm.model or "Nicht konfiguriert"
+    provider = await get_setting(LLM_KEY_CLASSIFIER_PROVIDER, db) or ""
+    is_cloud = not llm.is_local_provider(provider)
     safe_limit = int(token_limit * 0.8)
     needs_batching = estimated_tokens > safe_limit
     recommended_batches = max(1, (estimated_tokens + safe_limit - 1) // safe_limit) if needs_batching else 1
-    
+
     return {
         "items_info": f"{items_count} Korrespondenten",
         "estimated_tokens": estimated_tokens,
         "token_limit": token_limit,
-        "model": model_name,
+        "is_cloud": is_cloud,
         "recommended_batches": recommended_batches,
         "warning": f"~{estimated_tokens:,} Tokens > {safe_limit:,} Limit. Wird in {recommended_batches} Batches aufgeteilt." if needs_batching else None
     }

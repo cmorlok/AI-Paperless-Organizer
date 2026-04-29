@@ -471,7 +471,7 @@ class LitellmService:
 
     # ── Private helpers ────────────────────────────────────────────────────────
 
-    def _is_local_provider(self, provider: str) -> bool:
+    def is_local_provider(self, provider: str) -> bool:
         if not provider:
             return False
         provider_lower = provider.lower().split("/")[0]
@@ -578,7 +578,7 @@ class LitellmService:
 
     async def _execute_completion(self, provider: str, litellm_kwargs: dict):
         timeout = litellm_kwargs.get("timeout", 30.0)
-        if not self._is_local_provider(provider):
+        if not self.is_local_provider(provider):
             try:
                 return await litellm.acompletion(**litellm_kwargs)
             except Exception as e:
