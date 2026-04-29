@@ -549,7 +549,6 @@ export interface OcrStats {
   pages: number
   chars: number
   duration: number
-  server: string
   success?: boolean
 }
 

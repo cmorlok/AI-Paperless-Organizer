@@ -465,8 +465,6 @@ class OcrService:
             if raw_len != cleaned_len:
                 print(f"[OCR] Repetition cleanup: {raw_len} -> {cleaned_len} chars ({loop_ratio:.0%} removed)")
 
-            print(f"[OCR] WARNING: Token count estimation unavailable with complete_llm")
-
             return {
                 "_cleaned": text_content,
                 "_raw":     text_content,
@@ -474,10 +472,10 @@ class OcrService:
             }
 
         except Exception as e:
-            print(f"[OCR] Error with provider at {api_base}: {e}")
+            print(f"[OCR] Error during OCR request: {e}")
             return None
 
-    def save_stats(self, doc_id: int, duration: float, pages: int, chars: int, success: bool = True, model: str = "", server_url: str = ""):
+    def save_stats(self, doc_id: int, duration: float, pages: int, chars: int, success: bool = True, model: str = ""):
         """Save OCR statistics to JSON file."""
         from datetime import datetime
 
@@ -489,7 +487,6 @@ class OcrService:
             "pages": pages,
             "chars": chars,
             "model": model,
-            "server": server_url,
             "success": success
         }
 
@@ -901,13 +898,10 @@ class OcrService:
         try:
             provider = await self._get_provider()
             model = await self._get_model()
-            api_base = (await self.llm_service._resolve_credentials(provider)).get("api_base", "")
-
             connected = await self.llm_service.check_provider_health(provider)
             return {
                 "connected": connected,
                 "model": model,
-                "url": api_base,
             }
         except Exception as e:
             return {"connected": False, "error": str(e)}
@@ -922,10 +916,7 @@ class OcrService:
         """Apply OCR result to document and optionally set ocrfinish tag."""
         start_time = time.time()
 
-        # Fetch model and api_base for stats
         model = await self._get_model()
-        provider = await self._get_provider()
-        api_base = (await self.llm_service._resolve_credentials(provider)).get("api_base", "")
 
         await paperless_client.update_document(document_id, {"content": new_content})
 
@@ -951,7 +942,7 @@ class OcrService:
 
         duration = time.time() - start_time
         try:
-            self.save_stats(document_id, duration, 0, len(new_content), success=tag_success, model=model, server_url=api_base)
+            self.save_stats(document_id, duration, 0, len(new_content), success=tag_success, model=model)
         except Exception:
             pass
 
@@ -976,10 +967,7 @@ class OcrService:
         self.state.batch.mode = mode
         self.state.batch.paused = False
 
-        # Fetch provider config at runtime
-        provider = await self._get_provider()
         model = await self._get_model()
-        api_base = (await self.llm_service._resolve_credentials(provider)).get("api_base", "")
 
         try:
             ocrfinish_tag = await paperless_client.get_or_create_tag(TAG_OCR_FINISH)
@@ -1223,7 +1211,7 @@ class OcrService:
                                             self.state.batch.log.append(f"⚠️ {doc_title}: Tag-Update 2x fehlgeschlagen: {e}")
 
                             try:
-                                self.save_stats(doc_id, ocr_duration, ocr_pages, new_len, success=tag_success, model=model, server_url=api_base)
+                                self.save_stats(doc_id, ocr_duration, ocr_pages, new_len, success=tag_success, model=model)
                             except Exception:
                                 pass
 
@@ -1237,7 +1225,7 @@ class OcrService:
 
                 except Exception as e:
                     try:
-                        self.save_stats(doc_id, 0, 0, 0, success=False, model=model, server_url=api_base)
+                        self.save_stats(doc_id, 0, 0, 0, success=False, model=model)
                     except Exception:
                         pass
                     error_msg = f"❌ {doc_title}: Fehler - {str(e)}"
