@@ -52,3 +52,44 @@ class OcrService(Protocol):
     ) -> Dict[str, Any]: ...
 
     def get_stats(self) -> List[Dict[str, Any]]: ...
+
+    async def get_ocr_status(
+        self,
+        paperless_client: PaperlessClient,
+    ) -> Dict[str, Any]: ...
+
+    async def apply_review_item(
+        self,
+        document_id: int,
+        paperless_client: PaperlessClient,
+    ) -> Dict[str, Any]: ...
+
+    async def reset_all_review_items(
+        self,
+        paperless_client: PaperlessClient,
+    ) -> Dict[str, Any]: ...
+
+    async def keep_all_originals(
+        self,
+        paperless_client: PaperlessClient,
+    ) -> Dict[str, Any]: ...
+
+    async def add_to_ignore_list(
+        self,
+        document_id: int,
+        paperless_client: PaperlessClient,
+    ) -> Dict[str, Any]: ...
+
+    async def remove_from_error_list(
+        self,
+        document_id: int,
+        paperless_client: PaperlessClient,
+    ) -> Dict[str, Any]: ...
+
+    async def evaluate_ocr_results(
+        self,
+        document_title: str,
+        results: List[dict],
+        eval_provider: str,
+        eval_model: str | None = None,
+    ) -> Dict[str, Any]: ...

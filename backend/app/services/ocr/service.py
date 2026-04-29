@@ -38,6 +38,8 @@ from .error import (
     reset_ocr_error,
     load_ocr_error_list,
     save_ocr_error_list,
+    load_ocr_error_counts,
+    save_ocr_error_counts,
 )
 from .ignore import load_ocr_ignore_list, save_ocr_ignore_list, get_ocr_ignored_ids
 
@@ -891,6 +893,292 @@ class OcrService:
             }
         except Exception as e:
             return {"connected": False, "error": str(e)}
+
+    async def get_ocr_status(self, paperless_client) -> Dict[str, Any]:
+        """Get overall OCR status - total docs, finished docs, percentage."""
+        ocrfinish_tag = await paperless_client.get_or_create_tag(TAG_OCR_FINISH)
+        ocrfinish_id = ocrfinish_tag.get("id")
+
+        total_count = await paperless_client.get_document_count()
+        finished_count = await paperless_client.get_document_count(tag_id=ocrfinish_id) if ocrfinish_id else 0
+
+        percentage = round((finished_count / total_count * 100), 1) if total_count > 0 else 0
+        pending_count = total_count - finished_count
+
+        return {
+            "total_documents": total_count,
+            "finished_documents": finished_count,
+            "pending_documents": pending_count,
+            "percentage": percentage,
+            "ocrfinish_tag_id": ocrfinish_id,
+        }
+
+    async def apply_review_item(self, document_id: int, paperless_client) -> Dict[str, Any]:
+        """Apply review queue item: accept the new OCR text for a document."""
+        queue = load_review_queue()
+        item = next((q for q in queue if q["document_id"] == document_id), None)
+        if not item:
+            raise ValueError("Dokument nicht in Review Queue")
+
+        await self.apply_ocr_result(paperless_client, document_id, item["new_content"], True)
+
+        queue = [q for q in queue if q["document_id"] != document_id]
+        save_review_queue(queue)
+        return {"applied": True, "document_id": document_id}
+
+    async def reset_all_review_items(self, paperless_client) -> Dict[str, Any]:
+        """Reset all review queue items: remove ocrpruefen tag so batch OCR re-processes them."""
+        queue = load_review_queue()
+        if not queue:
+            return {"reset": 0, "errors": []}
+
+        ocrpruefen_tag = await paperless_client.get_or_create_tag(TAG_OCR_REVIEW)
+        ocrpruefen_id = ocrpruefen_tag.get("id")
+
+        errors = []
+        reset_count = 0
+        for item in queue:
+            doc_id = item["document_id"]
+            try:
+                if ocrpruefen_id:
+                    await paperless_client.bulk_update_documents(
+                        document_ids=[doc_id],
+                        remove_tags=[ocrpruefen_id]
+                    )
+                reset_count += 1
+            except Exception as e:
+                errors.append(f"Dok {doc_id}: {e}")
+
+        save_review_queue([])
+        return {"reset": reset_count, "errors": errors}
+
+    async def keep_all_originals(self, paperless_client) -> Dict[str, Any]:
+        """Keep all original contents: set ocrfinish on all review items without changing content."""
+        queue = load_review_queue()
+        if not queue:
+            return {"kept": 0, "errors": []}
+
+        ocrfinish_tag = await paperless_client.get_or_create_tag(TAG_OCR_FINISH)
+        ocrfinish_id = ocrfinish_tag.get("id")
+        ocrpruefen_tag = await paperless_client.get_or_create_tag(TAG_OCR_REVIEW)
+        ocrpruefen_id = ocrpruefen_tag.get("id")
+
+        errors = []
+        kept_count = 0
+        doc_ids = [item["document_id"] for item in queue]
+
+        for i in range(0, len(doc_ids), 25):
+            batch = doc_ids[i:i+25]
+            try:
+                add_t = [ocrfinish_id] if ocrfinish_id else []
+                rem_t = [ocrpruefen_id] if ocrpruefen_id else []
+                if add_t or rem_t:
+                    await paperless_client.bulk_update_documents(
+                        document_ids=batch,
+                        add_tags=add_t if add_t else None,
+                        remove_tags=rem_t if rem_t else None
+                    )
+                kept_count += len(batch)
+            except Exception as e:
+                errors.append(f"Batch {i//25+1}: {e}")
+
+        save_review_queue([])
+        return {"kept": kept_count, "errors": errors}
+
+    async def add_to_ignore_list(self, document_id: int, paperless_client) -> Dict[str, Any]:
+        """Add a document to the OCR ignore list."""
+        ignore_list = load_ocr_ignore_list()
+        if any(entry["document_id"] == document_id for entry in ignore_list):
+            return {"already_ignored": True, "document_id": document_id}
+
+        title = f"Dokument {document_id}"
+        try:
+            doc = await paperless_client.get_document(document_id)
+            if doc:
+                title = doc.get("title", title)
+        except Exception:
+            pass
+
+        ignore_list.append({
+            "document_id": document_id,
+            "title": title,
+            "reason": "Original besser als OCR",
+            "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S")
+        })
+        save_ocr_ignore_list(ignore_list)
+        return {"added": True, "document_id": document_id, "title": title}
+
+    async def remove_from_error_list(self, document_id: int, paperless_client) -> Dict[str, Any]:
+        """Remove a document from the error list and remove its ocrfehler tag."""
+        error_list = load_ocr_error_list()
+        new_list = [entry for entry in error_list if entry["document_id"] != document_id]
+        save_ocr_error_list(new_list)
+
+        counts = load_ocr_error_counts()
+        key = str(document_id)
+        if key in counts:
+            del counts[key]
+            save_ocr_error_counts(counts)
+
+        try:
+            tag = await paperless_client.get_or_create_tag(TAG_OCR_ERROR)
+            tag_id = tag.get("id")
+            if tag_id:
+                await paperless_client.bulk_update_documents(
+                    document_ids=[document_id],
+                    remove_tags=[tag_id]
+                )
+        except Exception as e:
+            logger.warning(f"Could not remove ocrfehler tag from {document_id}: {e}")
+
+        return {"removed": True, "document_id": document_id}
+
+    async def evaluate_ocr_results(
+        self,
+        document_title: str,
+        results: List[dict],
+        eval_provider: str,
+        eval_model: str | None = None,
+    ) -> Dict[str, Any]:
+        """Send OCR comparison results to an LLM for quality evaluation."""
+        model_sections = []
+        for i, r in enumerate(results):
+            model_name = r.get("model", f"Modell {i+1}")
+            text = r.get("text", "")
+            chars = r.get("chars", len(text))
+            duration = r.get("duration_seconds", 0)
+
+            if len(text) > 6000:
+                display_text = text[:4000] + "\n\n[... gekürzt ...]\n\n" + text[-1500:]
+            else:
+                display_text = text
+
+            model_sections.append(
+                f"=== VERSION {i+1}: {model_name} ===\n"
+                f"Zeichen: {chars} | Dauer: {duration}s\n"
+                f"--- TEXT START ---\n{display_text}\n--- TEXT END ---"
+            )
+
+        models_text = "\n\n".join(model_sections)
+
+        prompt = f"""Du bist ein erfahrener OCR-Qualitätsprüfer und Dokumentenanalyst. Du bewertest OCR-Ergebnisse für ein deutsches Dokumentenmanagementsystem (Paperless-ngx).
+
+DOKUMENT: "{document_title}"
+ANZAHL VERSIONEN: {len(results)}
+
+Folgende OCR-Versionen desselben Dokuments wurden von verschiedenen lokalen Vision-Modellen (Ollama) erstellt. Vergleiche sie gründlich.
+
+{models_text}
+
+BEWERTUNGSANLEITUNG:
+Du musst jede Version sorgfältig auf folgende Kriterien prüfen. Vergleiche die Versionen untereinander -- wenn mehrere Versionen den gleichen Wert haben, ist er wahrscheinlich korrekt. Abweichungen deuten auf Fehler hin.
+
+KRITISCHE FELDER (Fehler hier = sofortiger Punktabzug):
+- Namen (Vor-/Nachname): Auch ein einziger falscher Buchstabe ist ein Fehler
+- Datumsangaben: Falsches Jahr/Monat = KO-Kriterium (schlimmer als Tippfehler!)
+- IBAN/Kontonummern: Ziffern müssen exakt stimmen, Leerzeichen-Gruppierung egal
+- Geldbeträge: Müssen exakt stimmen
+
+WICHTIGE FELDER:
+- Adressen, Zählernummern, Referenznummern
+- Checkbox-Zustände (angekreuzt vs. leer)
+- Formularlogik (Felder richtig zugeordnet?)
+
+ALLGEMEINE QUALITÄT:
+- Vollständigkeit (fehlen Textblöcke/Absätze?)
+- Halluzinationen (hat das Modell Text erfunden der nicht im Original steht?)
+- Wiederholungen (Textblöcke die sich wiederholen)
+- Formatierung und Lesbarkeit
+
+PRAXISTAUGLICHKEIT:
+- Kann der Text automatisiert weiterverarbeitet werden?
+- Wie viel manuelle Nacharbeit wäre nötig?
+
+Antworte NUR mit validem JSON (kein Text davor/danach, keine Markdown-Codeblöcke):
+{{
+  "ranking": [
+    {{
+      "rank": 1,
+      "model": "<modellname>",
+      "overall_score": <0-100>,
+      "category_scores": {{
+        "names_persons": <0-10>,
+        "dates_periods": <0-10>,
+        "iban_banking": <0-10>,
+        "amounts_numbers": <0-10>,
+        "addresses": <0-10>,
+        "form_logic": <0-10>,
+        "completeness": <0-10>,
+        "formatting": <0-10>,
+        "no_hallucinations": <0-10>,
+        "automatizability": <0-10>
+      }},
+      "speed_seconds": <dauer>,
+      "strengths": ["Stärke 1", "Stärke 2"],
+      "weaknesses": ["Schwäche 1"],
+      "specific_errors": [
+        {{"field": "Name", "expected": "korrekt", "got": "was das Modell geschrieben hat", "severity": "critical"}},
+        {{"field": "IBAN", "expected": "DE12 3456...", "got": "DE12 3546...", "severity": "high"}}
+      ],
+      "verdict": "<1-2 Sätze Praxisurteil auf Deutsch>"
+    }}
+  ],
+  "best_quality": "<modellname mit bester Qualität>",
+  "best_speed": "<schnellstes Modell>",
+  "best_value": "<bestes Preis-Leistungs-Verhältnis (Qualität vs. Geschwindigkeit)>",
+  "recommendation": "<3-4 Sätze Empfehlung auf Deutsch: welches Modell für Produktion, welches Backup, welches nicht verwenden>",
+  "critical_finding": "<wichtigste Erkenntnis, z.B. 'Datumsfehler bei Modell X sind ein KO-Kriterium'>",
+  "cross_comparison": {{
+    "agreement": ["Felder wo alle Versionen übereinstimmen"],
+    "disagreement": ["Felder wo die Versionen sich widersprechen -- hier liegt wahrscheinlich mindestens ein Fehler"]
+  }}
+}}
+
+WICHTIG:
+- Severity-Stufen: "critical" (Daten, Namen, IBAN falsch), "high" (wichtige Felder), "medium" (Formatierung), "low" (kosmetisch)
+- Score 0-100: unter 50 = nicht verwendbar, 50-70 = bedingt brauchbar, 70-85 = gut, 85+ = sehr gut
+- Sei STRENG aber FAIR. Ein falsches Datum ist schlimmer als 5 Tippfehler.
+- Wenn du nicht sicher bist ob ein Wert richtig ist, vergleiche die Versionen untereinander.
+"""
+
+        used_model = eval_model or "gpt-4o"
+        logger.info("Evaluating OCR results", extra={"count": len(results), "provider": eval_provider, "model": used_model})
+
+        result = await self.llm_service.complete(
+            provider=eval_provider,
+            model=eval_model,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        cleaned = (result.content or "").strip()
+        if cleaned.startswith("```"):
+            lines = cleaned.split("\n")
+            lines = [line for line in lines if not line.strip().startswith("```")]
+            cleaned = "\n".join(lines)
+
+        try:
+            evaluation = json.loads(cleaned)
+        except json.JSONDecodeError:
+            import re
+            json_match = re.search(r'\{[\s\S]*\}', cleaned)
+            if json_match:
+                evaluation = json.loads(json_match.group())
+            else:
+                logger.error(f"Could not parse LLM response as JSON: {cleaned[:500]}")
+                return {
+                    "success": True,
+                    "raw_response": cleaned,
+                    "evaluation": None,
+                    "parse_error": "LLM-Antwort konnte nicht als JSON geparst werden",
+                }
+
+        logger.info("OCR evaluation complete", extra={"provider": eval_provider, "model": used_model})
+
+        return {
+            "success": True,
+            "evaluation": evaluation,
+            "provider": eval_provider,
+            "model": used_model,
+        }
 
     async def apply_ocr_result(
         self,
