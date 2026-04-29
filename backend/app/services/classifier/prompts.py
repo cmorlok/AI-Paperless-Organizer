@@ -283,3 +283,63 @@ Beispiel Korrektur: {{{{"storage_path_id": 11, "storage_path_reason": "Privat Ch
 Beispiel alles ok: {{{{}}}}
 
 Antworte NUR mit dem JSON."""
+
+
+# ── Local model recommendations (for UI) ─────────────────────────────────────
+
+THINKING_MODEL_PREFIXES = ("qwen3", "deepseek-r1", "qwq")
+
+LOCAL_RECOMMENDED_MODELS = {
+    "qwen2.5:3b": {
+        "text": "★ TOP-EMPFEHLUNG -- Schnell (~5-10s), praezises JSON, ideal fuer Klassifizierung",
+        "category": "standard", "speed": "schnell", "quality": "gut",
+    },
+    "qwen2.5:7b": {
+        "text": "★ BESTE QUALITAET -- Etwas langsamer, dafuer hoehere Trefferquote",
+        "category": "standard", "speed": "mittel", "quality": "sehr gut",
+    },
+    "gemma2:2b": {
+        "text": "Ultraschnell, kompakt -- Google-Modell, gut fuer einfache Dokumente",
+        "category": "standard", "speed": "sehr schnell", "quality": "befriedigend",
+    },
+    "llama3.2:3b": {
+        "text": "Schnell, kompakt -- gute Alternative zu qwen2.5:3b",
+        "category": "standard", "speed": "schnell", "quality": "gut",
+    },
+    "phi3:mini": {
+        "text": "Microsoft 3.8B -- stark bei strukturierten Aufgaben",
+        "category": "standard", "speed": "schnell", "quality": "gut",
+    },
+    "llama3.1:8b": {
+        "text": "Meta 8B -- solide, gute deutsche Sprachkenntnisse",
+        "category": "standard", "speed": "mittel", "quality": "gut",
+    },
+    "gemma2:9b": {
+        "text": "Google 9B -- praezise bei strukturiertem Output",
+        "category": "standard", "speed": "mittel", "quality": "sehr gut",
+    },
+    "mistral:7b": {
+        "text": "Mistral 7B -- gute europaeische Sprachunterstuetzung",
+        "category": "standard", "speed": "mittel", "quality": "gut",
+    },
+    "qwen2.5:14b": {
+        "text": "Premium-Qualitaet, braucht >10GB VRAM",
+        "category": "standard", "speed": "langsam", "quality": "exzellent",
+    },
+    "qwen3:4b": {
+        "text": "⚠ THINKING-Modell -- denkt nach (langsamer), aber JSON-Modus erzwungen",
+        "category": "thinking", "speed": "langsam", "quality": "gut",
+    },
+    "qwen3:8b": {
+        "text": "⚠ THINKING-Modell -- denkt nach (langsamer), aber JSON-Modus erzwungen",
+        "category": "thinking", "speed": "langsam", "quality": "sehr gut",
+    },
+    "qwen3.5:9b": {
+        "text": "⚠ THINKING-Modell -- denkt nach (deutlich langsamer, braucht mehr VRAM)",
+        "category": "thinking", "speed": "sehr langsam", "quality": "sehr gut",
+    },
+    "deepseek-r1:8b": {
+        "text": "⚠ THINKING-Modell -- Reasoning-fokussiert, langsam fuer Klassifizierung",
+        "category": "thinking", "speed": "sehr langsam", "quality": "gut",
+    },
+}

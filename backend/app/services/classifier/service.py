@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import json as _json
 import logging
 import re
+from collections import Counter
 from typing import Dict, Any, Optional, List
 from dataclasses import asdict
 
-from sqlalchemy import select
+from sqlalchemy import select, func as sa_func, case as sa_case
 
 from app.models.classifier import (
     ClassifierConfig, StoragePathProfile, CustomFieldMapping, ClassificationHistory,
@@ -111,6 +113,28 @@ def _clean_title(title: str, created_date: str = None) -> str:
     return cleaned
 
 
+# ── Custom field type prompts & validation ─────────────────────────────────────
+FIELD_TYPE_PROMPTS = {
+    "rechnungsnummer": "Extrahiere die Rechnungsnummer/Belegnummer. Suche nach 'Rechnungsnr', 'RE-', 'Invoice', 'Beleg-Nr' o.ae.",
+    "betrag": "Extrahiere den Gesamtbetrag (brutto inkl. MwSt) als Zahl. Punkt als Dezimaltrenner, kein Waehrungszeichen, kein Tausendertrennzeichen. Beispiel: 149.99 statt 149,99 EUR. Bei mehreren Betraegen den Gesamtbetrag (Summe/Total) nehmen.",
+    "gesamtbetrag": "Extrahiere den Gesamtbetrag (brutto inkl. MwSt) als Zahl. Punkt als Dezimaltrenner, kein Waehrungszeichen, kein Tausendertrennzeichen. Beispiel: 149.99 statt 149,99 EUR. Bei mehreren Betraegen den Gesamtbetrag (Summe/Total) nehmen.",
+    "iban": "Extrahiere die IBAN/Kontonummer des ABSENDERS/EMPFAENGERS (nicht die eigene!). Format: ohne Leerzeichen. Bei aelteren Dokumenten ggf. Kontonummer+BLZ.",
+    "kontonummer": "Extrahiere die IBAN/Kontonummer des ABSENDERS/EMPFAENGERS (nicht die eigene!). Format: ohne Leerzeichen. Bei aelteren Dokumenten ggf. Kontonummer+BLZ.",
+    "kundennummer": "Extrahiere die Kundennummer/Vertragsnummer. Suche nach 'Kundennr', 'Kd-Nr', 'Vertragsnr' o.ae.",
+    "steuernummer": "Extrahiere die Steuernummer oder USt-IdNr. Format: DE + 9 Ziffern (USt-ID) oder XX/XXX/XXXXX.",
+    "faelligkeitsdatum": "Extrahiere das Faelligkeitsdatum/Zahlungsziel. Format: YYYY-MM-DD. Suche nach 'zahlbar bis', 'faellig am'.",
+    "lieferscheinnummer": "Extrahiere die Lieferscheinnummer. Suche nach 'Lieferschein-Nr', 'LS-Nr', 'Delivery Note' o.ae.",
+    "bestellnummer": "Extrahiere die Bestellnummer. Suche nach 'Bestell-Nr', 'Order', 'Auftragsnr' o.ae.",
+}
+
+FIELD_TYPE_VALIDATION = {
+    "iban": r"^[A-Z]{2}\d{2}[A-Z0-9]{4}\d{7}([A-Z0-9]?){0,16}$",
+    "betrag": r"^\d+(\.\d{1,2})?$",
+    "gesamtbetrag": r"^\d+(\.\d{1,2})?$",
+    "faelligkeitsdatum": r"^\d{4}-\d{2}-\d{2}$",
+}
+
+
 class DocumentClassifierService:
     """Orchestrates document classification using the configured provider."""
 
@@ -158,6 +182,48 @@ class DocumentClassifierService:
             await db.commit()
             await db.refresh(config)
             return config
+
+    async def get_config_response(self, active_provider: str, active_model: str) -> Dict[str, Any]:
+        """Build full config response dict for the API."""
+        cfg = await self.get_config()
+        return {
+            "active_provider": active_provider,
+            "active_model": active_model,
+            "enable_title": cfg.enable_title,
+            "enable_tags": cfg.enable_tags,
+            "enable_correspondent": cfg.enable_correspondent,
+            "enable_document_type": cfg.enable_document_type,
+            "enable_storage_path": cfg.enable_storage_path,
+            "enable_created_date": cfg.enable_created_date,
+            "enable_custom_fields": cfg.enable_custom_fields,
+            "tag_behavior": cfg.tag_behavior,
+            "tags_min": cfg.tags_min or 1,
+            "tags_max": cfg.tags_max or 5,
+            "tags_keep_existing": cfg.tags_keep_existing if cfg.tags_keep_existing is not None else True,
+            "tags_ignore": cfg.tags_ignore or [],
+            "tags_protected": cfg.tags_protected or [],
+            "dates_ignore": cfg.dates_ignore or [],
+            "storage_path_behavior": cfg.storage_path_behavior or "always",
+            "storage_path_override_names": cfg.storage_path_override_names or ["Zuweisen"],
+            "correspondent_behavior": cfg.correspondent_behavior,
+            "review_mode": cfg.review_mode,
+            "batch_size": cfg.batch_size,
+            "prompt_title": cfg.prompt_title or "",
+            "prompt_tags": cfg.prompt_tags or "",
+            "prompt_correspondent": cfg.prompt_correspondent or "",
+            "prompt_document_type": cfg.prompt_document_type or "",
+            "prompt_date": cfg.prompt_date or "",
+            "system_prompt": cfg.system_prompt,
+            "excluded_tag_ids": cfg.excluded_tag_ids or [],
+            "excluded_correspondent_ids": cfg.excluded_correspondent_ids or [],
+            "excluded_document_type_ids": cfg.excluded_document_type_ids or [],
+            "correspondent_trim_prompt": bool(getattr(cfg, "correspondent_trim_prompt", False)),
+            "correspondent_strip_legal": bool(getattr(cfg, "correspondent_strip_legal", False)),
+            "correspondent_ignore": getattr(cfg, "correspondent_ignore", None) or [],
+            "auto_classify_enabled": bool(getattr(cfg, "auto_classify_enabled", False)),
+            "auto_classify_interval": getattr(cfg, "auto_classify_interval", 5) or 5,
+            "auto_classify_mode": getattr(cfg, "auto_classify_mode", "review") or "review",
+        }
 
     async def get_storage_profiles(self) -> List[StoragePathProfile]:
         if self.session_factory is None:
@@ -1174,3 +1240,648 @@ class DocumentClassifierService:
                 logger.info(f"Status tag '{tag_name}' (id={tag['id']}) added to doc {document_id}")
         except Exception as e:
             logger.warning(f"Could not add status tag '{tag_name}' to doc {document_id}: {e}")
+
+    # ── Extracted router business logic ────────────────────────────────────────
+
+    async def get_stats(self, client: PaperlessClient) -> Dict[str, Any]:
+        """Get classification statistics: how many done, open, costs, etc."""
+        if self.session_factory is None:
+            raise RuntimeError("No session_factory configured")
+
+        try:
+            total_docs = await client.get_document_count()
+        except Exception:
+            total_docs = 0
+
+        async with self.session_factory() as db:
+            history_q = await db.execute(
+                select(
+                    sa_func.count(ClassificationHistory.id).label("total"),
+                    sa_func.sum(sa_case((ClassificationHistory.status == "applied", 1), else_=0)).label("applied"),
+                    sa_func.sum(sa_case((ClassificationHistory.status == "error", 1), else_=0)).label("errors"),
+                    sa_func.sum(ClassificationHistory.tokens_input).label("total_tokens_in"),
+                    sa_func.sum(ClassificationHistory.tokens_output).label("total_tokens_out"),
+                    sa_func.sum(ClassificationHistory.cost_usd).label("total_cost"),
+                    sa_func.avg(ClassificationHistory.duration_seconds).label("avg_duration"),
+                )
+            )
+            row = history_q.first()
+
+            unique_q = await db.execute(
+                select(sa_func.count(sa_func.distinct(ClassificationHistory.document_id)))
+            )
+            unique_classified = unique_q.scalar() or 0
+
+            applied_unique_q = await db.execute(
+                select(sa_func.count(sa_func.distinct(ClassificationHistory.document_id))).where(
+                    ClassificationHistory.status == "applied"
+                )
+            )
+            applied_unique = applied_unique_q.scalar() or 0
+
+            provider_q = await db.execute(
+                select(
+                    ClassificationHistory.provider,
+                    ClassificationHistory.model,
+                    sa_func.count(ClassificationHistory.id).label("count"),
+                    sa_func.sum(ClassificationHistory.cost_usd).label("cost"),
+                    sa_func.avg(ClassificationHistory.duration_seconds).label("avg_duration"),
+                ).group_by(ClassificationHistory.provider, ClassificationHistory.model)
+            )
+            providers = [
+                {
+                    "provider": r.provider,
+                    "model": r.model,
+                    "count": r.count,
+                    "cost": round(float(r.cost or 0), 6),
+                    "avg_duration": round(float(r.avg_duration or 0), 1),
+                }
+                for r in provider_q.all()
+            ]
+
+            recent_q = await db.execute(
+                select(ClassificationHistory)
+                .order_by(ClassificationHistory.created_at.desc())
+                .limit(10)
+            )
+            recent = [
+                {
+                    "document_id": h.document_id,
+                    "document_title": h.document_title,
+                    "provider": h.provider,
+                    "model": h.model,
+                    "status": h.status,
+                    "cost_usd": h.cost_usd,
+                    "duration_seconds": h.duration_seconds,
+                    "created_at": str(h.created_at) if h.created_at else None,
+                }
+                for h in recent_q.scalars().all()
+            ]
+
+        return {
+            "total_documents_paperless": total_docs,
+            "unique_classified": unique_classified,
+            "unique_applied": applied_unique,
+            "remaining": max(0, total_docs - applied_unique),
+            "total_runs": row.total or 0,
+            "total_applied": int(row.applied or 0),
+            "total_errors": int(row.errors or 0),
+            "total_tokens_in": int(row.total_tokens_in or 0),
+            "total_tokens_out": int(row.total_tokens_out or 0),
+            "total_cost_usd": round(float(row.total_cost or 0), 6),
+            "avg_duration_seconds": round(float(row.avg_duration or 0), 1),
+            "by_provider": providers,
+            "recent": recent,
+        }
+
+    async def get_next_unclassified(
+        self, after_id: int, client: PaperlessClient,
+    ) -> Dict[str, Any]:
+        """Find the next document ID not yet applied/classified."""
+        if self.session_factory is None:
+            raise RuntimeError("No session_factory configured")
+
+        async with self.session_factory() as db:
+            applied_q = await db.execute(
+                select(ClassificationHistory.document_id).where(
+                    ClassificationHistory.status == "applied"
+                )
+            )
+            applied_ids: set = {row[0] for row in applied_q.all()}
+
+        BATCH = 50
+        page = 1
+        while True:
+            params = {"page_size": BATCH, "page": page, "ordering": "id"}
+            if after_id:
+                params["id__gt"] = after_id
+
+            result = await client._request("GET", "/documents/", params=params)
+            if not result:
+                break
+
+            docs = result.get("results", [])
+            for doc in docs:
+                doc_id = doc.get("id")
+                if doc_id and doc_id not in applied_ids:
+                    return {"found": True, "document_id": doc_id, "title": doc.get("title", "")}
+
+            if not result.get("next"):
+                break
+            page += 1
+
+        return {"found": False, "document_id": None, "title": ""}
+
+    async def get_storage_path_profiles_merged(
+        self, client: PaperlessClient,
+    ) -> List[Dict[str, Any]]:
+        """Get all storage paths merged with saved profiles."""
+        all_paths = await client.get_storage_paths(use_cache=True)
+        saved_profiles = await self.get_storage_profiles()
+        saved_by_id = {p.paperless_path_id: p for p in saved_profiles}
+
+        result = []
+        for path in all_paths:
+            path_id = path.get("id")
+            profile = saved_by_id.get(path_id)
+            result.append({
+                "id": profile.id if profile else None,
+                "paperless_path_id": path_id,
+                "paperless_path_name": path.get("name", ""),
+                "paperless_path_path": path.get("path", ""),
+                "enabled": profile.enabled if profile else True,
+                "person_name": profile.person_name if profile else "",
+                "path_type": profile.path_type if profile else "private",
+                "context_prompt": profile.context_prompt if profile else "",
+            })
+        return result
+
+    async def get_custom_field_mappings_merged(
+        self, client: PaperlessClient,
+    ) -> List[Dict[str, Any]]:
+        """Get all Paperless custom fields merged with saved mappings."""
+        all_fields = await client.get_custom_fields(use_cache=True)
+        saved_mappings = await self.get_custom_field_mappings()
+        saved_by_id = {m.paperless_field_id: m for m in saved_mappings}
+
+        result = []
+        for field in all_fields:
+            fid = field.get("id")
+            mapping = saved_by_id.get(fid)
+            field_type = field.get("data_type", "string")
+            auto_prompt = FIELD_TYPE_PROMPTS.get(field.get("name", "").lower(), "")
+
+            result.append({
+                "id": mapping.id if mapping else None,
+                "paperless_field_id": fid,
+                "paperless_field_name": field.get("name", ""),
+                "paperless_field_type": field_type,
+                "enabled": mapping.enabled if mapping else False,
+                "extraction_prompt": mapping.extraction_prompt if mapping and mapping.extraction_prompt else auto_prompt,
+                "example_values": mapping.example_values if mapping else "",
+                "validation_regex": mapping.validation_regex if mapping else FIELD_TYPE_VALIDATION.get(field.get("name", "").lower(), ""),
+                "ignore_values": mapping.ignore_values if mapping else "",
+            })
+        return result
+
+    async def get_history(self, limit: int = 50) -> List[Dict[str, Any]]:
+        """Get classification history including stored result_json for review."""
+        if self.session_factory is None:
+            return []
+        async with self.session_factory() as db:
+            result = await db.execute(
+                select(ClassificationHistory)
+                .order_by(ClassificationHistory.created_at.desc())
+                .limit(limit)
+            )
+            entries = result.scalars().all()
+            return [
+                {
+                    "id": e.id,
+                    "document_id": e.document_id,
+                    "document_title": e.document_title,
+                    "provider": e.provider,
+                    "model": e.model,
+                    "tokens_input": e.tokens_input,
+                    "tokens_output": e.tokens_output,
+                    "cost_usd": e.cost_usd,
+                    "duration_seconds": e.duration_seconds,
+                    "tool_calls_count": e.tool_calls_count,
+                    "status": e.status,
+                    "error_message": e.error_message,
+                    "created_at": e.created_at.isoformat() if e.created_at else None,
+                    "result_json": e.result_json,
+                }
+                for e in entries
+            ]
+
+    async def get_tag_stats(self) -> Dict[str, Any]:
+        """Aggregate tag usage statistics from all applied history entries."""
+        if self.session_factory is None:
+            return {"top_tags": [], "total_unique_tags": 0, "total_tag_assignments": 0, "total_new_tags_created": 0}
+        async with self.session_factory() as db:
+            q = await db.execute(
+                select(ClassificationHistory).where(
+                    ClassificationHistory.result_json.isnot(None)
+                )
+            )
+            entries = q.scalars().all()
+
+        tag_counts: dict = {}
+        tag_new_counts: dict = {}
+        tag_applied_counts: dict = {}
+
+        for e in entries:
+            rj = e.result_json
+            if isinstance(rj, str):
+                try:
+                    rj = _json.loads(rj)
+                except Exception:
+                    continue
+            if not isinstance(rj, dict):
+                continue
+
+            tags = rj.get("tags") or []
+            tags_new = rj.get("tags_new") or []
+
+            for tag in tags:
+                if not tag:
+                    continue
+                tag_counts[tag] = tag_counts.get(tag, 0) + 1
+                if e.status == "applied":
+                    tag_applied_counts[tag] = tag_applied_counts.get(tag, 0) + 1
+
+            for tag in tags_new:
+                if tag:
+                    tag_new_counts[tag] = tag_new_counts.get(tag, 0) + 1
+
+        sorted_tags = sorted(tag_counts.items(), key=lambda x: x[1], reverse=True)
+        return {
+            "top_tags": [
+                {
+                    "name": name,
+                    "count": count,
+                    "applied_count": tag_applied_counts.get(name, 0),
+                    "new_count": tag_new_counts.get(name, 0),
+                }
+                for name, count in sorted_tags[:40]
+            ],
+            "total_unique_tags": len(tag_counts),
+            "total_tag_assignments": sum(tag_counts.values()),
+            "total_new_tags_created": len(tag_new_counts),
+        }
+
+    async def get_review_queue(self) -> List[Dict[str, Any]]:
+        """Get all classification entries that need manual review."""
+        if self.session_factory is None:
+            return []
+        async with self.session_factory() as db:
+            result = await db.execute(
+                select(ClassificationHistory)
+                .where(ClassificationHistory.status == "review")
+                .order_by(ClassificationHistory.created_at.desc())
+            )
+            entries = result.scalars().all()
+            return [
+                {
+                    "id": e.id,
+                    "document_id": e.document_id,
+                    "document_title": e.document_title,
+                    "provider": e.provider,
+                    "model": e.model,
+                    "status": e.status,
+                    "error_message": e.error_message,
+                    "created_at": e.created_at.isoformat() if e.created_at else None,
+                    "result_json": e.result_json,
+                }
+                for e in entries
+            ]
+
+    async def approve_review(
+        self, entry_id: int, document_id: int, classification: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """Approve a review entry: apply classification and mark as applied."""
+        if self.session_factory is None:
+            raise RuntimeError("No session_factory configured")
+
+        result = await self.apply_classification(document_id, classification)
+
+        async with self.session_factory() as db:
+            q = await db.execute(
+                select(ClassificationHistory).where(ClassificationHistory.id == entry_id)
+            )
+            entry = q.scalars().first()
+            if not entry:
+                raise ValueError(f"Entry {entry_id} not found")
+            entry.status = "applied"
+            entry.error_message = ""
+            await db.commit()
+
+        return result
+
+    async def dismiss_review(self, entry_id: int) -> Dict[str, str]:
+        """Dismiss a review entry without applying."""
+        if self.session_factory is None:
+            raise RuntimeError("No session_factory configured")
+        async with self.session_factory() as db:
+            q = await db.execute(
+                select(ClassificationHistory).where(ClassificationHistory.id == entry_id)
+            )
+            entry = q.scalars().first()
+            if not entry:
+                raise ValueError(f"Entry {entry_id} not found")
+            entry.status = "rejected"
+            await db.commit()
+        return {"status": "dismissed"}
+
+    async def get_tag_ideas(self) -> List[Dict[str, Any]]:
+        """Get all history entries that have pending tag ideas."""
+        if self.session_factory is None:
+            return []
+        async with self.session_factory() as db:
+            result = await db.execute(
+                select(ClassificationHistory)
+                .where(ClassificationHistory.tag_ideas.isnot(None))
+                .order_by(ClassificationHistory.created_at.desc())
+            )
+            entries = result.scalars().all()
+
+        items = []
+        for e in entries:
+            ideas = e.tag_ideas
+            if not ideas or (isinstance(ideas, list) and len(ideas) == 0):
+                continue
+            if isinstance(ideas, str):
+                try:
+                    ideas = _json.loads(ideas)
+                except Exception:
+                    continue
+            if not ideas:
+                continue
+            items.append({
+                "id": e.id,
+                "document_id": e.document_id,
+                "document_title": e.document_title,
+                "provider": e.provider,
+                "model": e.model,
+                "status": e.status,
+                "tag_ideas": ideas,
+                "result_json": e.result_json,
+                "created_at": e.created_at.isoformat() if e.created_at else None,
+            })
+        return items
+
+    async def get_tag_ideas_stats(self) -> Dict[str, Any]:
+        """Aggregate stats: which new tags are suggested most frequently."""
+        if self.session_factory is None:
+            return {"total_ideas": 0, "unique_tags": 0, "documents_with_ideas": 0, "top_tags": []}
+        async with self.session_factory() as db:
+            result = await db.execute(
+                select(ClassificationHistory)
+                .where(ClassificationHistory.tag_ideas.isnot(None))
+            )
+            entries = result.scalars().all()
+
+        tag_counter: Counter = Counter()
+        tag_docs: dict = {}
+
+        for e in entries:
+            ideas = e.tag_ideas
+            if isinstance(ideas, str):
+                try:
+                    ideas = _json.loads(ideas)
+                except Exception:
+                    continue
+            if not ideas or not isinstance(ideas, list):
+                continue
+            for tag_name in ideas:
+                tag_counter[tag_name] += 1
+                if tag_name not in tag_docs:
+                    tag_docs[tag_name] = []
+                tag_docs[tag_name].append(e.document_id)
+
+        top_tags = [
+            {"name": name, "count": count, "document_ids": tag_docs.get(name, [])}
+            for name, count in tag_counter.most_common(50)
+        ]
+        return {
+            "total_ideas": sum(tag_counter.values()),
+            "unique_tags": len(tag_counter),
+            "documents_with_ideas": len([e for e in entries if e.tag_ideas and (isinstance(e.tag_ideas, list) and len(e.tag_ideas) > 0)]),
+            "top_tags": top_tags,
+        }
+
+    async def approve_tag_idea(
+        self, entry_id: int, tag_name: str, client: PaperlessClient,
+    ) -> Dict[str, Any]:
+        """Approve a single tag idea: create tag in Paperless and add to document."""
+        if self.session_factory is None:
+            raise RuntimeError("No session_factory configured")
+
+        async with self.session_factory() as db:
+            q = await db.execute(
+                select(ClassificationHistory).where(ClassificationHistory.id == entry_id)
+            )
+            entry = q.scalars().first()
+            if not entry:
+                raise ValueError(f"Entry {entry_id} not found")
+
+            tag = await client.get_or_create_tag(tag_name)
+            if not tag:
+                raise ValueError(f"Could not create tag '{tag_name}'")
+
+            doc = await client.get_document(entry.document_id)
+            if doc:
+                existing_tags = doc.get("tags", [])
+                if tag["id"] not in existing_tags:
+                    existing_tags.append(tag["id"])
+                    await client.update_document(entry.document_id, {"tags": existing_tags})
+                    logger.info(f"Tag idea approved: '{tag_name}' added to doc {entry.document_id}")
+
+            ideas = entry.tag_ideas
+            if isinstance(ideas, str):
+                try:
+                    ideas = _json.loads(ideas)
+                except Exception:
+                    ideas = []
+            if isinstance(ideas, list):
+                ideas = [t for t in ideas if t != tag_name]
+            entry.tag_ideas = ideas
+            await db.commit()
+
+        from app.services.cache import get_cache
+        await get_cache().clear("paperless:")
+
+        return {"status": "approved", "tag_name": tag_name, "remaining_ideas": ideas}
+
+    async def dismiss_tag_idea(
+        self, entry_id: int, tag_name: str,
+    ) -> Dict[str, Any]:
+        """Dismiss a single tag idea (remove from suggestions without creating)."""
+        if self.session_factory is None:
+            raise RuntimeError("No session_factory configured")
+
+        async with self.session_factory() as db:
+            q = await db.execute(
+                select(ClassificationHistory).where(ClassificationHistory.id == entry_id)
+            )
+            entry = q.scalars().first()
+            if not entry:
+                raise ValueError(f"Entry {entry_id} not found")
+
+            ideas = entry.tag_ideas
+            if isinstance(ideas, str):
+                try:
+                    ideas = _json.loads(ideas)
+                except Exception:
+                    ideas = []
+            if isinstance(ideas, list):
+                ideas = [t for t in ideas if t != tag_name]
+            entry.tag_ideas = ideas
+            await db.commit()
+
+        return {"status": "dismissed", "tag_name": tag_name, "remaining_ideas": ideas}
+
+    async def approve_all_tag_ideas(
+        self, entry_id: int, client: PaperlessClient,
+    ) -> Dict[str, Any]:
+        """Approve ALL tag ideas for a single document."""
+        if self.session_factory is None:
+            raise RuntimeError("No session_factory configured")
+
+        async with self.session_factory() as db:
+            q = await db.execute(
+                select(ClassificationHistory).where(ClassificationHistory.id == entry_id)
+            )
+            entry = q.scalars().first()
+            if not entry:
+                raise ValueError(f"Entry {entry_id} not found")
+
+            ideas = entry.tag_ideas
+            if isinstance(ideas, str):
+                try:
+                    ideas = _json.loads(ideas)
+                except Exception:
+                    ideas = []
+            if not ideas:
+                return {"status": "nothing_to_approve"}
+
+            doc = await client.get_document(entry.document_id)
+            existing_tags = doc.get("tags", []) if doc else []
+
+            approved = []
+            for tag_name in ideas:
+                tag = await client.get_or_create_tag(tag_name)
+                if tag and tag["id"] not in existing_tags:
+                    existing_tags.append(tag["id"])
+                    approved.append(tag_name)
+
+            if existing_tags and doc:
+                await client.update_document(entry.document_id, {"tags": existing_tags})
+
+            entry.tag_ideas = []
+            await db.commit()
+
+        from app.services.cache import get_cache
+        await get_cache().clear("paperless:")
+
+        logger.info(f"All tag ideas approved for doc {entry.document_id}: {approved}")
+        return {"status": "approved_all", "approved": approved}
+
+    async def bulk_approve_tag_idea(
+        self, tag_name: str, client: PaperlessClient,
+    ) -> Dict[str, Any]:
+        """Approve a specific tag across ALL documents that suggest it."""
+        if self.session_factory is None:
+            raise RuntimeError("No session_factory configured")
+
+        async with self.session_factory() as db:
+            q = await db.execute(
+                select(ClassificationHistory).where(
+                    ClassificationHistory.tag_ideas.isnot(None),
+                    sa_func.length(ClassificationHistory.tag_ideas) > 2,
+                )
+            )
+            entries = q.scalars().all()
+
+            affected = 0
+            tag_obj = await client.get_or_create_tag(tag_name)
+            if not tag_obj:
+                raise ValueError(f"Tag '{tag_name}' konnte nicht erstellt werden")
+
+            for entry in entries:
+                ideas = entry.tag_ideas
+                if isinstance(ideas, str):
+                    try:
+                        ideas = _json.loads(ideas)
+                    except Exception:
+                        continue
+                if tag_name not in ideas:
+                    continue
+
+                try:
+                    doc = await client.get_document(entry.document_id)
+                    if doc:
+                        existing_tags = doc.get("tags", [])
+                        if tag_obj["id"] not in existing_tags:
+                            existing_tags.append(tag_obj["id"])
+                            await client.update_document(entry.document_id, {"tags": existing_tags})
+                except Exception as e:
+                    logger.warning(f"Failed to add tag to doc {entry.document_id}: {e}")
+
+                ideas = [t for t in ideas if t != tag_name]
+                entry.tag_ideas = ideas
+                affected += 1
+
+            await db.commit()
+
+        from app.services.cache import get_cache
+        await get_cache().clear("paperless:")
+
+        logger.info(f"Bulk approved tag '{tag_name}' for {affected} documents")
+        return {"status": "bulk_approved", "tag_name": tag_name, "documents_affected": affected}
+
+    async def bulk_dismiss_tag_idea(self, tag_name: str) -> Dict[str, Any]:
+        """Dismiss a specific tag across ALL documents that suggest it."""
+        if self.session_factory is None:
+            raise RuntimeError("No session_factory configured")
+
+        async with self.session_factory() as db:
+            q = await db.execute(
+                select(ClassificationHistory).where(ClassificationHistory.tag_ideas != "[]")
+            )
+            entries = q.scalars().all()
+
+            affected = 0
+            for entry in entries:
+                ideas = entry.tag_ideas
+                if isinstance(ideas, str):
+                    try:
+                        ideas = _json.loads(ideas)
+                    except Exception:
+                        continue
+                if tag_name not in ideas:
+                    continue
+
+                ideas = [t for t in ideas if t != tag_name]
+                entry.tag_ideas = ideas
+                affected += 1
+
+            await db.commit()
+
+        logger.info(f"Bulk dismissed tag '{tag_name}' from {affected} documents")
+        return {"status": "bulk_dismissed", "tag_name": tag_name, "documents_affected": affected}
+
+    async def assign_existing_tag(
+        self, entry_id: int, tag_name: str, client: PaperlessClient,
+    ) -> Dict[str, Any]:
+        """Assign an existing Paperless tag to a document from the tag-ideas view."""
+        if self.session_factory is None:
+            raise RuntimeError("No session_factory configured")
+
+        async with self.session_factory() as db:
+            q = await db.execute(
+                select(ClassificationHistory).where(ClassificationHistory.id == entry_id)
+            )
+            entry = q.scalars().first()
+            if not entry:
+                raise ValueError(f"Entry {entry_id} not found")
+
+            tag = await client.get_or_create_tag(tag_name)
+            if not tag:
+                raise ValueError(f"Tag '{tag_name}' nicht gefunden")
+
+            doc = await client.get_document(entry.document_id)
+            if not doc:
+                raise ValueError(f"Dokument {entry.document_id} nicht gefunden")
+
+            existing_tags = doc.get("tags", [])
+            if tag["id"] not in existing_tags:
+                existing_tags.append(tag["id"])
+                await client.update_document(entry.document_id, {"tags": existing_tags})
+
+        from app.services.cache import get_cache
+        await get_cache().clear("paperless:")
+
+        logger.info(f"Assigned existing tag '{tag_name}' to doc {entry.document_id}")
+        return {"status": "assigned", "tag_name": tag_name, "document_id": entry.document_id}
