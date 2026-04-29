@@ -28,7 +28,7 @@ from app.services.classifier.litellm_provider import (
 )
 from app.services.classifier.tool_executor import ToolExecutor
 from app.services.classifier.state import AutoClassifyState
-from app.services.llm.service import LitellmService
+from app.services.llm.protocol import LLMService
 
 logger = logging.getLogger(__name__)
 
@@ -119,7 +119,7 @@ class DocumentClassifierService:
         paperless: Optional[PaperlessClient] = None,
         session_factory: Optional[Any] = None,
         state: Optional[AutoClassifyState] = None,
-        llm_service: Optional["LitellmService"] = None,
+        llm_service: Optional[LLMService] = None,
     ):
         self.paperless = paperless
         self.session_factory = session_factory

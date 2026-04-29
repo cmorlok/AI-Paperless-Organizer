@@ -5,14 +5,12 @@ import random
 import re
 import time
 import logging
-from typing import Dict, Any, List, Optional, TYPE_CHECKING
+from typing import Dict, Any, List, Optional
 
 from app.services.classifier.base_provider import (
     BaseClassifierProvider, ClassificationResult, DocumentContext,
 )
-
-if TYPE_CHECKING:
-    from app.services.llm.service import LitellmService
+from app.services.llm.protocol import LLMService
 from app.services.classifier.tool_definitions import (
     CLASSIFIER_TOOLS,
 )
@@ -107,7 +105,7 @@ class LitellmToolCallingProvider(BaseClassifierProvider):
         provider: str,
         tool_executor: Optional[ToolExecutor] = None,
         provider_label: str = "",
-        llm_service: "LitellmService | None" = None,
+        llm_service: LLMService | None = None,
     ):
         self.model = model
         self.provider = provider
@@ -378,7 +376,7 @@ class LitellmOllamaProvider(BaseClassifierProvider):
         model: str = "qwen2.5:7b",
         provider: str = "ollama",
         tool_executor: Optional[ToolExecutor] = None,
-        llm_service: "LitellmService | None" = None,
+        llm_service: LLMService | None = None,
     ):
         self.model = model
         self.provider = provider

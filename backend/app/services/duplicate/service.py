@@ -4,18 +4,16 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import List, TYPE_CHECKING
+from typing import List, Optional
 
 from app.database import async_session
-
-if TYPE_CHECKING:
-    from app.services.llm.service import LitellmService
+from app.services.llm.protocol import LLMService
 
 logger = logging.getLogger(__name__)
 
 
 class DuplicateService:
-    def __init__(self, session_factory, paperless_client, state=None, llm_service: "LitellmService | None" = None):
+    def __init__(self, session_factory, paperless_client, state=None, llm_service: Optional[LLMService] = None):
         self.session_factory = session_factory or async_session
         self.paperless_client = paperless_client
         self.state = state

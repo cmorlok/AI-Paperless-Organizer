@@ -9,7 +9,7 @@ from typing import Dict, List, Optional
 from sqlalchemy import select as sa_select, text
 
 from app.models.duplicates import DuplicateInvoiceCache
-from app.services.llm.service import LitellmService
+from app.services.llm.protocol import LLMService
 
 logger = logging.getLogger(__name__)
 
@@ -18,7 +18,7 @@ async def scan_invoices(
     paperless_client,
     session_factory,
     scan_state,
-    llm_service: "LitellmService",
+    llm_service: LLMService,
 ) -> List[Dict]:
     """Find duplicate invoices by extracting invoice number + amount via LLM.
 
@@ -152,7 +152,7 @@ async def _get_chat_provider_and_model(session_factory) -> tuple[str, str]:
     return provider, model
 
 
-async def _extract_invoice_data(content: str, model: str, provider: str, llm_service: "LitellmService") -> Optional[Dict]:
+async def _extract_invoice_data(content: str, model: str, provider: str, llm_service: LLMService) -> Optional[Dict]:
     """Extract invoice number and amount from document content via LiteLLM."""
     prompt = (
         "Extrahiere aus dem folgenden Dokumenttext die Rechnungsnummer und den Gesamtbetrag.\n"

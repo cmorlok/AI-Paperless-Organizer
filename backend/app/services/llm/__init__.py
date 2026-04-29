@@ -5,7 +5,6 @@ from app.services.llm.types import LLMResponse, ToolCall
 from app.services.llm.service import (
     PROVIDER_DISPLAY_NAMES,
     LLMLockTimeoutError,
-    LitellmService,
 )
 
 __all__ = [
@@ -14,5 +13,4 @@ __all__ = [
     "ToolCall",
     "PROVIDER_DISPLAY_NAMES",
     "LLMLockTimeoutError",
-    "LitellmService",
 ]
