@@ -16,7 +16,9 @@ from app.services.rag import RAGService
 from app.services.classifier import DocumentClassifierService, AutoClassifyState
 from app.services.duplicate import DuplicateService, DuplicateScanState
 from app.services.cloud_import import CloudImportService, CloudSyncState
+from app.services.config import ConfigService
 # Implementation imports use aliases to avoid name collision with Protocols
+from app.services.config.service import ConfigServiceImpl
 from app.services.llm.service import LitellmService
 from app.services.paperless.service import PaperlessClient as PaperlessClientImpl
 from app.services.similarity.service import SimilarityService as SimilarityServiceImpl
@@ -165,6 +167,13 @@ class AppProvider(Provider):
         state: CloudSyncState,
     ) -> CloudImportService:
         return CloudImportServiceImpl(session_factory=session_factory, state=state)
+
+    @provide(scope=Scope.APP)
+    def config_service(
+        self,
+        session_factory: async_sessionmaker,
+    ) -> ConfigService:
+        return ConfigServiceImpl(session_factory=session_factory)
 
 
 # Module-level container singleton
