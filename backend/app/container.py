@@ -18,6 +18,8 @@ from app.services.duplicate import DuplicateService, DuplicateScanState
 from app.services.cloud_import import CloudImportService, CloudSyncState
 from app.services.config import ConfigService
 from app.services.tags import TagsService
+from app.services.correspondents import CorrespondentsService
+from app.services.document_types import DocumentTypesService
 # Implementation imports use aliases to avoid name collision with Protocols
 from app.services.config.service import ConfigServiceImpl
 from app.services.llm.service import LitellmService
@@ -31,6 +33,8 @@ from app.services.classifier.service import DocumentClassifierService as Documen
 from app.services.duplicate.service import DuplicateService as DuplicateServiceImpl
 from app.services.cloud_import.service import CloudImportService as CloudImportServiceImpl
 from app.services.tags.service import TagsServiceImpl
+from app.services.correspondents.service import CorrespondentsServiceImpl
+from app.services.document_types.service import DocumentTypesServiceImpl
 
 
 class AppProvider(Provider):
@@ -187,6 +191,40 @@ class AppProvider(Provider):
         session_factory: async_sessionmaker,
     ) -> TagsService:
         return TagsServiceImpl(
+            paperless_client=paperless_client,
+            llm_service=llm_service,
+            config_service=config_service,
+            statistics_service=statistics_service,
+            session_factory=session_factory,
+        )
+
+    @provide(scope=Scope.APP)
+    def correspondents_service(
+        self,
+        paperless_client: PaperlessClient,
+        llm_service: LLMService,
+        config_service: ConfigService,
+        statistics_service: StatisticsService,
+        session_factory: async_sessionmaker,
+    ) -> CorrespondentsService:
+        return CorrespondentsServiceImpl(
+            paperless_client=paperless_client,
+            llm_service=llm_service,
+            config_service=config_service,
+            statistics_service=statistics_service,
+            session_factory=session_factory,
+        )
+
+    @provide(scope=Scope.APP)
+    def document_types_service(
+        self,
+        paperless_client: PaperlessClient,
+        llm_service: LLMService,
+        config_service: ConfigService,
+        statistics_service: StatisticsService,
+        session_factory: async_sessionmaker,
+    ) -> DocumentTypesService:
+        return DocumentTypesServiceImpl(
             paperless_client=paperless_client,
             llm_service=llm_service,
             config_service=config_service,

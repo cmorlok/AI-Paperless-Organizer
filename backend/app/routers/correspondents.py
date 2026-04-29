@@ -1,7 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from typing import List
-import asyncio
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, delete
 from app.database import get_db
@@ -9,10 +8,7 @@ from app.models import SavedAnalysis
 from app.services.paperless import PaperlessClient
 from app.services.similarity import SimilarityService
 from app.services.merge import MergeService
-from app.services.statistics import StatisticsService
-from app.services.llm import LLMService
-from app.models.settings_model import LLM_KEY_CLASSIFIER_PROVIDER, LLM_KEY_CLASSIFIER_MODEL
-from app.services.config import ConfigService
+from app.services.correspondents import CorrespondentsService
 from dishka.integrations.fastapi import inject
 from dishka import FromDishka
 
@@ -50,35 +46,10 @@ async def list_correspondents(client: FromDishka[PaperlessClient] = None):
 @router.get("/estimate")
 @inject
 async def estimate_correspondents(
-    client: FromDishka[PaperlessClient] = None,
-    llm: FromDishka[LLMService] = None,
-    config_svc: FromDishka[ConfigService] = None,
+    correspondents_service: FromDishka[CorrespondentsService] = None,
 ):
     """Estimate tokens needed for analysis."""
-    correspondents = await client.get_correspondents_with_counts()
-    items_count = len(correspondents)
-    # Rough estimate: prompt template ~500 chars + ~30 chars per item name
-    avg_name_length = sum(len(c.get("name", "")) for c in correspondents) / max(items_count, 1)
-    estimated_input = 500 + int(items_count * (avg_name_length + 10))
-    estimated_tokens = estimated_input // 4
-    
-    # Default token limit for batching decisions
-    provider = await config_svc.get(LLM_KEY_CLASSIFIER_PROVIDER) or ""
-    model = await config_svc.get(LLM_KEY_CLASSIFIER_MODEL) or ""
-    token_limit = await llm.get_token_limit(provider, model)
-    is_cloud = not llm.is_local_provider(provider)
-    safe_limit = int(token_limit * 0.8)
-    needs_batching = estimated_tokens > safe_limit
-    recommended_batches = max(1, (estimated_tokens + safe_limit - 1) // safe_limit) if needs_batching else 1
-
-    return {
-        "items_info": f"{items_count} Korrespondenten",
-        "estimated_tokens": estimated_tokens,
-        "token_limit": token_limit,
-        "is_cloud": is_cloud,
-        "recommended_batches": recommended_batches,
-        "warning": f"~{estimated_tokens:,} Tokens > {safe_limit:,} Limit. Wird in {recommended_batches} Batches aufgeteilt." if needs_batching else None
-    }
+    return await correspondents_service.estimate_correspondents()
 
 
 @router.get("/saved-analysis")
@@ -91,7 +62,7 @@ async def get_saved_analysis(db: AsyncSession = Depends(get_db)):
         .limit(1)
     )
     saved = result.scalar_one_or_none()
-    
+
     if saved:
         return {
             "exists": True,
@@ -114,10 +85,10 @@ async def load_saved_analysis(db: AsyncSession = Depends(get_db)):
         .limit(1)
     )
     saved = result.scalar_one_or_none()
-    
+
     if not saved:
         raise HTTPException(status_code=404, detail="Keine gespeicherte Analyse gefunden")
-    
+
     return {
         "groups": saved.groups,
         "stats": saved.stats,
@@ -147,14 +118,14 @@ async def mark_group_processed(
         .limit(1)
     )
     saved = result.scalar_one_or_none()
-    
+
     if saved:
         processed = saved.processed_groups or []
         if group_index not in processed:
             processed.append(group_index)
             saved.processed_groups = processed
             await db.commit()
-    
+
     return {"success": True}
 
 
@@ -163,32 +134,12 @@ async def mark_group_processed(
 async def analyze_correspondents(
     request: AnalyzeRequest = None,
     similarity_service: FromDishka[SimilarityService] = None,
-    db: AsyncSession = Depends(get_db)
+    correspondents_service: FromDishka[CorrespondentsService] = None,
 ):
     """Analyze correspondents and find similar groups using AI."""
     batch_size = request.batch_size if request else 200
     result = await similarity_service.find_similar_correspondents(batch_size=batch_size)
-    
-    # Save the analysis result
-    groups = result.get("groups", [])
-    stats = result.get("stats", {})
-    
-    # Delete old analysis
-    await db.execute(delete(SavedAnalysis).where(SavedAnalysis.entity_type == ENTITY_TYPE))
-    
-    # Save new analysis
-    saved = SavedAnalysis(
-        entity_type=ENTITY_TYPE,
-        analysis_type="similarity",
-        groups=groups,
-        stats=stats,
-        items_count=stats.get("items_count", 0),
-        groups_count=len(groups),
-        processed_groups=[]
-    )
-    db.add(saved)
-    await db.commit()
-    
+    await correspondents_service.save_similarity_analysis(result)
     return result
 
 
@@ -233,53 +184,10 @@ async def get_empty_correspondents(
 @router.delete("/empty")
 @inject
 async def delete_empty_correspondents(
-    client: FromDishka[PaperlessClient] = None,
-    stats_service: FromDishka[StatisticsService] = None
+    correspondents_service: FromDishka[CorrespondentsService] = None,
 ):
     """Delete all correspondents with 0 documents - PARALLEL for speed."""
-    correspondents = await client.get_correspondents_with_counts()
-    empty = [c for c in correspondents if c.get("document_count", 0) == 0]
-    
-    if not empty:
-        return {"deleted": 0, "total": 0, "errors": None}
-    
-    # Parallel deletion for speed (batch of 10 at a time)
-    errors = []
-    deleted = 0
-    batch_size = 10
-    
-    async def delete_one(item):
-        try:
-            await client.delete_correspondent(item["id"])
-            return True, None
-        except Exception as e:
-            return False, f"{item['name']}: {str(e)}"
-    
-    for i in range(0, len(empty), batch_size):
-        batch = empty[i:i + batch_size]
-        results = await asyncio.gather(*[delete_one(c) for c in batch])
-        for success, error in results:
-            if success:
-                deleted += 1
-            elif error:
-                errors.append(error)
-    
-    # Record statistics
-    if deleted > 0:
-        await stats_service.record_operation(
-            entity_type="correspondents",
-            operation="deleted",
-            items_affected=deleted,
-            documents_affected=0,
-            items_before=len(correspondents),
-            items_after=len(correspondents) - deleted
-        )
-    
-    return {
-        "deleted": deleted,
-        "total": len(empty),
-        "errors": errors if errors else None
-    }
+    return await correspondents_service.delete_empty_correspondents()
 
 
 @router.delete("/{correspondent_id}")
@@ -294,4 +202,3 @@ async def delete_correspondent(
         return {"success": True}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-
