@@ -263,6 +263,16 @@ class CloudImportService:
         folders.sort(key=lambda x: x["name"].lower())
         return folders
 
+    async def list_files(self, source) -> List[Dict]:
+        """List files on any source type (type-based dispatch)."""
+        if source.source_type == "webdav":
+            return await self.list_files_webdav(source)
+        elif source.source_type == "rclone":
+            return await self.list_files_rclone(source)
+        elif source.source_type == "local":
+            return await self.list_files_local(source)
+        return []
+
     async def list_folders(self, source, path: str = "/") -> List[Dict]:
         """List folders on any source type."""
         if source.source_type == "rclone":
@@ -437,3 +447,219 @@ class CloudImportService:
             return {"ok": True, "message": f"Verbindung OK – {len(files)} Dokument(e) gefunden", "files": len(files)}
         except Exception as e:
             return {"ok": False, "message": str(e), "files": 0}
+
+    # ── Extracted router business logic ─────────────────────────────────────
+
+    async def list_sources(self) -> list:
+        """List all cloud sources."""
+        from sqlalchemy import select
+        from app.models.cloud_import import CloudSource
+        async with self.session_factory() as db:
+            result = await db.execute(select(CloudSource).order_by(CloudSource.id))
+            sources = result.scalars().all()
+            return [self._source_to_dict(s) for s in sources]
+
+    async def create_source(self, data: dict) -> dict:
+        """Create a new cloud source."""
+        from app.models.cloud_import import CloudSource
+        async with self.session_factory() as db:
+            source = CloudSource(**data)
+            db.add(source)
+            await db.commit()
+            await db.refresh(source)
+            return self._source_to_dict(source)
+
+    async def update_source(self, source_id: int, data: dict) -> dict:
+        """Update a cloud source."""
+        from sqlalchemy import select
+        from app.models.cloud_import import CloudSource
+        async with self.session_factory() as db:
+            result = await db.execute(select(CloudSource).where(CloudSource.id == source_id))
+            source = result.scalar_one_or_none()
+            if not source:
+                raise ValueError("Quelle nicht gefunden")
+            for key, val in data.items():
+                setattr(source, key, val)
+            await db.commit()
+            await db.refresh(source)
+            return self._source_to_dict(source)
+
+    async def delete_source(self, source_id: int) -> None:
+        """Delete a cloud source."""
+        from sqlalchemy import select
+        from app.models.cloud_import import CloudSource
+        async with self.session_factory() as db:
+            result = await db.execute(select(CloudSource).where(CloudSource.id == source_id))
+            source = result.scalar_one_or_none()
+            if not source:
+                raise ValueError("Quelle nicht gefunden")
+            await db.delete(source)
+            await db.commit()
+
+    async def get_source(self, source_id: int):
+        """Get a cloud source by ID."""
+        from sqlalchemy import select
+        from app.models.cloud_import import CloudSource
+        async with self.session_factory() as db:
+            result = await db.execute(select(CloudSource).where(CloudSource.id == source_id))
+            return result.scalar_one_or_none()
+
+    async def sync_source_now(self, source_id: int, client) -> dict:
+        """Sync a source now and update timestamps."""
+        from datetime import datetime
+        from sqlalchemy import select
+        source = await self.get_source(source_id)
+        if not source:
+            raise ValueError("Quelle nicht gefunden")
+        async with self.session_factory() as db:
+            result = await db.execute(
+                select(source.__class__).where(source.__class__.id == source_id)
+            )
+            source = result.scalar_one_or_none()
+            if source is None:
+                return {"ok": False, "error": "Source not found"}
+            stats = await self.sync_source(source, client, db)
+            source.last_checked_at = datetime.utcnow()
+            source.last_status = "idle"
+            await db.commit()
+            return {"ok": True, **stats}
+
+    async def get_import_log(self, source_id: int = None, limit: int = 100) -> list:
+        """Get import log entries."""
+        from sqlalchemy import select, desc
+        from app.models.cloud_import import CloudImportLog
+        async with self.session_factory() as db:
+            query = select(CloudImportLog).order_by(desc(CloudImportLog.imported_at)).limit(limit)
+            if source_id is not None:
+                query = query.where(CloudImportLog.source_id == source_id)
+            result = await db.execute(query)
+            logs = result.scalars().all()
+            return [
+                {
+                    "id": log_entry.id,
+                    "source_id": log_entry.source_id,
+                    "source_name": log_entry.source_name,
+                    "file_name": log_entry.file_name,
+                    "file_path": log_entry.file_path,
+                    "paperless_doc_id": log_entry.paperless_doc_id,
+                    "import_status": log_entry.import_status,
+                    "error_message": log_entry.error_message,
+                    "imported_at": log_entry.imported_at.isoformat() if log_entry.imported_at else None,
+                }
+                for log_entry in logs
+            ]
+
+    async def clear_import_log(self, source_id: int = None) -> None:
+        """Clear import log entries."""
+        from sqlalchemy import delete
+        from app.models.cloud_import import CloudImportLog
+        async with self.session_factory() as db:
+            query = delete(CloudImportLog)
+            if source_id is not None:
+                query = query.where(CloudImportLog.source_id == source_id)
+            await db.execute(query)
+            await db.commit()
+
+    async def persist_cloud_sync_enabled(self, enabled: bool, config_svc) -> None:
+        """Persist cloud_sync_enabled flag to AppSettings."""
+        await config_svc.set(
+            "cloud_sync_enabled",
+            "true" if enabled else "false",
+            "bool",
+        )
+
+    async def start_sync_daemon(self, config_svc) -> dict:
+        """Start the cloud sync daemon."""
+        from app.services.cloud_import.sync_loop import cloud_sync_loop
+        from app.container import container as di_container
+        if self._sync_state.enabled:
+            return {"status": "already_running"}
+        self._sync_state.enabled = True
+        self._sync_state.files_imported_session = 0
+        self._sync_state.errors_session = 0
+        self._sync_state.task = asyncio.get_running_loop().create_task(cloud_sync_loop(di_container))
+        logger.info("Cloud sync daemon gestartet")
+        try:
+            await self.persist_cloud_sync_enabled(True, config_svc)
+        except Exception as e:
+            logger.warning(f"Could not persist cloud_sync_enabled to KV: {e}")
+        return {"status": "started"}
+
+    async def stop_sync_daemon(self, config_svc) -> dict:
+        """Stop the cloud sync daemon."""
+        self._sync_state.enabled = False
+        task = self._sync_state.task
+        if task and not task.done():
+            task.cancel()
+        self._sync_state.running = False
+        logger.info("Cloud sync daemon gestoppt")
+        try:
+            await self.persist_cloud_sync_enabled(False, config_svc)
+        except Exception as e:
+            logger.warning(f"Could not persist cloud_sync_enabled to KV: {e}")
+        return {"status": "stopped"}
+
+    def get_sync_status_dict(self) -> dict:
+        """Get sync daemon status."""
+        return {
+            "enabled": self._sync_state.enabled,
+            "running": self._sync_state.running,
+            "current_source_name": self._sync_state.current_source_name,
+            "current_file": self._sync_state.current_file,
+            "last_run": self._sync_state.last_run,
+            "files_imported_session": self._sync_state.files_imported_session,
+            "errors_session": self._sync_state.errors_session,
+        }
+
+    async def get_paperless_tags(self, client) -> list:
+        """Get Paperless tags for dropdown."""
+        try:
+            tags = await client.get_tags(use_cache=False)
+            return [{"id": t["id"], "name": t["name"]} for t in tags]
+        except Exception:
+            return []
+
+    async def get_paperless_correspondents(self, client) -> list:
+        """Get Paperless correspondents for dropdown."""
+        try:
+            corrs = await client.get_correspondents(use_cache=False)
+            return [{"id": c["id"], "name": c["name"]} for c in corrs]
+        except Exception:
+            return []
+
+    async def get_paperless_document_types(self, client) -> list:
+        """Get Paperless document types for dropdown."""
+        try:
+            types = await client.get_document_types(use_cache=False)
+            return [{"id": t["id"], "name": t["name"]} for t in types]
+        except Exception:
+            return []
+
+    @staticmethod
+    def _source_to_dict(s) -> dict:
+        """Convert CloudSource model to dict."""
+        return {
+            "id": s.id,
+            "name": s.name,
+            "source_type": s.source_type,
+            "enabled": s.enabled,
+            "poll_interval_minutes": s.poll_interval_minutes,
+            "webdav_url": s.webdav_url,
+            "webdav_username": s.webdav_username,
+            "webdav_password": "***" if s.webdav_password else "",
+            "webdav_path": s.webdav_path,
+            "rclone_remote": s.rclone_remote,
+            "rclone_path": s.rclone_path,
+            "rclone_config": s.rclone_config,
+            "local_path": s.local_path,
+            "filename_prefix": s.filename_prefix,
+            "paperless_tag_ids": s.paperless_tag_ids,
+            "paperless_correspondent_id": s.paperless_correspondent_id,
+            "paperless_document_type_id": s.paperless_document_type_id,
+            "after_import_action": s.after_import_action,
+            "last_checked_at": s.last_checked_at.isoformat() if s.last_checked_at else None,
+            "last_status": s.last_status,
+            "last_error": s.last_error,
+            "files_imported": s.files_imported,
+            "created_at": s.created_at.isoformat() if s.created_at else None,
+        }

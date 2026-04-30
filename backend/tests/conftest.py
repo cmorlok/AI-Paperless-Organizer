@@ -6,6 +6,9 @@ from fastapi.testclient import TestClient
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
 from app.database import Base
 
+# Ensure all models are imported so Base.metadata.create_all includes them
+import app.models.auth_config  # noqa: F401
+
 
 @pytest_asyncio.fixture
 async def test_engine():
@@ -32,10 +35,25 @@ async def auth_app(test_session_factory, monkeypatch):
 
     from app.routers.auth import router as auth_router
     from app.services.auth.middleware import SessionAuthMiddleware
+    from app.services.auth import AuthService, AuthServiceImpl
+    from dishka import Provider, Scope, provide, make_async_container
+    from dishka.integrations.fastapi import setup_dishka
+
+    # Create a test provider for AuthService
+    class TestAuthProvider(Provider):
+        @provide(scope=Scope.APP)
+        def auth_service(self) -> AuthService:
+            return AuthServiceImpl(session_factory=test_session_factory)
+
+    # Create Dishka container with test provider
+    test_container = make_async_container(TestAuthProvider())
 
     app = FastAPI()
     app.add_middleware(SessionAuthMiddleware)
     app.include_router(auth_router, prefix="/api/auth")
+
+    # Setup Dishka
+    setup_dishka(test_container, app)
 
     # Dummy public + protected routes for middleware tests
     @app.get("/api/settings/app")
@@ -51,6 +69,9 @@ async def auth_app(test_session_factory, monkeypatch):
         return {"status": "healthy"}
 
     yield app
+
+    # Cleanup
+    await test_container.close()
 
 
 @pytest.fixture

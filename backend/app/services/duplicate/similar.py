@@ -4,7 +4,7 @@ import asyncio
 import logging
 import os
 from collections import defaultdict
-from typing import Dict, List, Set, Tuple
+from typing import Any, Dict, List, Set, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -62,14 +62,15 @@ async def scan_similar(
 
     # Build metadata lookup
     doc_meta: Dict[int, Dict] = {}
-    for i, meta in enumerate(metadatas):
-        doc_id = meta.get("document_id")
-        if doc_id is not None:
-            doc_meta[int(doc_id)] = {
-                "id": int(doc_id),
-                "title": meta.get("title", ""),
-                "chunk_id": ids[i],
-            }
+    if metadatas:
+        for i, meta in enumerate(metadatas):
+            doc_id = meta.get("document_id") if meta else None
+            if doc_id is not None:
+                doc_meta[int(str(doc_id))] = {
+                    "id": int(str(doc_id)),
+                    "title": str(meta.get("title", "")) if meta else "",
+                    "chunk_id": ids[i],
+                }
 
     # Batch query: process in chunks of 100 to avoid memory issues
     batch_size = 100
@@ -77,33 +78,38 @@ async def scan_similar(
     for batch_start in range(0, total, batch_size):
         batch_end = min(batch_start + batch_size, total)
         batch_embeddings = list(embeddings[batch_start:batch_end])
-        batch_metadatas_slice = metadatas[batch_start:batch_end]
+        batch_metadatas_slice = list(metadatas[batch_start:batch_end]) if metadatas else []
 
         scan_state.progress = batch_end
 
         results = collection.query(
-            query_embeddings=batch_embeddings,
+            query_embeddings=list[Any](batch_embeddings),
             n_results=min(6, len(ids)),
         )
 
         if not results or not results.get("ids"):
             continue
 
+        result_ids: list = results.get("ids") or []
+        result_distances: list = results.get("distances") or []
+        result_metas: list | None = results.get("metadatas")
+
         for i, (result_ids_row, distances_row) in enumerate(
-            zip(results["ids"], results.get("distances", []))
+            zip(result_ids, result_distances)
         ):
-            doc_id_a = batch_metadatas_slice[i].get("document_id")
+            meta_item = batch_metadatas_slice[i] if i < len(batch_metadatas_slice) else None
+            doc_id_a = meta_item.get("document_id") if meta_item else None
             if doc_id_a is None:
                 continue
-            doc_id_a = int(doc_id_a)
+            doc_id_a = int(str(doc_id_a))
 
-            result_metas_row = results["metadatas"][i] if results.get("metadatas") else []
+            result_metas_row = result_metas[i] if result_metas and i < len(result_metas) else []
 
             for j, (rid, dist) in enumerate(zip(result_ids_row, distances_row)):
-                doc_id_b = result_metas_row[j].get("document_id") if j < len(result_metas_row) else None
+                doc_id_b = result_metas_row[j].get("document_id") if j < len(result_metas_row) and result_metas_row[j] else None
                 if doc_id_b is None:
                     continue
-                doc_id_b = int(doc_id_b)
+                doc_id_b = int(str(doc_id_b))
 
                 if doc_id_a == doc_id_b:
                     continue

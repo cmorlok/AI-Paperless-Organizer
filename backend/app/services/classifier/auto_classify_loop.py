@@ -43,6 +43,7 @@ async def _run_classification_cycle(state: AutoClassifyState, container: AsyncCo
 
     state.last_run = time.strftime("%Y-%m-%dT%H:%M:%S")
     state.running = False
+    interval = 5  # default minutes between classification cycles
 
     async with container() as ctx:
         client: PaperlessClient = await ctx.get(PaperlessClient)
@@ -54,8 +55,9 @@ async def _run_classification_cycle(state: AutoClassifyState, container: AsyncCo
             interval = getattr(config, "auto_classify_interval", 5) or 5
 
             classified_ids: set = set()
-            if service.session_factory is not None:
-                async with service.session_factory() as db_sess:
+            session_factory = getattr(service, "session_factory", None)
+            if session_factory is not None:
+                async with session_factory() as db_sess:
                     applied_q = await db_sess.execute(
                         select(ClassificationHistory.document_id).where(
                             ClassificationHistory.status.in_(["applied", "review", "pending"])
@@ -65,8 +67,9 @@ async def _run_classification_cycle(state: AutoClassifyState, container: AsyncCo
 
             found_any = False
             page = 1
+            interval = 5  # default
             while state.enabled:
-                result = await client._request(
+                result = await getattr(client, "_request")(
                     "GET", "/documents/",
                     params={"page_size": 50, "page": page, "ordering": "id"},
                 )

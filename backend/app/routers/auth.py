@@ -9,22 +9,12 @@ from __future__ import annotations
 
 import os
 
-from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from fastapi import APIRouter, HTTPException, Request, Response
 from pydantic import BaseModel, Field
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
+from dishka.integrations.fastapi import inject
+from dishka import FromDishka
 
-from app.database import get_db
-from app.models.auth_config import AuthConfig
-from app.services.auth import (
-    COOKIE_NAME,
-    create_session,
-    hash_password,
-    is_auth_disabled,
-    is_session_valid,
-    revoke_session,
-    verify_password,
-)
+from app.services.auth import AuthService, COOKIE_NAME
 
 router = APIRouter()
 
@@ -53,26 +43,16 @@ def _set_session_cookie(response: Response, token: str) -> None:
     )
 
 
-async def _get_or_create_auth_config(db: AsyncSession) -> AuthConfig:
-    result = await db.execute(select(AuthConfig).where(AuthConfig.id == 1))
-    config = result.scalar_one_or_none()
-    if config is None:
-        config = AuthConfig(id=1, password_hash="")
-        db.add(config)
-        await db.commit()
-        await db.refresh(config)
-    return config
-
-
 @router.get("/status")
-async def auth_status(request: Request, db: AsyncSession = Depends(get_db)):
+@inject
+async def auth_status(request: Request, service: FromDishka[AuthService] = None):
     """Public: returns {authenticated: bool, requires_setup: bool, auth_disabled: bool}."""
-    config = await _get_or_create_auth_config(db)
+    assert service is not None
+    config = await service.get_or_create_auth_config()
     token = request.cookies.get(COOKIE_NAME)
-    authenticated = is_session_valid(token)
-    auth_disabled = is_auth_disabled()
-    # When auth is disabled, setup is never required.
-    requires_setup = not auth_disabled and not config.password_hash
+    authenticated = service.is_session_valid(token)
+    auth_disabled = service.is_auth_disabled()
+    requires_setup = not auth_disabled and not config.get("password_hash")
     return {
         "authenticated": authenticated,
         "requires_setup": requires_setup,
@@ -81,62 +61,64 @@ async def auth_status(request: Request, db: AsyncSession = Depends(get_db)):
 
 
 @router.post("/login")
-async def login(data: LoginSchema, response: Response, db: AsyncSession = Depends(get_db)):
-    config = await _get_or_create_auth_config(db)
-    if not config.password_hash:
+@inject
+async def login(data: LoginSchema, response: Response, service: FromDishka[AuthService] = None):
+    assert service is not None
+    config = await service.get_or_create_auth_config()
+    if not config.get("password_hash"):
         raise HTTPException(
             status_code=400,
             detail="Kein Passwort konfiguriert. Führen Sie zuerst die Einrichtung aus.",
         )
 
-    ok = await verify_password(data.password, config.password_hash)
+    ok = await service.validate_password(data.password)
     if not ok:
         raise HTTPException(status_code=401, detail="Falsches Passwort")
 
-    token = create_session()
+    token = service.create_session()
     _set_session_cookie(response, token)
     return {"authenticated": True}
 
 
 @router.post("/logout")
-async def logout(request: Request, response: Response):
+@inject
+async def logout(request: Request, response: Response, service: FromDishka[AuthService] = None):
+    assert service is not None
     token = request.cookies.get(COOKIE_NAME)
     if token:
-        revoke_session(token)
+        service.revoke_session(token)
     response.delete_cookie(COOKIE_NAME, path="/")
     return {"success": True}
 
 
 @router.post("/setup")
-async def setup(data: SetupSchema, response: Response, db: AsyncSession = Depends(get_db)):
+@inject
+async def setup(data: SetupSchema, response: Response, service: FromDishka[AuthService] = None):
     """First-time setup: create admin password. Idempotent guard: rejects if password already set."""
-    config = await _get_or_create_auth_config(db)
-    if config.password_hash:
+    assert service is not None
+    config = await service.get_or_create_auth_config()
+    if config.get("password_hash"):
         raise HTTPException(status_code=409, detail="Passwort bereits eingerichtet.")
 
-    config.password_hash = await hash_password(data.password)
-    await db.commit()
+    await service.set_password(data.password)
     return {"success": True}
 
 
 @router.post("/change-password")
+@inject
 async def change_password(
     data: ChangePasswordSchema,
     request: Request,
-    db: AsyncSession = Depends(get_db),
+    service: FromDishka[AuthService] = None,
 ):
-    """Change password: requires existing session + current password verification.
-
-    Note: session validity is enforced by SessionAuthMiddleware; no redundant check here.
-    """
-    config = await _get_or_create_auth_config(db)
-    if not config.password_hash:
+    """Change password: requires existing session + current password verification."""
+    assert service is not None
+    config = await service.get_or_create_auth_config()
+    if not config.get("password_hash"):
         raise HTTPException(status_code=400, detail="Kein Passwort konfiguriert.")
 
-    ok = await verify_password(data.current_password, config.password_hash)
+    ok = await service.change_password(data.current_password, data.new_password)
     if not ok:
         raise HTTPException(status_code=401, detail="Aktuelles Passwort ist falsch.")
 
-    config.password_hash = await hash_password(data.new_password)
-    await db.commit()
     return {"success": True}

@@ -113,8 +113,8 @@ class Indexer:
                 await db.commit()
 
             embedding_service = EmbeddingService(
-                provider=config.embedding_provider,
-                model=config.embedding_model,
+                provider=getattr(config, "embedding_provider", "") or "",
+                model=getattr(config, "embedding_model", "") or "",
             )
             chunking_service = ChunkingService(
                 chunk_size=config.chunk_size,
@@ -236,6 +236,7 @@ class Indexer:
         return tags_map, corr_map, type_map, path_map
 
     async def _fetch_all_documents(self, client) -> list:
+        assert self.llm_service is not None
         tags_map, corr_map, type_map, path_map = await self._fetch_metadata_maps(client)
 
         documents = []
@@ -288,6 +289,7 @@ class Indexer:
         return documents
 
     async def get_status(self) -> dict:
+        assert self.llm_service is not None
         async with async_session() as db:
             state = await self._get_or_create_state(db)
             if state.status == "indexing" and not self.is_indexing:
@@ -309,6 +311,7 @@ class Indexer:
     async def _generate_chunk_context(
         self, doc: dict, chunk_text: str, config: RagConfig
     ) -> str:
+        assert self.llm_service is not None
         """Generate a short LLM context header for a chunk (Anthropic Contextual Retrieval).
 
         Prepends 1-2 sentences explaining what this chunk is about within its document.
@@ -335,8 +338,8 @@ class Indexer:
         try:
             import re as _re
             result: LLMResponse = await self.llm_service.complete(
-                provider=config.chat_model_provider,
-                model=config.chat_model,
+                provider=getattr(config, "chat_model_provider", "") or "",
+                model=getattr(config, "chat_model", "") or "",
                 messages=[{"role": "user", "content": prompt}],
                 num_predict=80,
                 think=False,

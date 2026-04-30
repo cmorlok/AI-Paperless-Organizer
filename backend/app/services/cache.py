@@ -46,7 +46,7 @@ class SimpleCache:
             if key in self._cache:
                 del self._cache[key]
     
-    async def clear(self, prefix: str = None) -> None:
+    async def clear(self, prefix: str | None = None) -> None:
         """Clear all cache or entries with a specific prefix."""
         async with self._lock:
             if prefix:

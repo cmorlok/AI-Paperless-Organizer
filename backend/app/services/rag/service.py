@@ -29,6 +29,7 @@ class RAGService:
         self.llm_service = llm_service
 
     async def initialize(self):
+        assert self.llm_service is not None
         if self._initialized:
             return
         self.search_engine.init_chroma()
@@ -37,6 +38,7 @@ class RAGService:
         logger.info("RAG service initialized")
 
     async def _get_config(self) -> RagConfig:
+        assert self.llm_service is not None
         async with self.session_factory() as db:
             result = await db.execute(sa_select(RagConfig).where(RagConfig.id == 1))
             config = result.scalar_one_or_none()
@@ -48,9 +50,10 @@ class RAGService:
             return config
 
     async def _get_embedding_service(self, config: RagConfig) -> EmbeddingService:
+        assert self.llm_service is not None
         return EmbeddingService(
-            provider=config.embedding_provider,
-            model=config.embedding_model,
+            provider=getattr(config, "embedding_provider", "") or "",
+            model=getattr(config, "embedding_model", "") or "",
             llm_service=self.llm_service,
         )
 
@@ -450,8 +453,9 @@ class RAGService:
         yield json.dumps({"type": "done"})
 
     async def _stream_llm(self, config: RagConfig, messages: list) -> AsyncGenerator[str, None]:
+        assert self.llm_service is not None
         """Stream LLM response via stream — yields str chunks directly."""
-        model_name = config.chat_model or "gpt-4o-mini"
+        model_name = getattr(config, "chat_model", "") or "gpt-4o-mini"
         provider_name = getattr(config, "chat_model_provider", "openai") or "openai"
 
         try:
@@ -478,6 +482,7 @@ class RAGService:
     async def _rewrite_query_llm(
         self, question: str, chat_history: list, config: RagConfig
     ) -> str:
+        assert self.llm_service is not None
         """Rewrite/expand the user query using LiteLLM for better document retrieval.
 
         The LLM adds synonyms, official German document names and relevant terminology.
@@ -507,7 +512,7 @@ class RAGService:
 
         messages = [{"role": "user", "content": prompt}]
 
-        model_name = config.chat_model or "gpt-4o-mini"
+        model_name = getattr(config, "chat_model", "") or "gpt-4o-mini"
         provider_name = getattr(config, "chat_model_provider", "openai") or "openai"
 
         try:
@@ -593,29 +598,29 @@ class RAGService:
                 sa_delete(RagChatSession).where(RagChatSession.id == session_id)
             )
             await db.commit()
-            return result.rowcount > 0
+            return getattr(result, "rowcount", 0) > 0
 
     async def get_config_dict(self) -> dict:
         config = await self._get_config()
 
         async with self.session_factory() as db:
-            from app.routers.settings import get_setting
+            from app.services.settings_service import get_setting
             emb_provider = await get_setting("rag_embedding_provider", db)
             emb_model = await get_setting("rag_embedding_model", db)
             chat_provider = await get_setting("rag_chat_provider", db)
             chat_model = await get_setting("rag_chat_model", db)
 
         return {
-            "embedding_provider": emb_provider or config.embedding_provider or "",
-            "embedding_model": emb_model or config.embedding_model or "",
+            "embedding_provider": emb_provider or getattr(config, "embedding_provider", "") or "",
+            "embedding_model": emb_model or getattr(config, "embedding_model", "") or "",
             "chunk_size": config.chunk_size,
             "chunk_overlap": config.chunk_overlap,
             "bm25_weight": config.bm25_weight,
             "semantic_weight": config.semantic_weight,
             "max_sources": config.max_sources,
             "max_context_tokens": config.max_context_tokens,
-            "chat_model_provider": chat_provider or config.chat_model_provider or "",
-            "chat_model": chat_model or config.chat_model or "",
+            "chat_model_provider": chat_provider or getattr(config, "chat_model_provider", "") or "",
+            "chat_model": chat_model or getattr(config, "chat_model", "") or "",
             "chat_system_prompt": config.chat_system_prompt,
             "auto_index_enabled": config.auto_index_enabled,
             "auto_index_interval": config.auto_index_interval,
@@ -624,7 +629,7 @@ class RAGService:
         }
 
     async def update_config(self, updates: dict) -> dict:
-        from app.routers.settings import set_setting
+        from app.services.settings_service import set_setting
 
         async with self.session_factory() as db:
             result = await db.execute(sa_select(RagConfig).where(RagConfig.id == 1))
@@ -646,7 +651,7 @@ class RAGService:
 
             for key, value in updates.items():
                 if key in kv_keys:
-                    await set_setting(f"rag_{key}", value, db)
+                    await set_setting(f"rag_{key}", str(value), "str", db)
                 elif key in db_keys and hasattr(config, key):
                     setattr(config, key, value)
 

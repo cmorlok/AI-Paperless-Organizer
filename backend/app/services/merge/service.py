@@ -4,9 +4,12 @@ from __future__ import annotations
 
 from typing import List, Dict, Optional, Any
 from sqlalchemy import select
+from app.core.logging import get_logger
 from app.models import MergeHistory, MergeHistoryItem, CleanupStatistics
 from app.services.paperless import PaperlessClient
 from app.services.cache import get_cache
+
+logger = get_logger(__name__)
 
 
 class MergeService:
@@ -22,6 +25,7 @@ class MergeService:
         target_name: str,
         source_ids: List[int]
     ) -> Dict:
+        assert self.paperless is not None
         """Merge multiple correspondents into one target."""
         if not source_ids:
             return {"success": False, "error": "No source IDs provided"}
@@ -53,13 +57,13 @@ class MergeService:
                         await self.paperless.update_document(doc_id, {"correspondent": target_id})
                         documents_affected += 1
                     except Exception as e:
-                        print(f"Error updating document {doc_id}: {e}")
+                        logger.error("Error updating document", extra={"document_id": doc_id, "error": str(e)})
 
             # Delete the source correspondent
             try:
                 await self.paperless.delete_correspondent(source_id)
             except Exception as e:
-                print(f"Error deleting correspondent {source_id}: {e}")
+                logger.error("Error deleting correspondent", extra={"correspondent_id": source_id, "error": str(e)})
 
             merge_items.append({
                 "source_id": source_id,
@@ -121,6 +125,7 @@ class MergeService:
         target_name: str,
         source_ids: List[int]
     ) -> Dict:
+        assert self.paperless is not None
         """Merge multiple tags into one target."""
         if not source_ids:
             return {"success": False, "error": "No source IDs provided"}
@@ -158,13 +163,13 @@ class MergeService:
                         await self.paperless.update_document(doc_id, {"tags": new_tags})
                         documents_affected += 1
                     except Exception as e:
-                        print(f"Error updating document {doc_id}: {e}")
+                        logger.error("Error updating document", extra={"document_id": doc_id, "error": str(e)})
 
             # Delete the source tag
             try:
                 await self.paperless.delete_tag(source_id)
             except Exception as e:
-                print(f"Error deleting tag {source_id}: {e}")
+                logger.error("Error deleting tag", extra={"tag_id": source_id, "error": str(e)})
 
             merge_items.append({
                 "source_id": source_id,
@@ -226,6 +231,7 @@ class MergeService:
         target_name: str,
         source_ids: List[int]
     ) -> Dict:
+        assert self.paperless is not None
         """Merge multiple document types into one target."""
         if not source_ids:
             return {"success": False, "error": "No source IDs provided"}
@@ -255,13 +261,13 @@ class MergeService:
                         await self.paperless.update_document(doc_id, {"document_type": target_id})
                         documents_affected += 1
                     except Exception as e:
-                        print(f"Error updating document {doc_id}: {e}")
+                        logger.error("Error updating document", extra={"document_id": doc_id, "error": str(e)})
 
             # Delete the source document type
             try:
                 await self.paperless.delete_document_type(source_id)
             except Exception as e:
-                print(f"Error deleting document type {source_id}: {e}")
+                logger.error("Error deleting document type", extra={"doc_type_id": source_id, "error": str(e)})
 
             merge_items.append({
                 "source_id": source_id,
@@ -317,7 +323,7 @@ class MergeService:
             "history_id": history.id
         }
     
-    async def get_history(self, entity_type: str = None) -> List[Dict]:
+    async def get_history(self, entity_type: str | None = None) -> List[Dict]:
         """Get merge history, optionally filtered by entity type."""
         if self.session_factory is None:
             return []

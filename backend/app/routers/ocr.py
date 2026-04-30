@@ -1,12 +1,8 @@
-"""OCR Router - Endpoints for vision OCR."""
+"""OCR Router - Thin endpoints for vision OCR."""
 
-import asyncio
-import json
 import logging
-import time
-import traceback
+import asyncio
 from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
-from fastapi.responses import Response
 from pydantic import BaseModel
 from typing import Optional, List
 
@@ -16,40 +12,19 @@ from dishka.integrations.fastapi import inject
 from dishka import FromDishka
 
 from app.services.paperless import PaperlessClient
-from app.models.settings_model import LLM_KEY_CLASSIFIER_PROVIDER
-from app.routers.settings import get_setting
+from app.services.config import ConfigService
 from app.services.ocr import (
     OcrService,
-    OcrState,
     OcrCompareState,
     OcrCompareSlot,
     DEFAULT_OCR_MODEL,
-    TAG_OCR_REVIEW,
-    TAG_OCR_FINISH,
-    TAG_OCR_ERROR,
     load_review_queue,
-    save_review_queue,
     load_ocr_ignore_list,
-    save_ocr_ignore_list,
-    load_ocr_error_list,
-    save_ocr_error_list,
-    load_ocr_error_counts,
-    save_ocr_error_counts,
 )
 from app.services.llm import LLMService
 
 logger = logging.getLogger(__name__)
-
 router = APIRouter()
-
-
-def load_ocr_settings() -> dict:
-    """Load OCR settings defaults."""
-    return {
-        "model": DEFAULT_OCR_MODEL,
-        "max_image_size": 1344,
-        "smart_skip_enabled": True
-    }
 
 
 # --- Pydantic Models ---
@@ -66,7 +41,7 @@ class OcrApplyRequest(BaseModel):
 
 
 class BatchOcrRequest(BaseModel):
-    mode: str = "all"  # "all", "tagged", "manual"
+    mode: str = "all"
     document_ids: Optional[List[int]] = None
     set_finish_tag: bool = True
     remove_runocr_tag: bool = True
@@ -75,144 +50,96 @@ class BatchOcrRequest(BaseModel):
 class OcrCompareRequest(BaseModel):
     document_id: int
     slots: List[OcrCompareSlot]
-    page: int = 1  # Which page to compare (1-based, 0 = all pages)
+    page: int = 1
 
 
 class OcrEvaluateRequest(BaseModel):
     document_title: str
-    results: List[dict]  # [{model, text, chars, duration_seconds}]
-    evaluation_model: Optional[str] = None  # Override: e.g. "gpt-4.1", "o3", "gpt-4o"
-
-
-# --- Helper ---
-
-# --- Settings Endpoints ---
-
-@router.get("/settings")
-@inject
-async def get_ocr_settings(state: FromDishka[OcrState] = None):
-    """Get current OCR settings."""
-    settings = load_ocr_settings()
-    settings["processor_enabled"] = state.processor.enabled
-    settings["processor_interval"] = state.processor.interval_minutes
-    return settings
-
-
-@router.post("/settings")
-@inject
-async def save_ocr_settings_endpoint(request: OcrSettingsRequest, db: AsyncSession = Depends(get_db), client: FromDishka[PaperlessClient] = None):
-    """Save OCR settings to KV store."""
-    from app.routers.settings import set_setting
-    from app.models.settings_model import LLM_KEY_OCR_MODEL
-
-    await set_setting("ocr_model", request.model, "str", db)
-    await set_setting("max_image_size", str(request.max_image_size), "int", db)
-    await set_setting("smart_skip_enabled", str(request.smart_skip_enabled).lower(), "bool", db)
-    await db.commit()
-
-    return {"success": True, "model": request.model, "max_image_size": request.max_image_size, "smart_skip_enabled": request.smart_skip_enabled}
-
-# --- Processor Endpoints ---
-
-# Persist enabled flag to AppSettings KV store
-
-async def _persist_ocr_processor_enabled(enabled: bool, db: AsyncSession) -> None:
-    """Persist ocr_processor_enabled flag to AppSettings."""
-    from app.routers.settings import set_setting
-    await set_setting(
-        "ocr_processor_enabled",
-        "true" if enabled else "false",
-        "bool",
-        db
-    )
+    results: List[dict]
+    evaluation_model: Optional[str] = None
 
 
 class ProcessorSettingsRequest(BaseModel):
     enabled: bool
     interval_minutes: int = 5
 
+
+# --- Settings Endpoints ---
+
+@router.get("/settings")
+@inject
+async def get_ocr_settings(service: FromDishka[OcrService] = None):
+    assert service is not None
+    return service.get_ocr_settings_with_state()
+
+
+@router.post("/settings")
+@inject
+async def save_ocr_settings_endpoint(
+    request: OcrSettingsRequest,
+    service: FromDishka[OcrService] = None,
+    config_svc: FromDishka[ConfigService] = None,
+):
+    assert service is not None
+    assert config_svc is not None
+    return await service.save_ocr_settings(
+        request.model, request.max_image_size, request.smart_skip_enabled, config_svc,
+    )
+
+
+# --- Processor Endpoints ---
+
 @router.get("/processor/status")
 @inject
-async def get_processor_status(state: FromDishka[OcrState] = None):
-    """Get processor status."""
-    return {
-        "enabled": state.processor.enabled,
-        "running": state.processor.running,
-        "interval_minutes": state.processor.interval_minutes,
-        "last_run": state.processor.last_run
-    }
+async def get_processor_status(service: FromDishka[OcrService] = None):
+    assert service is not None
+    return service.get_processor_status_dict()
+
 
 @router.post("/processor/settings")
 @inject
 async def set_processor_settings(
     request: ProcessorSettingsRequest,
-    background_tasks: BackgroundTasks,
-    db: AsyncSession = Depends(get_db),
+    config_svc: FromDishka[ConfigService] = None,
     client: FromDishka[PaperlessClient] = None,
     service: FromDishka[OcrService] = None,
-    state: FromDishka[OcrState] = None,
 ):
-    """Enable/Disable processor and set interval."""
-    state.processor.interval_minutes = max(1, request.interval_minutes)
-
-    # Persist to AppSettings KV store
-    try:
-        await _persist_ocr_processor_enabled(request.enabled, db)
-    except Exception as e:
-        logger.warning(f"Could not persist ocr_processor_enabled to KV: {e}")
-
-    if request.enabled and not state.processor.enabled:
-        # Start processor
-        state.processor.enabled = True
-        loop = asyncio.get_running_loop()
-        state.processor.task = loop.create_task(service.processor_loop(client))
-
-    elif not request.enabled and state.processor.enabled:
-        # Stop processor
-        state.processor.enabled = False
-        # Task will exit on next loop
-
-    return get_processor_status()
+    assert config_svc is not None
+    assert client is not None
+    assert service is not None
+    return await service.configure_processor(
+        request.enabled, request.interval_minutes, config_svc, client,
+    )
 
 
 # --- Batch Control Endpoints ---
 
 @router.post("/batch/pause")
 @inject
-async def pause_batch_ocr(state: FromDishka[OcrState] = None):
-    """Pause the running batch OCR job."""
-    if not state.batch.running:
-        return {"success": False, "message": "Kein Batch-Job aktiv"}
-    
-    state.batch.paused = True
-    return {"success": True, "message": "Batch-Job pausiert", "paused": True}
+async def pause_batch_ocr(service: FromDishka[OcrService] = None):
+    assert service is not None
+    return service.pause_batch()
+
 
 @router.post("/batch/resume")
 @inject
-async def resume_batch_ocr(state: FromDishka[OcrState] = None):
-    """Resume the paused batch OCR job."""
-    if not state.batch.running:
-        return {"success": False, "message": "Kein Batch-Job aktiv"}
-    
-    state.batch.paused = False
-    return {"success": True, "message": "Batch-Job fortgesetzt", "paused": False}
+async def resume_batch_ocr(service: FromDishka[OcrService] = None):
+    assert service is not None
+    return service.resume_batch()
 
-# ... (Watchdog auto-start is handled in main.py lifespan)
 
 # --- Tag Management ---
 
 @router.get("/tags/ensure")
 @inject
-async def ensure_ocr_tags(
-    client: FromDishka[PaperlessClient] = None
-):
-    """Ensure runocr and ocrfinish tags exist in Paperless."""
+async def ensure_ocr_tags(client: FromDishka[PaperlessClient] = None):
+    assert client is not None
     try:
         runocr_tag = await client.get_or_create_tag("runocr")
         ocrfinish_tag = await client.get_or_create_tag("ocrfinish")
         return {
             "runocr": {"id": runocr_tag.get("id"), "name": "runocr"},
-            "ocrfinish": {"id": ocrfinish_tag.get("id"), "name": "ocrfinish"}
+            "ocrfinish": {"id": ocrfinish_tag.get("id"), "name": "ocrfinish"},
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Tag-Fehler: {str(e)}")
@@ -221,42 +148,27 @@ async def ensure_ocr_tags(
 @router.post("/test-connection")
 @inject
 async def test_ocr_connection(service: FromDishka[OcrService] = None):
-    """Test connection to OCR provider."""
+    assert service is not None
     return await service.test_connection()
 
 
 @router.get("/stats")
 @inject
 async def get_ocr_stats(service: FromDishka[OcrService] = None):
-    """Get OCR statistics."""
+    assert service is not None
     return service.get_stats()
 
 
 @router.get("/status")
 @inject
 async def get_ocr_status(
-    client: FromDishka[PaperlessClient] = None
+    client: FromDishka[PaperlessClient] = None,
+    service: FromDishka[OcrService] = None,
 ):
-    """Get overall OCR status - total docs, finished docs, percentage. Uses count-only queries for speed."""
+    assert client is not None
+    assert service is not None
     try:
-        # Get ocrfinish tag ID (cached via get_or_create_tag)
-        ocrfinish_tag = await client.get_or_create_tag("ocrfinish")
-        ocrfinish_id = ocrfinish_tag.get("id")
-        
-        # Fast parallel count queries (page_size=1, only reads "count" field)
-        total_count = await client.get_document_count()
-        finished_count = await client.get_document_count(tag_id=ocrfinish_id) if ocrfinish_id else 0
-        
-        percentage = round((finished_count / total_count * 100), 1) if total_count > 0 else 0
-        pending_count = total_count - finished_count
-        
-        return {
-            "total_documents": total_count,
-            "finished_documents": finished_count,
-            "pending_documents": pending_count,
-            "percentage": percentage,
-            "ocrfinish_tag_id": ocrfinish_id
-        }
+        return await service.get_ocr_status(client)
     except Exception as e:
         logger.error(f"Error getting OCR status: {e}")
         raise HTTPException(status_code=500, detail=f"Fehler beim Abrufen des OCR-Status: {str(e)}")
@@ -272,46 +184,26 @@ async def ocr_single_document(
     client: FromDishka[PaperlessClient] = None,
     db: AsyncSession = Depends(get_db),
     service: FromDishka[OcrService] = None,
-    state: FromDishka[OcrState] = None,
 ):
-    """Run OCR on a single document with page-level persistence and resume support."""
+    assert client is not None
+    assert service is not None
     try:
-        state.acquire_lock("single")
-        result = await service.ocr_document(client, document_id, force=force, db_session=db)
-        return result
+        return await service.ocr_single_document_safe(client, document_id, force, db)
     except ValueError as e:
         error_msg = str(e)
-        logger.error(f"OCR ValueError for doc {document_id}: {error_msg}")
         if "nicht gefunden" in error_msg and f"Dokument {document_id}" in error_msg:
             raise HTTPException(status_code=404, detail=error_msg)
         raise HTTPException(status_code=422, detail=f"OCR Verarbeitungsfehler: {error_msg}")
     except Exception as e:
-        logger.error(f"OCR single document error: {traceback.format_exc()}")
+        logger.error(f"OCR single document error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"OCR Fehler: {str(e)}")
-    finally:
-        state.release_lock()
-        state.page_progress.pop(document_id, None)
 
 
 @router.get("/progress/{document_id}")
 @inject
-async def get_ocr_progress(document_id: int, state: FromDishka[OcrState] = None):
-    """Get live page-level progress for an ongoing OCR job."""
-    progress = state.page_progress.get(document_id)
-    if not progress:
-        return {"active": False, "document_id": document_id}
-    elapsed = time.time() - progress.get("started_at", time.time())
-    return {
-        "active": True,
-        "document_id": document_id,
-        "status": progress.get("status", "unknown"),
-        "total_pages": progress.get("total_pages", 0),
-        "done": progress.get("done", 0),
-        "errors": progress.get("errors", 0),
-        "current_page": progress.get("current_page", 0),
-        "elapsed_seconds": round(elapsed, 1),
-        "pages": progress.get("pages", []),
-    }
+async def get_ocr_progress(document_id: int, service: FromDishka[OcrService] = None):
+    assert service is not None
+    return service.get_progress_dict(document_id)
 
 
 @router.post("/apply/{document_id}")
@@ -322,26 +214,12 @@ async def apply_ocr_result(
     client: FromDishka[PaperlessClient] = None,
     service: FromDishka[OcrService] = None,
 ):
-    """Apply new OCR content to a document.
-
-    Fires off the Paperless update as async task for instant response.
-    The PATCH to Paperless can take 20-30s due to full-text re-indexing,
-    so we don't make the user wait.
-    """
-    print(f"[OCR] Request to apply result for doc {document_id}")
-
-    async def _apply_in_background():
-        try:
-            await service.apply_ocr_result(
-                client, document_id, request.content, request.set_finish_tag
-            )
-            print(f"[OCR] Successfully applied result for doc {document_id}")
-        except Exception as e:
-            print(f"[OCR] Error applying result for doc {document_id}: {e}")
-            logger.error(f"Background apply error: {e}")
-
-    # Fire and forget: don't wait for Paperless re-indexing
-    asyncio.create_task(_apply_in_background())
+    assert client is not None
+    assert service is not None
+    logger.info("OCR apply result requested", extra={"document_id": document_id})
+    asyncio.create_task(
+        service.apply_ocr_result_background(client, document_id, request.content, request.set_finish_tag)
+    )
     return {"success": True, "document_id": document_id, "status": "saving"}
 
 
@@ -354,83 +232,47 @@ async def start_batch_ocr(
     background_tasks: BackgroundTasks,
     client: FromDishka[PaperlessClient] = None,
     service: FromDishka[OcrService] = None,
-    state: FromDishka[OcrState] = None,
 ):
-    """Start batch OCR processing in the background."""
-    if state.batch.running:
+    assert client is not None
+    assert service is not None
+    try:
+        service.check_batch_not_running()
+    except ValueError:
         raise HTTPException(status_code=409, detail="Ein Batch-OCR-Job läuft bereits")
 
-    # Run batch OCR as background task
     background_tasks.add_task(
         service.batch_ocr,
         client,
         request.mode,
-        request.document_ids,
+        request.document_ids or [],
         request.set_finish_tag,
-        request.remove_runocr_tag
+        request.remove_runocr_tag,
     )
-    
     return {"started": True, "mode": request.mode}
 
 
 @router.get("/batch/status")
 @inject
 async def get_batch_status(
-    state: FromDishka[OcrState] = None,
+    service: FromDishka[OcrService] = None,
     llm_service: FromDishka[LLMService] = None,
 ):
-    """Get current batch OCR job status, including page-level progress for current document."""
-    current_doc = state.batch.current_document
-    current_doc_id = current_doc.get("id") if isinstance(current_doc, dict) else None
-
-    # Include live page progress for the currently processing document
-    page_progress = None
-    if current_doc_id and current_doc_id in state.page_progress:
-        pp = state.page_progress[current_doc_id]
-        page_progress = {
-            "document_id": current_doc_id,
-            "total_pages": pp.get("total_pages", 0),
-            "done": pp.get("done", 0),
-            "errors": pp.get("errors", 0),
-            "current_page": pp.get("current_page", 0),
-            "status": pp.get("status", "unknown"),
-            "pages": pp.get("pages", []),
-        }
-
-    # Use LLMService lock status instead of direct lock.py imports
-    lock_status = llm_service.get_lock_status() if llm_service else {}
-    waiting = next((p for p, s in lock_status.items() if s["locked"]), None) if not state.batch.running else None
-
-    return {
-        "running": state.batch.running,
-        "total": state.batch.total,
-        "processed": state.batch.processed,
-        "current_document": current_doc,
-        "current_page_progress": page_progress,
-        "errors_count": len(state.batch.errors),
-        "log": state.batch.log[-50:],
-        "mode": state.batch.mode,
-        "paused": state.batch.paused,
-        "waiting_for": waiting,
-    }
+    assert service is not None
+    assert llm_service is not None
+    return service.get_batch_status_dict(llm_service)
 
 
 @router.post("/batch/stop")
 @inject
-async def stop_batch_ocr(state: FromDishka[OcrState] = None):
-    """Stop the running batch OCR job."""
-    if not state.batch.running:
-        return {"stopped": False, "message": "Kein Batch-Job aktiv"}
-    
-    state.batch.should_stop = True
-    return {"stopped": True, "message": "Batch-Job wird gestoppt..."}
+async def stop_batch_ocr(service: FromDishka[OcrService] = None):
+    assert service is not None
+    return service.stop_batch()
 
 
 # --- Review Queue ---
 
 @router.get("/review/queue")
 async def get_review_queue():
-    """Get all documents in the OCR review queue."""
     queue = load_review_queue()
     return {"items": queue, "count": len(queue)}
 
@@ -442,141 +284,65 @@ async def apply_review_item(
     client: FromDishka[PaperlessClient] = None,
     service: FromDishka[OcrService] = None,
 ):
-    """Apply review queue item (accept the new OCR text)."""
-    queue = load_review_queue()
-    item = next((q for q in queue if q["document_id"] == document_id), None)
-    if not item:
-        raise HTTPException(status_code=404, detail="Dokument nicht in Review Queue")
-
+    assert client is not None
+    assert service is not None
     try:
-        await service.apply_ocr_result(client, document_id, item["new_content"], True)
-        # Remove from queue
-        queue = [q for q in queue if q["document_id"] != document_id]
-        save_review_queue(queue)
-        return {"applied": True, "document_id": document_id}
+        return await service.apply_review_item(document_id, client)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.post("/review/dismiss/{document_id}")
-async def dismiss_review_item(document_id: int):
-    """Dismiss review queue item (discard the new OCR text)."""
-    queue = load_review_queue()
-    new_queue = [q for q in queue if q["document_id"] != document_id]
-    if len(new_queue) == len(queue):
-        raise HTTPException(status_code=404, detail="Dokument nicht in Review Queue")
-    save_review_queue(new_queue)
-    return {"dismissed": True, "document_id": document_id}
+@inject
+async def dismiss_review_item(document_id: int, service: FromDishka[OcrService] = None):
+    assert service is not None
+    try:
+        return service.dismiss_review_item_from_queue(document_id)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
 
 
 @router.post("/review/reset-all")
 @inject
 async def reset_all_review_items(
-    client: FromDishka[PaperlessClient] = None
+    client: FromDishka[PaperlessClient] = None,
+    service: FromDishka[OcrService] = None,
 ):
-    """Reset all review queue items: remove ocrpruefen tag so batch OCR re-processes them."""
-    queue = load_review_queue()
-    if not queue:
-        return {"reset": 0, "errors": []}
-
-    # Get ocrpruefen tag ID
+    assert client is not None
+    assert service is not None
     try:
-        ocrpruefen_tag = await client.get_or_create_tag(TAG_OCR_REVIEW)
-        ocrpruefen_id = ocrpruefen_tag.get("id")
+        return await service.reset_all_review_items(client)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Tag-Lookup fehlgeschlagen: {e}")
-
-    errors = []
-    reset_count = 0
-    for item in queue:
-        doc_id = item["document_id"]
-        try:
-            if ocrpruefen_id:
-                await client.bulk_update_documents(
-                    document_ids=[doc_id],
-                    remove_tags=[ocrpruefen_id]
-                )
-            reset_count += 1
-        except Exception as e:
-            errors.append(f"Dok {doc_id}: {e}")
-
-    # Clear the review queue JSON
-    save_review_queue([])
-    return {"reset": reset_count, "errors": errors}
 
 
 @router.post("/review/keep-all-originals")
 @inject
 async def keep_all_originals(
-    client: FromDishka[PaperlessClient] = None
+    client: FromDishka[PaperlessClient] = None,
+    service: FromDishka[OcrService] = None,
 ):
-    """Keep all original contents: set ocrfinish on all review items without changing content."""
-    queue = load_review_queue()
-    if not queue:
-        return {"kept": 0, "errors": []}
-
+    assert client is not None
+    assert service is not None
     try:
-        ocrfinish_tag = await client.get_or_create_tag(TAG_OCR_FINISH)
-        ocrfinish_id = ocrfinish_tag.get("id")
-        ocrpruefen_tag = await client.get_or_create_tag(TAG_OCR_REVIEW)
-        ocrpruefen_id = ocrpruefen_tag.get("id")
+        return await service.keep_all_originals(client)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Tag-Lookup fehlgeschlagen: {e}")
 
-    errors = []
-    kept_count = 0
-    doc_ids = [item["document_id"] for item in queue]
-
-    # Process in batches of 25
-    for i in range(0, len(doc_ids), 25):
-        batch = doc_ids[i:i+25]
-        try:
-            add_t = [ocrfinish_id] if ocrfinish_id else []
-            rem_t = [ocrpruefen_id] if ocrpruefen_id else []
-            if add_t or rem_t:
-                await client.bulk_update_documents(
-                    document_ids=batch,
-                    add_tags=add_t if add_t else None,
-                    remove_tags=rem_t if rem_t else None
-                )
-            kept_count += len(batch)
-        except Exception as e:
-            errors.append(f"Batch {i//25+1}: {e}")
-
-    # Clear the review queue
-    save_review_queue([])
-    return {"kept": kept_count, "errors": errors}
-
 
 @router.post("/review/ignore/{document_id}")
-async def ignore_review_item(document_id: int):
-    """Ignore document permanently: remove from review queue and add to OCR ignore list."""
-    # Remove from review queue
-    queue = load_review_queue()
-    item = next((q for q in queue if q["document_id"] == document_id), None)
-    title = item["title"] if item else f"Dokument {document_id}"
-    new_queue = [q for q in queue if q["document_id"] != document_id]
-    save_review_queue(new_queue)
-    
-    # Add to ignore list (avoid duplicates)
-    ignore_list = load_ocr_ignore_list()
-    if not any(entry["document_id"] == document_id for entry in ignore_list):
-        ignore_list.append({
-            "document_id": document_id,
-            "title": title,
-            "reason": "Original besser als OCR",
-            "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S")
-        })
-        save_ocr_ignore_list(ignore_list)
-    
-    return {"ignored": True, "document_id": document_id, "title": title}
+@inject
+async def ignore_review_item(document_id: int, service: FromDishka[OcrService] = None):
+    assert service is not None
+    return service.ignore_review_item_permanently(document_id)
 
 
 # --- OCR Ignore List ---
 
 @router.get("/ignore/list")
 async def get_ocr_ignore_list():
-    """Get all documents on the OCR ignore list."""
     ignore_list = load_ocr_ignore_list()
     return {"items": ignore_list, "count": len(ignore_list)}
 
@@ -585,93 +351,51 @@ async def get_ocr_ignore_list():
 @inject
 async def add_to_ocr_ignore_list(
     document_id: int,
-    client: FromDishka[PaperlessClient] = None
+    client: FromDishka[PaperlessClient] = None,
+    service: FromDishka[OcrService] = None,
 ):
-    """Add a document to the OCR ignore list."""
-    ignore_list = load_ocr_ignore_list()
-    if any(entry["document_id"] == document_id for entry in ignore_list):
-        return {"already_ignored": True, "document_id": document_id}
-    
-    # Try to get document title from Paperless
-    title = f"Dokument {document_id}"
-    try:
-        doc = await client.get_document(document_id)
-        if doc:
-            title = doc.get("title", title)
-    except Exception:
-        pass
-    
-    ignore_list.append({
-        "document_id": document_id,
-        "title": title,
-        "reason": "Original besser als OCR",
-        "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S")
-    })
-    save_ocr_ignore_list(ignore_list)
-    return {"added": True, "document_id": document_id, "title": title}
+    assert client is not None
+    assert service is not None
+    return await service.add_to_ignore_list(document_id, client)
 
 
 @router.delete("/ignore/remove/{document_id}")
-async def remove_from_ocr_ignore_list(document_id: int):
-    """Remove a document from the OCR ignore list."""
-    ignore_list = load_ocr_ignore_list()
-    new_list = [entry for entry in ignore_list if entry["document_id"] != document_id]
-    if len(new_list) == len(ignore_list):
-        raise HTTPException(status_code=404, detail="Dokument nicht in der Ignore-Liste")
-    save_ocr_ignore_list(new_list)
+@inject
+async def remove_from_ocr_ignore_list(document_id: int, service: FromDishka[OcrService] = None):
+    assert service is not None
+    try:
+        service.remove_from_ocr_ignore_list(document_id)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
     return {"removed": True, "document_id": document_id}
 
 
 # --- OCR Error List ---
 
 @router.get("/errors/list")
-async def get_ocr_errors():
-    """Get all documents on the OCR error list (permanently failed)."""
-    error_list = load_ocr_error_list()
-    error_counts = load_ocr_error_counts()
-    return {"items": error_list, "count": len(error_list), "pending_errors": error_counts}
+@inject
+async def get_ocr_errors(service: FromDishka[OcrService] = None):
+    assert service is not None
+    return service.get_error_list_with_counts()
 
 
 @router.delete("/errors/remove/{document_id}")
 @inject
 async def remove_from_ocr_error_list(
     document_id: int,
-    client: FromDishka[PaperlessClient] = None
+    client: FromDishka[PaperlessClient] = None,
+    service: FromDishka[OcrService] = None,
 ):
-    """Remove a document from the error list and remove its ocrfehler tag so it can be retried."""
-    # Remove from error list
-    error_list = load_ocr_error_list()
-    new_list = [entry for entry in error_list if entry["document_id"] != document_id]
-    save_ocr_error_list(new_list)
-    
-    # Reset error counter
-    counts = load_ocr_error_counts()
-    key = str(document_id)
-    if key in counts:
-        del counts[key]
-        save_ocr_error_counts(counts)
-    
-    # Remove ocrfehler tag from Paperless
-    try:
-        tag = await client.get_or_create_tag(TAG_OCR_ERROR)
-        tag_id = tag.get("id")
-        if tag_id:
-            await client.bulk_update_documents(
-                document_ids=[document_id],
-                remove_tags=[tag_id]
-            )
-    except Exception as e:
-        logger.warning(f"Could not remove ocrfehler tag from {document_id}: {e}")
-    
-    return {"removed": True, "document_id": document_id}
+    assert client is not None
+    assert service is not None
+    return await service.remove_from_error_list(document_id, client)
 
 
 @router.post("/errors/clear")
-async def clear_ocr_error_list():
-    """Clear the entire error list and error counts."""
-    save_ocr_error_list([])
-    save_ocr_error_counts({})
-    return {"cleared": True}
+@inject
+async def clear_ocr_error_list(service: FromDishka[OcrService] = None):
+    assert service is not None
+    return service.clear_all_errors()
 
 
 # --- Document Preview Proxy ---
@@ -680,30 +404,13 @@ async def clear_ocr_error_list():
 @inject
 async def get_document_preview(
     document_id: int,
-    client: FromDishka[PaperlessClient] = None
+    client: FromDishka[PaperlessClient] = None,
+    service: FromDishka[OcrService] = None,
 ):
-    """Proxy document preview from Paperless. Auto-detects PDF vs image."""
+    assert client is not None
+    assert service is not None
     try:
-        file_bytes = await client.get_document_preview_image(document_id)
-
-        if file_bytes[:4] == b'%PDF':
-            media_type = "application/pdf"
-        elif file_bytes[:4] == b'\x89PNG':
-            media_type = "image/png"
-        elif file_bytes[:2] == b'\xff\xd8':
-            media_type = "image/jpeg"
-        elif file_bytes[:4] == b'RIFF':
-            media_type = "image/webp"
-        else:
-            media_type = "application/pdf"
-        return Response(
-            content=file_bytes,
-            media_type=media_type,
-            headers={
-                "Content-Disposition": "inline",
-                "X-Content-Type-Options": "nosniff",
-            },
-        )
+        return await service.get_preview_response(client, document_id)
     except Exception as e:
         logger.error(f"Error getting preview for {document_id}: {e}")
         raise HTTPException(status_code=404, detail="Preview not found")
@@ -713,18 +420,19 @@ async def get_document_preview(
 @inject
 async def get_document_thumbnail(
     document_id: int,
-    client: FromDishka[PaperlessClient] = None
+    client: FromDishka[PaperlessClient] = None,
+    service: FromDishka[OcrService] = None,
 ):
-    """Proxy document thumbnail from Paperless (small image, handles auth)."""
+    assert client is not None
+    assert service is not None
     try:
-        image_bytes = await client.get_document_thumbnail_bytes(document_id)
-        if image_bytes[:4] == b'\x89PNG':
-            return Response(content=image_bytes, media_type="image/png")
-        return Response(content=image_bytes, media_type="image/webp")
+        return await service.get_thumbnail_response(client, document_id)
     except Exception as e:
         logger.error(f"Error getting thumbnail for {document_id}: {e}")
         raise HTTPException(status_code=404, detail="Thumbnail not found")
 
+
+# --- Compare ---
 
 @router.post("/compare")
 @inject
@@ -734,34 +442,24 @@ async def start_compare(
     service: FromDishka[OcrService] = None,
     compare_state: FromDishka[OcrCompareState] = None,
 ):
-    """Start OCR model comparison as background task."""
-    if compare_state.running:
-        raise HTTPException(status_code=409, detail="Ein Vergleich läuft bereits")
-
-    slots = request.slots
-    if not slots or len(slots) == 0:
-        raise HTTPException(status_code=400, detail="Mindestens ein Modell auswählen")
-    if len(slots) > 5:
-        raise HTTPException(status_code=400, detail="Maximal 5 Modelle gleichzeitig")
-
-    compare_state.reset()
-    compare_state.running = True
-    compare_state.document_id = request.document_id
-    compare_state.models = [s.model for s in slots]
-    compare_state.total_models = len(slots)
-    compare_state.phase = "starting"
-
-    asyncio.create_task(service.run_compare_job(client, request.document_id, slots, request.page, compare_state))
-
-    return {"started": True, "models": len(slots)}
+    assert client is not None
+    assert service is not None
+    assert compare_state is not None
+    try:
+        return await service.validate_and_start_compare(
+            client, request.document_id, request.slots, request.page, compare_state,
+        )
+    except ValueError as e:
+        msg = str(e)
+        if msg == "already_running":
+            raise HTTPException(status_code=409, detail="Ein Vergleich läuft bereits")
+        raise HTTPException(status_code=400, detail=msg)
 
 
 @router.get("/compare/status")
 @inject
-async def get_compare_status(
-    compare_state: FromDishka[OcrCompareState] = None,
-):
-    """Get current compare job status (for polling)."""
+async def get_compare_status(compare_state: FromDishka[OcrCompareState] = None):
+    assert compare_state is not None
     return {
         "running": compare_state.running,
         "phase": compare_state.phase,
@@ -786,169 +484,28 @@ async def get_compare_status(
 async def evaluate_ocr_results(
     request: OcrEvaluateRequest,
     llm_service: FromDishka[LLMService] = None,
-    db: AsyncSession = Depends(get_db),
+    config_svc: FromDishka[ConfigService] = None,
+    service: FromDishka[OcrService] = None,
 ):
-    """Send OCR comparison results to an external LLM for quality evaluation.
-
-    WARNING: This sends document text to a cloud API (OpenAI, Anthropic, etc.)!
-    Uses a thorough multi-criteria evaluation inspired by professional OCR benchmarks.
-    """
-    eval_provider = await get_setting(LLM_KEY_CLASSIFIER_PROVIDER, db)
+    assert llm_service is not None
+    assert config_svc is not None
+    assert service is not None
+    from app.models.settings_model import LLM_KEY_CLASSIFIER_PROVIDER
+    eval_provider = await config_svc.get(LLM_KEY_CLASSIFIER_PROVIDER)
     if not eval_provider:
         raise HTTPException(
             status_code=400,
-            detail="Kein LLM-Provider konfiguriert. Bitte zuerst unter Einstellungen einen Provider (z.B. OpenAI) einrichten."
+            detail="Kein LLM-Provider konfiguriert. Bitte zuerst unter Einstellungen einen Provider einrichten.",
         )
-
-    results = request.results
-    if not results or len(results) < 1:
+    if not request.results or len(request.results) < 1:
         raise HTTPException(status_code=400, detail="Keine OCR-Ergebnisse zum Auswerten")
-
-    eval_model = request.evaluation_model or None
-    
-    # Build the evaluation prompt with full texts
-    model_sections = []
-    for i, r in enumerate(results):
-        model_name = r.get("model", f"Modell {i+1}")
-        text = r.get("text", "")
-        chars = r.get("chars", len(text))
-        duration = r.get("duration_seconds", 0)
-        
-        # Truncate very long texts to save tokens (first 4000 + last 1500 chars)
-        if len(text) > 6000:
-            display_text = text[:4000] + "\n\n[... gekürzt ...]\n\n" + text[-1500:]
-        else:
-            display_text = text
-        
-        model_sections.append(
-            f"=== VERSION {i+1}: {model_name} ===\n"
-            f"Zeichen: {chars} | Dauer: {duration}s\n"
-            f"--- TEXT START ---\n{display_text}\n--- TEXT END ---"
-        )
-    
-    models_text = "\n\n".join(model_sections)
-    
-    prompt = f"""Du bist ein erfahrener OCR-Qualitätsprüfer und Dokumentenanalyst. Du bewertest OCR-Ergebnisse für ein deutsches Dokumentenmanagementsystem (Paperless-ngx).
-
-DOKUMENT: "{request.document_title}"
-ANZAHL VERSIONEN: {len(results)}
-
-Folgende OCR-Versionen desselben Dokuments wurden von verschiedenen lokalen Vision-Modellen (Ollama) erstellt. Vergleiche sie gründlich.
-
-{models_text}
-
-BEWERTUNGSANLEITUNG:
-Du musst jede Version sorgfältig auf folgende Kriterien prüfen. Vergleiche die Versionen untereinander -- wenn mehrere Versionen den gleichen Wert haben, ist er wahrscheinlich korrekt. Abweichungen deuten auf Fehler hin.
-
-KRITISCHE FELDER (Fehler hier = sofortiger Punktabzug):
-- Namen (Vor-/Nachname): Auch ein einziger falscher Buchstabe ist ein Fehler
-- Datumsangaben: Falsches Jahr/Monat = KO-Kriterium (schlimmer als Tippfehler!)
-- IBAN/Kontonummern: Ziffern müssen exakt stimmen, Leerzeichen-Gruppierung egal
-- Geldbeträge: Müssen exakt stimmen
-
-WICHTIGE FELDER:
-- Adressen, Zählernummern, Referenznummern
-- Checkbox-Zustände (angekreuzt vs. leer)
-- Formularlogik (Felder richtig zugeordnet?)
-
-ALLGEMEINE QUALITÄT:
-- Vollständigkeit (fehlen Textblöcke/Absätze?)
-- Halluzinationen (hat das Modell Text erfunden der nicht im Original steht?)
-- Wiederholungen (Textblöcke die sich wiederholen)
-- Formatierung und Lesbarkeit
-
-PRAXISTAUGLICHKEIT:
-- Kann der Text automatisiert weiterverarbeitet werden?
-- Wie viel manuelle Nacharbeit wäre nötig?
-
-Antworte NUR mit validem JSON (kein Text davor/danach, keine Markdown-Codeblöcke):
-{{
-  "ranking": [
-    {{
-      "rank": 1,
-      "model": "<modellname>",
-      "overall_score": <0-100>,
-      "category_scores": {{
-        "names_persons": <0-10>,
-        "dates_periods": <0-10>,
-        "iban_banking": <0-10>,
-        "amounts_numbers": <0-10>,
-        "addresses": <0-10>,
-        "form_logic": <0-10>,
-        "completeness": <0-10>,
-        "formatting": <0-10>,
-        "no_hallucinations": <0-10>,
-        "automatizability": <0-10>
-      }},
-      "speed_seconds": <dauer>,
-      "strengths": ["Stärke 1", "Stärke 2"],
-      "weaknesses": ["Schwäche 1"],
-      "specific_errors": [
-        {{"field": "Name", "expected": "korrekt", "got": "was das Modell geschrieben hat", "severity": "critical"}},
-        {{"field": "IBAN", "expected": "DE12 3456...", "got": "DE12 3546...", "severity": "high"}}
-      ],
-      "verdict": "<1-2 Sätze Praxisurteil auf Deutsch>"
-    }}
-  ],
-  "best_quality": "<modellname mit bester Qualität>",
-  "best_speed": "<schnellstes Modell>",
-  "best_value": "<bestes Preis-Leistungs-Verhältnis (Qualität vs. Geschwindigkeit)>",
-  "recommendation": "<3-4 Sätze Empfehlung auf Deutsch: welches Modell für Produktion, welches Backup, welches nicht verwenden>",
-  "critical_finding": "<wichtigste Erkenntnis, z.B. 'Datumsfehler bei Modell X sind ein KO-Kriterium'>",
-  "cross_comparison": {{
-    "agreement": ["Felder wo alle Versionen übereinstimmen"],
-    "disagreement": ["Felder wo die Versionen sich widersprechen -- hier liegt wahrscheinlich mindestens ein Fehler"]
-  }}
-}}
-
-WICHTIG:
-- Severity-Stufen: "critical" (Daten, Namen, IBAN falsch), "high" (wichtige Felder), "medium" (Formatierung), "low" (kosmetisch)
-- Score 0-100: unter 50 = nicht verwendbar, 50-70 = bedingt brauchbar, 70-85 = gut, 85+ = sehr gut
-- Sei STRENG aber FAIR. Ein falsches Datum ist schlimmer als 5 Tippfehler.
-- Wenn du nicht sicher bist ob ein Wert richtig ist, vergleiche die Versionen untereinander.
-"""
-
     try:
-        used_model = eval_model or "gpt-4o"
-        print(f"[Evaluate] Sending {len(results)} OCR results to {eval_provider} / {used_model}")
-
-        result = await llm_service.complete(
-            provider=eval_provider,
-            model=eval_model,
-            messages=[{"role": "user", "content": prompt}],
+        return await service.evaluate_ocr_results(
+            document_title=request.document_title,
+            results=request.results,
+            eval_provider=eval_provider,
+            eval_model=request.evaluation_model,
         )
-        cleaned = (result.content or "").strip()
-        if cleaned.startswith("```"):
-            lines = cleaned.split("\n")
-            lines = [line for line in lines if not line.strip().startswith("```")]
-            cleaned = "\n".join(lines)
-        
-        try:
-            evaluation = json.loads(cleaned)
-        except json.JSONDecodeError:
-            import re
-            json_match = re.search(r'\{[\s\S]*\}', cleaned)
-            if json_match:
-                evaluation = json.loads(json_match.group())
-            else:
-                logger.error(f"Could not parse LLM response as JSON: {cleaned[:500]}")
-                return {
-                    "success": True,
-                    "raw_response": raw_response,
-                    "evaluation": None,
-                    "parse_error": "LLM-Antwort konnte nicht als JSON geparst werden"
-                }
-        
-        print(f"[Evaluate] Successfully evaluated with {eval_provider} / {used_model}")
-
-        return {
-            "success": True,
-            "evaluation": evaluation,
-            "provider": eval_provider,
-            "model": used_model
-        }
-        
     except Exception as e:
         logger.error(f"Evaluation failed: {e}")
         raise HTTPException(status_code=500, detail=f"LLM-Auswertung fehlgeschlagen: {str(e)}")
-

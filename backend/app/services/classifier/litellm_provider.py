@@ -120,6 +120,7 @@ class LitellmToolCallingProvider(BaseClassifierProvider):
         return True
 
     async def test_connection(self) -> Dict[str, Any]:
+        assert self.llm_service is not None
         try:
             await self.llm_service.complete(
                 provider=self.provider,
@@ -136,6 +137,7 @@ class LitellmToolCallingProvider(BaseClassifierProvider):
         document: DocumentContext,
         config: Dict[str, Any],
     ) -> ClassificationResult:
+        assert self.llm_service is not None
         start_time = time.time()
         total_input_tokens = 0
         total_output_tokens = 0
@@ -199,7 +201,8 @@ class LitellmToolCallingProvider(BaseClassifierProvider):
                 total_output_tokens += result.output_tokens
 
                 if result.finish_reason == "tool_calls" and result.tool_calls:
-                    messages.append(result.assistant_message)
+                    if result.assistant_message is not None:
+                        messages.append(result.assistant_message)
                     for tool_call in result.tool_calls:
                         total_tool_calls += 1
                         fn_name = tool_call.name
@@ -207,7 +210,10 @@ class LitellmToolCallingProvider(BaseClassifierProvider):
 
                         logger.info(f"Tool call: {fn_name}({fn_args})")
 
-                        result_str = await self.tool_executor.execute(fn_name, fn_args)
+                        if self.tool_executor is not None:
+                            result_str = await self.tool_executor.execute(fn_name, fn_args)
+                        else:
+                            result_str = ""
 
                         messages.append({
                             "role": "tool",
@@ -397,6 +403,7 @@ class LitellmOllamaProvider(BaseClassifierProvider):
         return False
 
     async def test_connection(self) -> Dict[str, Any]:
+        assert self.llm_service is not None
         try:
             await self.llm_service.complete(
                 provider=self.provider,
@@ -488,6 +495,7 @@ class LitellmOllamaProvider(BaseClassifierProvider):
             # Retry analyze up to 3 times – thinking models sometimes return empty JSON
             analysis = ""
             analysis_data: Dict[str, Any] = {}
+            _attempt = 0
             for _attempt in range(3):
                 analysis = await self._call_ollama(
                     analyze_prompt,
@@ -882,6 +890,7 @@ class LitellmOllamaProvider(BaseClassifierProvider):
         max_tokens: int = 500, keep_alive: str = "5m",
         json_schema: Optional[Dict[str, Any]] = None,
     ) -> str:
+        assert self.llm_service is not None
         """Make a single Ollama call via LiteLLM. Uses generate path with raw prompt for
         thinking models (bypasses chat template that triggers thinking),
         /api/chat with format=json/schema for standard models.
@@ -899,6 +908,7 @@ class LitellmOllamaProvider(BaseClassifierProvider):
         max_tokens: int, keep_alive: str,
         json_schema: Optional[Dict[str, Any]] = None,
     ) -> str:
+        assert self.llm_service is not None
         """Standard models: chat endpoint with format=json or JSON schema via LiteLLM."""
         messages = [{"role": "system", "content": system_prompt}]
         if user_message:
@@ -949,6 +959,7 @@ class LitellmOllamaProvider(BaseClassifierProvider):
         max_tokens: int, keep_alive: str,
         json_schema: Optional[Dict[str, Any]] = None,
     ) -> str:
+        assert self.llm_service is not None
         """Thinking models: raw prompt approach via LiteLLM chat endpoint.
         We construct a raw prompt that forces direct JSON output without
         triggering the model's thinking behavior. think=False suppresses
@@ -1072,6 +1083,7 @@ class LitellmOllamaProvider(BaseClassifierProvider):
         return text.strip()
 
     async def _unload_model(self):
+        assert self.llm_service is not None
         """Unload model from GPU memory after classification."""
         try:
             await self.llm_service.unload_local_model(self.provider, self.model)

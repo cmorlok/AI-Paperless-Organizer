@@ -16,7 +16,15 @@ from app.services.rag import RAGService
 from app.services.classifier import DocumentClassifierService, AutoClassifyState
 from app.services.duplicate import DuplicateService, DuplicateScanState
 from app.services.cloud_import import CloudImportService, CloudSyncState
+from app.services.config import ConfigService
+from app.services.tags import TagsService
+from app.services.correspondents import CorrespondentsService
+from app.services.document_types import DocumentTypesService
+from app.services.ignored_items import IgnoredItemsService
+from app.services.api_keys import ApiKeysService
+from app.services.auth import AuthService
 # Implementation imports use aliases to avoid name collision with Protocols
+from app.services.config.service import ConfigServiceImpl
 from app.services.llm.service import LitellmService
 from app.services.paperless.service import PaperlessClient as PaperlessClientImpl
 from app.services.similarity.service import SimilarityService as SimilarityServiceImpl
@@ -27,6 +35,12 @@ from app.services.rag.service import RAGService as RAGServiceImpl
 from app.services.classifier.service import DocumentClassifierService as DocumentClassifierServiceImpl
 from app.services.duplicate.service import DuplicateService as DuplicateServiceImpl
 from app.services.cloud_import.service import CloudImportService as CloudImportServiceImpl
+from app.services.tags.service import TagsServiceImpl
+from app.services.correspondents.service import CorrespondentsServiceImpl
+from app.services.document_types.service import DocumentTypesServiceImpl
+from app.services.ignored_items.service import IgnoredItemsServiceImpl
+from app.services.api_keys.service import ApiKeysServiceImpl
+from app.services.auth.service import AuthServiceImpl
 
 
 class AppProvider(Provider):
@@ -165,6 +179,85 @@ class AppProvider(Provider):
         state: CloudSyncState,
     ) -> CloudImportService:
         return CloudImportServiceImpl(session_factory=session_factory, state=state)
+
+    @provide(scope=Scope.APP)
+    def config_service(
+        self,
+        session_factory: async_sessionmaker,
+    ) -> ConfigService:
+        return ConfigServiceImpl(session_factory=session_factory)
+
+    @provide(scope=Scope.APP)
+    def tags_service(
+        self,
+        paperless_client: PaperlessClient,
+        llm_service: LLMService,
+        config_service: ConfigService,
+        statistics_service: StatisticsService,
+        session_factory: async_sessionmaker,
+    ) -> TagsService:
+        return TagsServiceImpl(
+            paperless_client=paperless_client,
+            llm_service=llm_service,
+            config_service=config_service,
+            statistics_service=statistics_service,
+            session_factory=session_factory,
+        )
+
+    @provide(scope=Scope.APP)
+    def correspondents_service(
+        self,
+        paperless_client: PaperlessClient,
+        llm_service: LLMService,
+        config_service: ConfigService,
+        statistics_service: StatisticsService,
+        session_factory: async_sessionmaker,
+    ) -> CorrespondentsService:
+        return CorrespondentsServiceImpl(
+            paperless_client=paperless_client,
+            llm_service=llm_service,
+            config_service=config_service,
+            statistics_service=statistics_service,
+            session_factory=session_factory,
+        )
+
+    @provide(scope=Scope.APP)
+    def document_types_service(
+        self,
+        paperless_client: PaperlessClient,
+        llm_service: LLMService,
+        config_service: ConfigService,
+        statistics_service: StatisticsService,
+        session_factory: async_sessionmaker,
+    ) -> DocumentTypesService:
+        return DocumentTypesServiceImpl(
+            paperless_client=paperless_client,
+            llm_service=llm_service,
+            config_service=config_service,
+            statistics_service=statistics_service,
+            session_factory=session_factory,
+        )
+
+    @provide(scope=Scope.APP)
+    def ignored_items_service(
+        self,
+        session_factory: async_sessionmaker,
+    ) -> IgnoredItemsService:
+        return IgnoredItemsServiceImpl(session_factory=session_factory)
+
+    @provide(scope=Scope.APP)
+    def api_keys_service(
+        self,
+        session_factory: async_sessionmaker,
+    ) -> ApiKeysService:
+        return ApiKeysServiceImpl(session_factory=session_factory)
+
+    @provide(scope=Scope.APP)
+    def auth_service(
+        self,
+        session_factory: async_sessionmaker,
+    ) -> AuthService:
+        return AuthServiceImpl(session_factory=session_factory)
 
 
 # Module-level container singleton

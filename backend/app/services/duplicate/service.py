@@ -20,6 +20,8 @@ class DuplicateService:
         self.llm_service = llm_service
 
     async def scan_all(self, modes: List[str], similarity_threshold: float = 0.92):
+        assert self.llm_service is not None
+        assert self.state is not None
         from app.services.duplicate.state import DuplicateScanState
         from app.services.duplicate import exact, similar, invoices
 
@@ -70,3 +72,73 @@ class DuplicateService:
             scan_state.error = str(e)
         finally:
             scan_state.running = False
+
+    # ── Extracted router business logic ─────────────────────────────────────
+
+    async def ignore_group(self, doc_ids: list) -> dict:
+        """Mark a group of documents as 'not a duplicate'."""
+        from sqlalchemy import select, and_
+        from app.models.duplicates import DuplicateIgnore
+
+        if len(doc_ids) < 2:
+            raise ValueError("Mindestens 2 Dokument-IDs erforderlich")
+
+        added = 0
+        async with self.session_factory() as db:
+            for i in range(len(doc_ids)):
+                for j in range(i + 1, len(doc_ids)):
+                    a, b = sorted([doc_ids[i], doc_ids[j]])
+                    existing = await db.execute(
+                        select(DuplicateIgnore).where(
+                            and_(
+                                DuplicateIgnore.doc_id_a == a,
+                                DuplicateIgnore.doc_id_b == b,
+                            )
+                        )
+                    )
+                    if existing.scalar_one_or_none() is None:
+                        db.add(DuplicateIgnore(doc_id_a=a, doc_id_b=b))
+                        added += 1
+            await db.commit()
+
+        logger.info("Added %d ignore pair(s) for doc_ids=%s", added, doc_ids)
+        return {"added": added}
+
+    async def list_ignored(self) -> list:
+        """Get all ignored pairs."""
+        from sqlalchemy import select
+        from app.models.duplicates import DuplicateIgnore
+
+        async with self.session_factory() as db:
+            result = await db.execute(select(DuplicateIgnore).order_by(DuplicateIgnore.created_at.desc()))
+            rows = result.scalars().all()
+            return [
+                {
+                    "id": row.id,
+                    "doc_id_a": row.doc_id_a,
+                    "doc_id_b": row.doc_id_b,
+                    "created_at": row.created_at.isoformat() if row.created_at else None,
+                }
+                for row in rows
+            ]
+
+    async def remove_ignore(self, doc_id_a: int, doc_id_b: int) -> None:
+        """Remove an ignore pair."""
+        from sqlalchemy import delete, and_
+        from app.models.duplicates import DuplicateIgnore
+
+        a, b = sorted([doc_id_a, doc_id_b])
+        async with self.session_factory() as db:
+            result = await db.execute(
+                delete(DuplicateIgnore).where(
+                    and_(
+                        DuplicateIgnore.doc_id_a == a,
+                        DuplicateIgnore.doc_id_b == b,
+                    )
+                )
+            )
+            await db.commit()
+            if result.rowcount == 0:  # type: ignore[union-attr]
+                raise ValueError("Paar nicht gefunden")
+
+        logger.info("Removed ignore pair (%d, %d)", a, b)

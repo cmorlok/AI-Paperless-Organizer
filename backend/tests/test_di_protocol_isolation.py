@@ -5,17 +5,20 @@ import pytest
 from pathlib import Path
 
 # Map of concrete modules -> banned class names
+# After Phase 04, concrete implementations live in *.service sub-modules.
+# Package-level imports (e.g., from app.services.similarity import SimilarityService)
+# are VALID protocol imports via __init__.py re-exports.
 BANNED_IMPORTS = {
-    "app.services.paperless_client": ["PaperlessClient"],
-    "app.services.ocr_service": ["OcrService"],
-    "app.services.llm_service": ["LitellmService"],
+    "app.services.paperless.service": ["PaperlessClient"],
+    "app.services.ocr.service": ["OcrService"],
+    "app.services.llm.service": ["LitellmService"],
     "app.services.classifier.service": ["DocumentClassifierService"],
     "app.services.rag.service": ["RAGService"],
-    "app.services.duplicate_service": ["DuplicateService"],
-    "app.services.cloud_import_service": ["CloudImportService"],
-    "app.services.similarity": ["SimilarityService"],
-    "app.services.merge": ["MergeService"],
-    "app.services.statistics": ["StatisticsService"],
+    "app.services.duplicate.service": ["DuplicateService"],
+    "app.services.cloud_import.service": ["CloudImportService"],
+    "app.services.similarity.service": ["SimilarityService"],
+    "app.services.merge.service": ["MergeService"],
+    "app.services.statistics.service": ["StatisticsService"],
 }
 
 ALLOWED_FILES = {
@@ -61,9 +64,10 @@ def test_no_concrete_service_imports(source_file: Path):
 
 
 def test_routers_import_from_protocols():
-    """All routers must import service types from protocol files.
+    """All routers must import service types from protocol files or package-level __init__.
 
-    Protocols are distributed to service sub-packages (e.g., app.services.paperless.protocol).
+    After Phase 04, services export from __init__.py (e.g., app.services.classifier),
+    which re-exports from protocol.py. Both patterns are valid.
     """
     routers_dir = Path(__file__).parent.parent / "app" / "routers"
     for router_file in routers_dir.glob("*.py"):
@@ -73,11 +77,11 @@ def test_routers_import_from_protocols():
         for node in ast.walk(tree):
             if isinstance(node, ast.ImportFrom):
                 module = node.module or ""
-                if module.startswith("app.services.") and not module.endswith(".protocol"):
-                    # Allow protocol imports from sub-packages
+                # Only flag direct .service imports (not package-level imports)
+                if module.endswith(".service") and module.startswith("app.services."):
                     for alias in node.names:
                         if alias.name in sum(BANNED_IMPORTS.values(), []):
                             pytest.fail(
                                 f"{router_file.name}: imports {alias.name} from {module} — "
-                                f"must import from protocol file (e.g., app.services.X.protocol)"
+                                f"must import from package level (e.g., app.services.X) or protocol"
                             )

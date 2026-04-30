@@ -38,6 +38,8 @@ from .error import (
     reset_ocr_error,
     load_ocr_error_list,
     save_ocr_error_list,
+    load_ocr_error_counts,
+    save_ocr_error_counts,
 )
 from .ignore import load_ocr_ignore_list, save_ocr_ignore_list, get_ocr_ignored_ids
 
@@ -61,8 +63,10 @@ class OcrService:
         self.session_factory = session_factory
 
     async def _get_provider(self) -> str:
+        assert self.llm_service is not None
+        assert self.session_factory is not None
         """Read OCR provider from KV store."""
-        from app.routers.settings import get_setting
+        from app.services.settings_service import get_setting
         async with self.session_factory() as db:
             provider = await get_setting("ocr_provider", db)
             if not provider:
@@ -70,26 +74,33 @@ class OcrService:
             return provider
 
     async def _get_model(self) -> str:
+        assert self.llm_service is not None
+        assert self.session_factory is not None
         """Read OCR model from KV store."""
-        from app.routers.settings import get_setting
+        from app.services.settings_service import get_setting
         async with self.session_factory() as db:
             return await get_setting("ocr_model", db) or DEFAULT_OCR_MODEL
 
     async def _get_max_image_size(self) -> int:
+        assert self.llm_service is not None
+        assert self.session_factory is not None
         """Lazy-load max image size from KV store."""
-        from app.routers.settings import get_setting
+        from app.services.settings_service import get_setting
         async with self.session_factory() as db:
             val = await get_setting("max_image_size", db)
             return int(val) if val else 2048
 
     async def _get_smart_skip_enabled(self) -> bool:
+        assert self.llm_service is not None
+        assert self.session_factory is not None
         """Lazy-load smart skip setting from KV store."""
-        from app.routers.settings import get_setting
+        from app.services.settings_service import get_setting
         async with self.session_factory() as db:
             val = await get_setting("smart_skip_enabled", db)
             return val != "false" if val else True
 
     async def _ensure_provider_ready(self, provider: str) -> None:
+        assert self.llm_service is not None
         """Check that the OCR provider is accessible."""
         if self.llm_service is None:
             raise RuntimeError("OcrService.llm_service not injected - cannot perform OCR")
@@ -180,8 +191,8 @@ class OcrService:
         """
         if max(image.size) > max_size:
             ratio = max_size / max(image.size)
-            new_size = tuple(int(dim * ratio) for dim in image.size)
-            image = image.resize(new_size, Image.LANCZOS)
+            new_size = (int(image.width * ratio), int(image.height * ratio))
+            image = image.resize(new_size, Image.Resampling.LANCZOS)
         img_bytes = io.BytesIO()
         image.save(img_bytes, format="JPEG", quality=85)
         return img_bytes.getvalue()
@@ -343,7 +354,8 @@ class OcrService:
         page_num: int = 0,
         total_pages: int = 0,
         timeout: float = 300.0,
-    ) -> str:
+    ) -> str | None:
+        assert self.llm_service is not None
         """Run OCR on a single prepared image bytes block.
 
         Uses model-specific parameters from get_model_params().
@@ -401,6 +413,7 @@ class OcrService:
         model_params: dict,
         timeout: float,
     ) -> dict | str | None:
+        assert self.llm_service is not None
         """Execute a single vision OCR request via LiteLLM."""
         if self.llm_service is None:
             raise RuntimeError("OcrService.llm_service not injected - cannot perform OCR")
@@ -544,6 +557,7 @@ class OcrService:
             return None
 
     async def ocr_document(self, paperless_client, document_id: int, force: bool = False, db_session=None) -> Dict[str, Any]:
+        assert self.state is not None
         """OCR a document with page-level persistence. Supports resume after failures."""
         # Fetch provider config at runtime
         provider = await self._get_provider()
@@ -795,6 +809,7 @@ class OcrService:
         return []
 
     async def _load_completed_pages(self, db_session, document_id: int, total_pages: int) -> Dict[int, str]:
+        assert self.llm_service is not None
         """Load already-completed page results from the DB."""
         from sqlalchemy import select
         from app.models.ocr import OcrPageResult
@@ -815,8 +830,9 @@ class OcrService:
     async def _save_page_result(
         self, db_session, document_id: int, page_number: int, total_pages: int,
         page_text: Optional[str], status: str, attempt_count: int,
-        duration: float = 0, error_message: str = None,
+        duration: float = 0, error_message: str | None = None,
     ):
+        assert self.llm_service is not None
         """Upsert a page result into the DB."""
         from sqlalchemy import select
         from app.models.ocr import OcrPageResult
@@ -854,6 +870,7 @@ class OcrService:
                 pass
 
     async def _cleanup_page_results(self, db_session, document_id: int):
+        assert self.llm_service is not None
         """Remove page results from DB after successful completion."""
         from sqlalchemy import delete
         from app.models.ocr import OcrPageResult
@@ -867,6 +884,7 @@ class OcrService:
             logger.warning(f"Failed to cleanup page results: {e}")
 
     async def ocr_image(self, image_bytes: bytes) -> str:
+        assert self.llm_service is not None
         """Legacy method for backward compat or single image bytes."""
         try:
             provider = await self._get_provider()
@@ -874,12 +892,14 @@ class OcrService:
             max_size = await self._get_max_image_size()
             img = Image.open(io.BytesIO(image_bytes))
             prepared = self._prepare_image(img, max_size=max_size)
-            return await self._ocr_single_image(prepared, model, provider)
+            result = await self._ocr_single_image(prepared, model, provider)
+            return result or ""
         except Exception as e:
             logger.error(f"Legacy ocr_image failed: {e}")
             raise
 
     async def test_connection(self) -> Dict[str, Any]:
+        assert self.llm_service is not None
         """Test OCR provider connection and return status."""
         try:
             provider = await self._get_provider()
@@ -892,6 +912,293 @@ class OcrService:
         except Exception as e:
             return {"connected": False, "error": str(e)}
 
+    async def get_ocr_status(self, paperless_client) -> Dict[str, Any]:
+        """Get overall OCR status - total docs, finished docs, percentage."""
+        ocrfinish_tag = await paperless_client.get_or_create_tag(TAG_OCR_FINISH)
+        ocrfinish_id = ocrfinish_tag.get("id")
+
+        total_count = await paperless_client.get_document_count()
+        finished_count = await paperless_client.get_document_count(tag_id=ocrfinish_id) if ocrfinish_id else 0
+
+        percentage = round((finished_count / total_count * 100), 1) if total_count > 0 else 0
+        pending_count = total_count - finished_count
+
+        return {
+            "total_documents": total_count,
+            "finished_documents": finished_count,
+            "pending_documents": pending_count,
+            "percentage": percentage,
+            "ocrfinish_tag_id": ocrfinish_id,
+        }
+
+    async def apply_review_item(self, document_id: int, paperless_client) -> Dict[str, Any]:
+        """Apply review queue item: accept the new OCR text for a document."""
+        queue = load_review_queue()
+        item = next((q for q in queue if q["document_id"] == document_id), None)
+        if not item:
+            raise ValueError("Dokument nicht in Review Queue")
+
+        await self.apply_ocr_result(paperless_client, document_id, item["new_content"], True)
+
+        queue = [q for q in queue if q["document_id"] != document_id]
+        save_review_queue(queue)
+        return {"applied": True, "document_id": document_id}
+
+    async def reset_all_review_items(self, paperless_client) -> Dict[str, Any]:
+        """Reset all review queue items: remove ocrpruefen tag so batch OCR re-processes them."""
+        queue = load_review_queue()
+        if not queue:
+            return {"reset": 0, "errors": []}
+
+        ocrpruefen_tag = await paperless_client.get_or_create_tag(TAG_OCR_REVIEW)
+        ocrpruefen_id = ocrpruefen_tag.get("id")
+
+        errors = []
+        reset_count = 0
+        for item in queue:
+            doc_id = item["document_id"]
+            try:
+                if ocrpruefen_id:
+                    await paperless_client.bulk_update_documents(
+                        document_ids=[doc_id],
+                        remove_tags=[ocrpruefen_id]
+                    )
+                reset_count += 1
+            except Exception as e:
+                errors.append(f"Dok {doc_id}: {e}")
+
+        save_review_queue([])
+        return {"reset": reset_count, "errors": errors}
+
+    async def keep_all_originals(self, paperless_client) -> Dict[str, Any]:
+        """Keep all original contents: set ocrfinish on all review items without changing content."""
+        queue = load_review_queue()
+        if not queue:
+            return {"kept": 0, "errors": []}
+
+        ocrfinish_tag = await paperless_client.get_or_create_tag(TAG_OCR_FINISH)
+        ocrfinish_id = ocrfinish_tag.get("id")
+        ocrpruefen_tag = await paperless_client.get_or_create_tag(TAG_OCR_REVIEW)
+        ocrpruefen_id = ocrpruefen_tag.get("id")
+
+        errors = []
+        kept_count = 0
+        doc_ids = [item["document_id"] for item in queue]
+
+        for i in range(0, len(doc_ids), 25):
+            batch = doc_ids[i:i+25]
+            try:
+                add_t = [ocrfinish_id] if ocrfinish_id else []
+                rem_t = [ocrpruefen_id] if ocrpruefen_id else []
+                if add_t or rem_t:
+                    await paperless_client.bulk_update_documents(
+                        document_ids=batch,
+                        add_tags=add_t if add_t else None,
+                        remove_tags=rem_t if rem_t else None
+                    )
+                kept_count += len(batch)
+            except Exception as e:
+                errors.append(f"Batch {i//25+1}: {e}")
+
+        save_review_queue([])
+        return {"kept": kept_count, "errors": errors}
+
+    async def add_to_ignore_list(self, document_id: int, paperless_client) -> Dict[str, Any]:
+        """Add a document to the OCR ignore list."""
+        ignore_list = load_ocr_ignore_list()
+        if any(entry["document_id"] == document_id for entry in ignore_list):
+            return {"already_ignored": True, "document_id": document_id}
+
+        title = f"Dokument {document_id}"
+        try:
+            doc = await paperless_client.get_document(document_id)
+            if doc:
+                title = doc.get("title", title)
+        except Exception:
+            pass
+
+        ignore_list.append({
+            "document_id": document_id,
+            "title": title,
+            "reason": "Original besser als OCR",
+            "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S")
+        })
+        save_ocr_ignore_list(ignore_list)
+        return {"added": True, "document_id": document_id, "title": title}
+
+    async def remove_from_error_list(self, document_id: int, paperless_client) -> Dict[str, Any]:
+        """Remove a document from the error list and remove its ocrfehler tag."""
+        error_list = load_ocr_error_list()
+        new_list = [entry for entry in error_list if entry["document_id"] != document_id]
+        save_ocr_error_list(new_list)
+
+        counts = load_ocr_error_counts()
+        key = str(document_id)
+        if key in counts:
+            del counts[key]
+            save_ocr_error_counts(counts)
+
+        try:
+            tag = await paperless_client.get_or_create_tag(TAG_OCR_ERROR)
+            tag_id = tag.get("id")
+            if tag_id:
+                await paperless_client.bulk_update_documents(
+                    document_ids=[document_id],
+                    remove_tags=[tag_id]
+                )
+        except Exception as e:
+            logger.warning(f"Could not remove ocrfehler tag from {document_id}: {e}")
+
+        return {"removed": True, "document_id": document_id}
+
+    async def evaluate_ocr_results(
+        self,
+        document_title: str,
+        results: List[dict],
+        eval_provider: str,
+        eval_model: str | None = None,
+    ) -> Dict[str, Any]:
+        """Send OCR comparison results to an LLM for quality evaluation."""
+        model_sections = []
+        for i, r in enumerate(results):
+            model_name = r.get("model", f"Modell {i+1}")
+            text = r.get("text", "")
+            chars = r.get("chars", len(text))
+            duration = r.get("duration_seconds", 0)
+
+            if len(text) > 6000:
+                display_text = text[:4000] + "\n\n[... gekürzt ...]\n\n" + text[-1500:]
+            else:
+                display_text = text
+
+            model_sections.append(
+                f"=== VERSION {i+1}: {model_name} ===\n"
+                f"Zeichen: {chars} | Dauer: {duration}s\n"
+                f"--- TEXT START ---\n{display_text}\n--- TEXT END ---"
+            )
+
+        models_text = "\n\n".join(model_sections)
+
+        prompt = f"""Du bist ein erfahrener OCR-Qualitätsprüfer und Dokumentenanalyst. Du bewertest OCR-Ergebnisse für ein deutsches Dokumentenmanagementsystem (Paperless-ngx).
+
+DOKUMENT: "{document_title}"
+ANZAHL VERSIONEN: {len(results)}
+
+Folgende OCR-Versionen desselben Dokuments wurden von verschiedenen lokalen Vision-Modellen (Ollama) erstellt. Vergleiche sie gründlich.
+
+{models_text}
+
+BEWERTUNGSANLEITUNG:
+Du musst jede Version sorgfältig auf folgende Kriterien prüfen. Vergleiche die Versionen untereinander -- wenn mehrere Versionen den gleichen Wert haben, ist er wahrscheinlich korrekt. Abweichungen deuten auf Fehler hin.
+
+KRITISCHE FELDER (Fehler hier = sofortiger Punktabzug):
+- Namen (Vor-/Nachname): Auch ein einziger falscher Buchstabe ist ein Fehler
+- Datumsangaben: Falsches Jahr/Monat = KO-Kriterium (schlimmer als Tippfehler!)
+- IBAN/Kontonummern: Ziffern müssen exakt stimmen, Leerzeichen-Gruppierung egal
+- Geldbeträge: Müssen exakt stimmen
+
+WICHTIGE FELDER:
+- Adressen, Zählernummern, Referenznummern
+- Checkbox-Zustände (angekreuzt vs. leer)
+- Formularlogik (Felder richtig zugeordnet?)
+
+ALLGEMEINE QUALITÄT:
+- Vollständigkeit (fehlen Textblöcke/Absätze?)
+- Halluzinationen (hat das Modell Text erfunden der nicht im Original steht?)
+- Wiederholungen (Textblöcke die sich wiederholen)
+- Formatierung und Lesbarkeit
+
+PRAXISTAUGLICHKEIT:
+- Kann der Text automatisiert weiterverarbeitet werden?
+- Wie viel manuelle Nacharbeit wäre nötig?
+
+Antworte NUR mit validem JSON (kein Text davor/danach, keine Markdown-Codeblöcke):
+{{
+  "ranking": [
+    {{
+      "rank": 1,
+      "model": "<modellname>",
+      "overall_score": <0-100>,
+      "category_scores": {{
+        "names_persons": <0-10>,
+        "dates_periods": <0-10>,
+        "iban_banking": <0-10>,
+        "amounts_numbers": <0-10>,
+        "addresses": <0-10>,
+        "form_logic": <0-10>,
+        "completeness": <0-10>,
+        "formatting": <0-10>,
+        "no_hallucinations": <0-10>,
+        "automatizability": <0-10>
+      }},
+      "speed_seconds": <dauer>,
+      "strengths": ["Stärke 1", "Stärke 2"],
+      "weaknesses": ["Schwäche 1"],
+      "specific_errors": [
+        {{"field": "Name", "expected": "korrekt", "got": "was das Modell geschrieben hat", "severity": "critical"}},
+        {{"field": "IBAN", "expected": "DE12 3456...", "got": "DE12 3546...", "severity": "high"}}
+      ],
+      "verdict": "<1-2 Sätze Praxisurteil auf Deutsch>"
+    }}
+  ],
+  "best_quality": "<modellname mit bester Qualität>",
+  "best_speed": "<schnellstes Modell>",
+  "best_value": "<bestes Preis-Leistungs-Verhältnis (Qualität vs. Geschwindigkeit)>",
+  "recommendation": "<3-4 Sätze Empfehlung auf Deutsch: welches Modell für Produktion, welches Backup, welches nicht verwenden>",
+  "critical_finding": "<wichtigste Erkenntnis, z.B. 'Datumsfehler bei Modell X sind ein KO-Kriterium'>",
+  "cross_comparison": {{
+    "agreement": ["Felder wo alle Versionen übereinstimmen"],
+    "disagreement": ["Felder wo die Versionen sich widersprechen -- hier liegt wahrscheinlich mindestens ein Fehler"]
+  }}
+}}
+
+WICHTIG:
+- Severity-Stufen: "critical" (Daten, Namen, IBAN falsch), "high" (wichtige Felder), "medium" (Formatierung), "low" (kosmetisch)
+- Score 0-100: unter 50 = nicht verwendbar, 50-70 = bedingt brauchbar, 70-85 = gut, 85+ = sehr gut
+- Sei STRENG aber FAIR. Ein falsches Datum ist schlimmer als 5 Tippfehler.
+- Wenn du nicht sicher bist ob ein Wert richtig ist, vergleiche die Versionen untereinander.
+"""
+
+        used_model = eval_model or "gpt-4o"
+        logger.info("Evaluating OCR results", extra={"count": len(results), "provider": eval_provider, "model": used_model})
+
+        assert self.llm_service is not None
+        result = await self.llm_service.complete(
+            provider=eval_provider,
+            model=used_model,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        cleaned = (result.content or "").strip()
+        if cleaned.startswith("```"):
+            lines = cleaned.split("\n")
+            lines = [line for line in lines if not line.strip().startswith("```")]
+            cleaned = "\n".join(lines)
+
+        try:
+            evaluation = json.loads(cleaned)
+        except json.JSONDecodeError:
+            import re
+            json_match = re.search(r'\{[\s\S]*\}', cleaned)
+            if json_match:
+                evaluation = json.loads(json_match.group())
+            else:
+                logger.error(f"Could not parse LLM response as JSON: {cleaned[:500]}")
+                return {
+                    "success": True,
+                    "raw_response": cleaned,
+                    "evaluation": None,
+                    "parse_error": "LLM-Antwort konnte nicht als JSON geparst werden",
+                }
+
+        logger.info("OCR evaluation complete", extra={"provider": eval_provider, "model": used_model})
+
+        return {
+            "success": True,
+            "evaluation": evaluation,
+            "provider": eval_provider,
+            "model": used_model,
+        }
+
     async def apply_ocr_result(
         self,
         paperless_client,
@@ -899,6 +1206,7 @@ class OcrService:
         new_content: str,
         set_finish_tag: bool = True
     ) -> Dict[str, Any]:
+        assert self.state is not None
         """Apply OCR result to document and optionally set ocrfinish tag."""
         start_time = time.time()
 
@@ -938,10 +1246,11 @@ class OcrService:
         self,
         paperless_client,
         mode: str = "all",
-        document_ids: List[int] = None,
+        document_ids: List[int] | None = None,
         set_finish_tag: bool = True,
         remove_runocr_tag: bool = True
     ) -> None:
+        assert self.state is not None
         """Run batch OCR. Updates self.state.batch in-place for progress tracking."""
         self.state.batch.running = True
         self.state.batch.should_stop = False
@@ -1000,7 +1309,7 @@ class OcrService:
                             return
 
                 documents = [
-                    d for d in all_docs
+                    d for d in (all_docs or [])
                     if ocrfinish_tag_id not in d.get("tags", [])
                     and ocrreview_tag_id not in d.get("tags", [])
                     and ocrerror_tag_id not in d.get("tags", [])
@@ -1271,6 +1580,7 @@ class OcrService:
             self.state.batch.current_document = None
 
     async def _unload_model_from_vram(self, model: str) -> None:
+        assert self.llm_service is not None
         try:
             await self.llm_service.unload_local_model("ollama", model)
             logger.info(f"Unloaded {model} from VRAM")
@@ -1278,6 +1588,7 @@ class OcrService:
             pass
 
     async def _wait_for_provider_ready(self, provider: str, max_wait: int = 60) -> bool:
+        assert self.llm_service is not None
         waited = 0
         interval = 3
         while waited < max_wait:
@@ -1408,7 +1719,7 @@ class OcrService:
                             page_num=page_idx + 1, total_pages=total_pages, timeout=300.0,
                         )
                         preview = page_text[:200].replace('\n', ' ') if page_text else "(empty)"
-                        logger.debug(f"{model_name} page {page_idx+1} result: {len(page_text)} chars, preview: {preview}")
+                        logger.debug(f"{model_name} page {page_idx+1} result: {len(page_text or '')} chars, preview: {preview}")
                         page_texts.append(page_text)
                 except Exception as e:
                     error_msg = str(e)
@@ -1450,6 +1761,7 @@ class OcrService:
             compare_state.running = False
 
     async def processor_loop(self, paperless_client):
+        assert self.state is not None
         """Continuous background loop to check for new documents."""
         from datetime import datetime
 
@@ -1461,6 +1773,7 @@ class OcrService:
         _ocrerror_tag = None
 
         async def _get_exclude_tag_ids():
+            assert self.state is not None
             nonlocal _ocrfinish_tag, _ocrpruefen_tag, _ocrerror_tag
             try:
                 if _ocrfinish_tag is None:
@@ -1516,7 +1829,7 @@ class OcrService:
                 logger.info(f"Processor error: {e}")
 
             self.state.processor.running = False
-            interval_min = self.state.processor.get("interval_minutes", 1)
+            interval_min = self.state.processor.interval_minutes or 1
             for _ in range(interval_min * 60):
                 if not self.state.processor.enabled:
                     break
@@ -1525,3 +1838,290 @@ class OcrService:
         self.state.processor.running = False
         logger.info("Processor stopped")
         logger.info("Processor stopped")
+
+    # ── Extracted router business logic ─────────────────────────────────────
+
+    def get_ocr_settings_with_state(self) -> dict:
+        """Get OCR settings defaults merged with processor state."""
+        settings = {
+            "model": DEFAULT_OCR_MODEL,
+            "max_image_size": 1344,
+            "smart_skip_enabled": True,
+        }
+        settings["processor_enabled"] = self.state.processor.enabled
+        settings["processor_interval"] = self.state.processor.interval_minutes
+        return settings
+
+    async def save_ocr_settings(
+        self, model: str, max_image_size: int, smart_skip_enabled: bool, config_svc: Any,
+    ) -> dict:
+        """Save OCR settings to KV store."""
+        await config_svc.set("ocr_model", model, "str")
+        await config_svc.set("max_image_size", str(max_image_size), "int")
+        await config_svc.set("smart_skip_enabled", str(smart_skip_enabled).lower(), "bool")
+        return {
+            "success": True,
+            "model": model,
+            "max_image_size": max_image_size,
+            "smart_skip_enabled": smart_skip_enabled,
+        }
+
+    async def persist_processor_enabled(self, enabled: bool, config_svc: Any) -> None:
+        """Persist processor enabled flag to AppSettings."""
+        await config_svc.set(
+            "ocr_processor_enabled",
+            "true" if enabled else "false",
+            "bool",
+        )
+
+    async def configure_processor(
+        self, enabled: bool, interval_minutes: int, config_svc: Any, client: Any,
+    ) -> dict:
+        """Configure processor: set interval, persist, start/stop loop."""
+        self.state.processor.interval_minutes = max(1, interval_minutes)
+        try:
+            await self.persist_processor_enabled(enabled, config_svc)
+        except Exception as e:
+            logger.warning(f"Could not persist ocr_processor_enabled to KV: {e}")
+
+        if enabled and not self.state.processor.enabled:
+            self.state.processor.enabled = True
+            loop = asyncio.get_running_loop()
+            self.state.processor.task = loop.create_task(self.processor_loop(client))
+        elif not enabled and self.state.processor.enabled:
+            self.state.processor.enabled = False
+
+        return self.get_processor_status_dict()
+
+    def get_processor_status_dict(self) -> dict:
+        """Return processor status as dict."""
+        return {
+            "enabled": self.state.processor.enabled,
+            "running": self.state.processor.running,
+            "interval_minutes": self.state.processor.interval_minutes,
+            "last_run": self.state.processor.last_run,
+        }
+
+    def pause_batch(self) -> dict:
+        """Pause the running batch OCR job."""
+        if not self.state.batch.running:
+            return {"success": False, "message": "Kein Batch-Job aktiv"}
+        self.state.batch.paused = True
+        return {"success": True, "message": "Batch-Job pausiert", "paused": True}
+
+    def resume_batch(self) -> dict:
+        """Resume the paused batch OCR job."""
+        if not self.state.batch.running:
+            return {"success": False, "message": "Kein Batch-Job aktiv"}
+        self.state.batch.paused = False
+        return {"success": True, "message": "Batch-Job fortgesetzt", "paused": False}
+
+    def stop_batch(self) -> dict:
+        """Stop the running batch OCR job."""
+        if not self.state.batch.running:
+            return {"stopped": False, "message": "Kein Batch-Job aktiv"}
+        self.state.batch.should_stop = True
+        return {"stopped": True, "message": "Batch-Job wird gestoppt..."}
+
+    async def ocr_single_document_safe(
+        self, client: Any, document_id: int, force: bool, db_session: Any,
+    ) -> dict:
+        """OCR a single document with lock management and error wrapping."""
+        try:
+            await self.state.acquire_lock("single")
+            return await self.ocr_document(client, document_id, force=force, db_session=db_session)
+        finally:
+            self.state.release_lock()
+            self.state.page_progress.pop(document_id, None)
+
+    def get_progress_dict(self, document_id: int) -> dict:
+        """Get live page-level progress for an ongoing OCR job."""
+        progress = self.state.page_progress.get(document_id)
+        if not progress:
+            return {"active": False, "document_id": document_id}
+        elapsed = time.time() - (progress.get("started_at") or time.time())
+        return {
+            "active": True,
+            "document_id": document_id,
+            "status": progress.get("status", "unknown"),
+            "total_pages": progress.get("total_pages", 0),
+            "done": progress.get("done", 0),
+            "errors": progress.get("errors", 0),
+            "current_page": progress.get("current_page", 0),
+            "elapsed_seconds": round(elapsed, 1),
+            "pages": progress.get("pages", []),
+        }
+
+    async def apply_ocr_result_background(
+        self, client: Any, document_id: int, content: str, set_finish_tag: bool,
+    ) -> None:
+        """Apply OCR result in background (fire-and-forget)."""
+        try:
+            await self.apply_ocr_result(client, document_id, content, set_finish_tag)
+            logger.info("OCR result applied successfully", extra={"document_id": document_id})
+        except Exception as e:
+            logger.error("OCR result apply failed", extra={"document_id": document_id, "error": str(e)})
+            logger.error(f"Background apply error: {e}")
+
+    def check_batch_not_running(self) -> None:
+        """Raise if batch is already running."""
+        if self.state.batch.running:
+            raise ValueError("already_running")
+
+    def get_batch_status_dict(self, llm_service: Any = None) -> dict:
+        """Get current batch status including page-level progress."""
+        current_doc = self.state.batch.current_document
+        current_doc_id = current_doc.get("id") if isinstance(current_doc, dict) else None
+
+        page_progress = None
+        if current_doc_id and current_doc_id in self.state.page_progress:
+            pp = self.state.page_progress[current_doc_id]
+            page_progress = {
+                "document_id": current_doc_id,
+                "total_pages": pp.get("total_pages", 0),
+                "done": pp.get("done", 0),
+                "errors": pp.get("errors", 0),
+                "current_page": pp.get("current_page", 0),
+                "status": pp.get("status", "unknown"),
+                "pages": pp.get("pages", []),
+            }
+
+        lock_status = llm_service.get_lock_status() if llm_service else {}
+        waiting = next(
+            (p for p, s in lock_status.items() if s["locked"]), None,
+        ) if not self.state.batch.running else None
+
+        return {
+            "running": self.state.batch.running,
+            "total": self.state.batch.total,
+            "processed": self.state.batch.processed,
+            "current_document": current_doc,
+            "current_page_progress": page_progress,
+            "errors_count": len(self.state.batch.errors),
+            "log": self.state.batch.log[-50:],
+            "mode": self.state.batch.mode,
+            "paused": self.state.batch.paused,
+            "waiting_for": waiting,
+        }
+
+    def dismiss_review_item_from_queue(self, document_id: int) -> dict:
+        """Dismiss a review queue item."""
+        queue = load_review_queue()
+        new_queue = [q for q in queue if q["document_id"] != document_id]
+        if len(new_queue) == len(queue):
+            raise ValueError("Dokument nicht in Review Queue")
+        save_review_queue(new_queue)
+        return {"dismissed": True, "document_id": document_id}
+
+    def ignore_review_item_permanently(self, document_id: int) -> dict:
+        """Ignore document permanently: remove from review queue and add to OCR ignore list."""
+        queue = load_review_queue()
+        item = next((q for q in queue if q["document_id"] == document_id), None)
+        title = item["title"] if item else f"Dokument {document_id}"
+        new_queue = [q for q in queue if q["document_id"] != document_id]
+        save_review_queue(new_queue)
+
+        ignore_list = load_ocr_ignore_list()
+        if not any(entry["document_id"] == document_id for entry in ignore_list):
+            ignore_list.append({
+                "document_id": document_id,
+                "title": title,
+                "reason": "Original besser als OCR",
+                "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"),
+            })
+            save_ocr_ignore_list(ignore_list)
+
+        return {"ignored": True, "document_id": document_id, "title": title}
+
+    def get_error_list_with_counts(self) -> dict:
+        """Get error list with pending error counts."""
+        error_list = load_ocr_error_list()
+        error_counts = load_ocr_error_counts()
+        return {"items": error_list, "count": len(error_list), "pending_errors": error_counts}
+
+    def clear_all_errors(self) -> dict:
+        """Clear the entire error list and error counts."""
+        save_ocr_error_list([])
+        save_ocr_error_counts({})
+        return {"cleared": True}
+
+    def remove_from_ocr_ignore_list(self, document_id: int) -> None:
+        """Remove a document from the OCR ignore list. Raises if not found."""
+        ignore_list = load_ocr_ignore_list()
+        new_list = [entry for entry in ignore_list if entry["document_id"] != document_id]
+        if len(new_list) == len(ignore_list):
+            raise ValueError("Dokument nicht in der Ignore-Liste")
+        save_ocr_ignore_list(new_list)
+
+    async def get_preview_response(self, client: Any, document_id: int):
+        """Get document preview with auto-detected media type."""
+        from fastapi.responses import Response
+        file_bytes = await client.get_document_preview_image(document_id)
+
+        if file_bytes[:4] == b'%PDF':
+            media_type = "application/pdf"
+        elif file_bytes[:4] == b'\x89PNG':
+            media_type = "image/png"
+        elif file_bytes[:2] == b'\xff\xd8':
+            media_type = "image/jpeg"
+        elif file_bytes[:4] == b'RIFF':
+            media_type = "image/webp"
+        else:
+            media_type = "application/pdf"
+        return Response(
+            content=file_bytes,
+            media_type=media_type,
+            headers={"Content-Disposition": "inline", "X-Content-Type-Options": "nosniff"},
+        )
+
+    async def get_thumbnail_response(self, client: Any, document_id: int):
+        """Get document thumbnail with auto-detected media type."""
+        from fastapi.responses import Response
+        image_bytes = await client.get_document_thumbnail_bytes(document_id)
+        if image_bytes[:4] == b'\x89PNG':
+            return Response(content=image_bytes, media_type="image/png")
+        return Response(content=image_bytes, media_type="image/webp")
+
+    async def validate_and_start_compare(
+        self, client: Any, document_id: int, slots: list, page: int, compare_state: Any,
+    ) -> dict:
+        """Validate compare request and start background job."""
+        if compare_state.running:
+            raise ValueError("already_running")
+
+        if not slots or len(slots) == 0:
+            raise ValueError("Mindestens ein Modell auswählen")
+        if len(slots) > 5:
+            raise ValueError("Maximal 5 Modelle gleichzeitig")
+
+        compare_state.reset()
+        compare_state.running = True
+        compare_state.document_id = document_id
+        compare_state.models = [s.model for s in slots]
+        compare_state.total_models = len(slots)
+        compare_state.phase = "starting"
+
+        asyncio.create_task(
+            self.run_compare_job(client, document_id, slots, page, compare_state)
+        )
+        return {"started": True, "models": len(slots)}
+
+    def get_compare_status_dict(self, compare_state: Any) -> dict:
+        """Get compare status as dict."""
+        return {
+            "running": compare_state.running,
+            "phase": compare_state.phase,
+            "current_model": compare_state.current_model,
+            "current_model_index": compare_state.current_model_index,
+            "total_models": compare_state.total_models,
+            "current_page": compare_state.current_page,
+            "total_pages": compare_state.total_pages,
+            "models": compare_state.models,
+            "document_id": compare_state.document_id,
+            "title": compare_state.title,
+            "old_content": compare_state.old_content,
+            "compared_page": compare_state.compared_page,
+            "results": compare_state.results,
+            "error": compare_state.error,
+            "elapsed_seconds": compare_state.elapsed_seconds,
+        }

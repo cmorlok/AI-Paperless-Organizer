@@ -18,7 +18,6 @@ init_logging()
 logger = get_logger("app.main")
 
 from app.routers import paperless, correspondents, tags, document_types, settings, llm, debug, statistics, ignored_items, ocr, cleanup, classifier, rag, api_keys, cloud_import, duplicates, auth  # noqa: E402
-from app.routers.ocr import load_ocr_settings  # noqa: E402
 from app.services.ocr import OcrState, OcrService  # noqa: E402
 from app.services.classifier import AutoClassifyState, auto_classify_loop  # noqa: E402
 from app.services.paperless import PaperlessClient  # noqa: E402
@@ -66,7 +65,7 @@ async def lifespan(app: FastAPI):
     # Helper to read from KV store
     async def _read_kv_setting(key: str) -> Optional[bool]:
         try:
-            from app.routers.settings import get_setting
+            from app.services.settings_service import get_setting
             val = await get_setting(key, db_sess)
             return val == "true" if val is not None else None
         except Exception:
@@ -74,7 +73,7 @@ async def lifespan(app: FastAPI):
 
     # Auto-start processor if it was enabled before shutdown
     kv_processor_enabled = await _read_kv_setting("ocr_processor_enabled")
-    startup_settings = load_ocr_settings()
+    startup_settings = {"processor_enabled": False, "processor_interval": 5}
     start_processor = kv_processor_enabled if kv_processor_enabled is not None else startup_settings.get("processor_enabled")
 
     if start_processor:
@@ -119,7 +118,7 @@ async def lifespan(app: FastAPI):
 
             # Migrate away from mistral-nemo:12b — reset to documented default qwen3.5:4b
             if rag_cfg and getattr(rag_cfg, "chat_model", "") == "mistral-nemo:12b":
-                rag_cfg.chat_model = "qwen3.5:4b"
+                setattr(rag_cfg, "chat_model", "qwen3.5:4b")
                 await db_sess.commit()
                 logging.getLogger(__name__).info("RAG: migrated chat_model from mistral-nemo:12b to qwen3.5:4b")
 
@@ -166,7 +165,7 @@ async def lifespan(app: FastAPI):
         try:
             from app.models.cloud_import import CloudSource
             src_q = await db_sess.execute(
-                sa_select(CloudSource).where(CloudSource.enabled is True)
+                sa_select(CloudSource).where(CloudSource.enabled)
             )
             kv_cloud_sync_enabled = src_q.scalars().first() is not None
         except Exception:
@@ -203,6 +202,7 @@ async def lifespan(app: FastAPI):
 
     # Cloud sync shutdown - resolve from container
     try:
+        from app.services.cloud_import import CloudSyncState
         async with di_container() as ctx:
             css: CloudSyncState = await ctx.get(CloudSyncState)
             css.enabled = False
@@ -233,7 +233,7 @@ app = FastAPI(
 )
 
 setup_dishka(di_container, app)
-app.container = di_container
+setattr(app, "container", di_container)
 
 
 def _log(level: str, msg: str, *args):

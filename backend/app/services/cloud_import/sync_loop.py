@@ -49,7 +49,7 @@ async def _run_sync_cycle(state: CloudSyncState, container: AsyncContainer) -> N
             client: PaperlessClient = await ctx.get(PaperlessClient)
             service: CloudImportService = await ctx.get(CloudImportService)
 
-            async with service.session_factory() as db:
+            async with getattr(service, "session_factory")() as db:
                 src_q = await db.execute(sa_select(CloudSource).where(CloudSource.enabled))
                 sources = src_q.scalars().all()
 

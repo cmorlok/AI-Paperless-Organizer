@@ -4,19 +4,20 @@ from __future__ import annotations
 
 import asyncio
 import json
-import re
 import traceback
 from collections import defaultdict
-from typing import Optional, Dict, Any, List, AsyncGenerator
+from typing import Optional, Dict, Any, AsyncGenerator, TYPE_CHECKING
 
 import httpx
 import litellm
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.logging import get_logger
 from app.database import async_session
 from app.models import LLMProvider
+
+if TYPE_CHECKING:
+    from app.services.llm.types import LLMResponse
 
 
 class LLMLockTimeoutError(Exception):
@@ -333,7 +334,7 @@ class LitellmService:
             stream=True,
             **kwargs,
         )
-        raw_stream = await self._execute_completion(provider, litellm_kwargs)
+        raw_stream: Any = await self._execute_completion(provider, litellm_kwargs)
 
         async def _generate():
             async for chunk in raw_stream:
@@ -372,8 +373,8 @@ class LitellmService:
         """List all LiteLLM-supported providers."""
         try:
             providers = []
-            for provider_enum in litellm.provider_list:
-                provider_name = provider_enum.value
+            for provider_item in litellm.provider_list:
+                provider_name = getattr(provider_item, "value", provider_item)
                 providers.append({
                     "name": provider_name,
                     "display_name": PROVIDER_DISPLAY_NAMES.get(
@@ -669,7 +670,7 @@ class LitellmService:
     def _log_llm_error(msg: str, exc: Exception) -> None:
         detail = LitellmService._extract_litellm_error(exc)
         tb = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
-        print(f"ERROR app.services.llm.service: {msg}: {detail}\n{tb}", flush=True)
+        logger.error("LLM service error", extra={"message": msg, "detail": detail, "traceback": tb})
         logger.error("%s: %s", msg, detail, exc_info=True)
 
     async def check_provider_health(self, provider: str) -> bool:

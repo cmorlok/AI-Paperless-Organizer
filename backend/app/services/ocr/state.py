@@ -2,11 +2,10 @@
 
 from __future__ import annotations
 
-import asyncio
 from pathlib import Path
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field, PrivateAttr
+from pydantic import BaseModel, ConfigDict, Field
 
 from app.services.base_state import BaseState, CancelMixin
 
@@ -41,6 +40,15 @@ class OcrDocumentProgress(BaseModel):
     pages: list[PageProgress] = Field(default_factory=list)
     started_at: float = 0.0
     status: str = ""
+
+    def __getitem__(self, key: str):
+        return getattr(self, key)
+
+    def __setitem__(self, key: str, value) -> None:
+        setattr(self, key, value)
+
+    def get(self, key: str, default=None):
+        return getattr(self, key, default)
 
 
 class OcrBatchProgress(BaseModel):
@@ -132,8 +140,6 @@ class OcrState(BaseState, CancelMixin):
     processor: OcrProcessorProgress = Field(default_factory=OcrProcessorProgress)
     page_progress: dict[int, OcrDocumentProgress] = Field(default_factory=dict)
 
-    _lock: asyncio.Lock = PrivateAttr(default_factory=asyncio.Lock)
-
     def _reset_fields(self) -> None:
         self.batch = OcrBatchProgress()
         self.processor = OcrProcessorProgress()
@@ -144,3 +150,14 @@ class OcrState(BaseState, CancelMixin):
         """Cancel the OCR operation and signal batch should stop."""
         self.request_cancel()
         self.batch.should_stop = True
+
+    async def acquire_lock(self, operation: str = "") -> None:
+        """Acquire the per-instance lock for single-document operations."""
+        await self._lock.acquire()
+
+    def release_lock(self) -> None:
+        """Release the per-instance lock."""
+        try:
+            self._lock.release()
+        except RuntimeError:
+            pass

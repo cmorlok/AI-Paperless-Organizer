@@ -44,12 +44,6 @@ class BaseState(BaseModel):
 
     running: bool = False
     enabled: bool = False
-
-    # Shared asyncio.Lock for subclass synchronization.
-    # This is a ClassVar: all instances of the same class reference
-    # the same lock object. Per D-03, subclasses that need per-instance
-    # locks add their own. This provides a default synchronization
-    # point for reset() + background updates when subclasses use it.
     _lock: ClassVar[asyncio.Lock] = asyncio.Lock()
 
     def reset(self) -> None:

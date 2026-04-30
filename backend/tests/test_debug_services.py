@@ -8,7 +8,7 @@ Verifies:
 - German labels are present: OCR, Klassifizierung, Cloud-Import, Duplikat-Scan
 - duplicate service has enabled=False (on-demand, not a daemon)
 - model_dump() detail fields contain no asyncio objects (JSON-serializable)
-- _ocr_current_op helper returns correct strings for various states
+- DebugService._ocr_current_op helper returns correct strings for various states
 """
 
 from __future__ import annotations
@@ -22,7 +22,8 @@ from app.services.ocr.state import OcrState
 from app.services.classifier.state import AutoClassifyState
 from app.services.cloud_import.state import CloudSyncState
 from app.services.duplicate.state import DuplicateScanState
-from app.routers.debug import _ocr_current_op, get_service_statuses
+from app.services.debug_service import DebugService
+from app.routers.debug import get_service_statuses
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -193,19 +194,19 @@ class TestDetailFieldsJsonSerializable:
         task.cancel()
 
 
-# ── Tests for _ocr_current_op helper ─────────────────────────────────────────
+# ── Tests for DebugService._ocr_current_op helper ─────────────────────────────────────────
 
 class TestOcrCurrentOp:
     def test_returns_none_when_idle(self):
         state = OcrState()
-        result = _ocr_current_op(state)
+        result = DebugService._ocr_current_op(state)
         assert result is None
 
     def test_returns_batch_info_when_batch_running_with_document(self):
         state = OcrState()
         state.batch.running = True
         state.batch.current_document = {"title": "Rechnung 2024"}
-        result = _ocr_current_op(state)
+        result = DebugService._ocr_current_op(state)
         assert result == "Batch: Rechnung 2024"
 
     def test_returns_none_when_batch_running_but_no_document(self):
@@ -213,14 +214,14 @@ class TestOcrCurrentOp:
         state = OcrState()
         state.batch.running = True
         state.batch.current_document = None
-        result = _ocr_current_op(state)
+        result = DebugService._ocr_current_op(state)
         assert result is None
 
     def test_returns_processor_info_when_processor_running(self):
         state = OcrState()
         state.processor.running = True
         state.processor.interval_minutes = 10
-        result = _ocr_current_op(state)
+        result = DebugService._ocr_current_op(state)
         assert result == "Processor (Intervall: 10min)"
 
     def test_batch_takes_precedence_over_processor(self):
@@ -229,7 +230,7 @@ class TestOcrCurrentOp:
         state.batch.running = True
         state.batch.current_document = {"title": "Doc"}
         state.processor.running = True
-        result = _ocr_current_op(state)
+        result = DebugService._ocr_current_op(state)
         assert result is not None
         assert result.startswith("Batch:")
 
