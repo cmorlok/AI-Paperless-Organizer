@@ -89,7 +89,7 @@ class TestPhase1Smoke:
         print("PASS: All 5 routers importable")
 
     def test_classifier_service_importable(self):
-        """Classifier service must import without error (uses litellm_provider)."""
+        """Classifier service must import without error (uses tool_calling_provider, ollama_provider)."""
         from app.services.classifier.service import DocumentClassifierService
         assert DocumentClassifierService is not None
         print("PASS: DocumentClassifierService importable")

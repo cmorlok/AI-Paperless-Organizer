@@ -25,10 +25,8 @@ from app.services.paperless import PaperlessClient
 from app.services.classifier.base_provider import (
     BaseClassifierProvider, ClassificationResult, DocumentContext,
 )
-from app.services.classifier.litellm_provider import (
-    LitellmToolCallingProvider,
-    LitellmOllamaProvider,
-)
+from app.services.classifier.tool_calling_provider import ToolCallingLlmProvider
+from app.services.classifier.ollama_provider import OllamaLlmProvider
 from app.services.classifier.tool_executor import ToolExecutor
 from app.services.classifier.state import AutoClassifyState
 from app.services.llm import LLMService
@@ -371,11 +369,11 @@ class DocumentClassifierService:
             model = model_override or ""
 
         if provider_name == "ollama":
-            return LitellmOllamaProvider(model=model, provider=provider_name, tool_executor=tool_executor, llm_service=self.llm_service)
+            return OllamaLlmProvider(model=model, provider=provider_name, tool_executor=tool_executor, llm_service=self.llm_service)
 
         from app.services.llm import PROVIDER_DISPLAY_NAMES
         label = PROVIDER_DISPLAY_NAMES.get(provider_name, provider_name.replace("_", " ").title())
-        return LitellmToolCallingProvider(model=model, provider=provider_name, tool_executor=tool_executor, provider_label=label, llm_service=self.llm_service)
+        return ToolCallingLlmProvider(model=model, provider=provider_name, tool_executor=tool_executor, provider_label=label, llm_service=self.llm_service)
 
     async def _get_active_classifier_provider_name(self) -> str:
         assert self.paperless is not None
