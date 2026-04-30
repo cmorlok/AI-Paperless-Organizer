@@ -7,12 +7,12 @@ import re
 import fnmatch
 from typing import Dict, List, Optional, Any
 from sqlalchemy import select
-from app.models import CustomPrompt, IgnoredTag
+from app.models import IgnoredTag
 from app.models.settings_model import LLM_KEY_CLASSIFIER_PROVIDER, LLM_KEY_CLASSIFIER_MODEL
 from app.services.paperless import PaperlessClient
 from app.services.llm import LLMService
-from app.prompts.default_prompts import DEFAULT_PROMPTS
-from app.services.settings_service import get_setting as gs
+from app.services.similarity.prompts import PROMPTS
+from app.services.settings_service import get_setting as gs, get_prompt, register_prompt
 
 
 class SimilarityService:
@@ -27,24 +27,25 @@ class SimilarityService:
         self.paperless = paperless_client
         self.llm = llm_service
         self.session_factory = session_factory
+        self._prompts_registered = False
+
+    async def _register_prompts(self, db: Any) -> None:
+        """Register all similarity prompts with settings_service. Called once on first use."""
+        for key, prompt_template in PROMPTS.items():
+            await register_prompt(key, prompt_template, db)
+        self._prompts_registered = True
 
     async def _get_prompt(self, entity_type: str) -> str:
         """Get the prompt template for an entity type."""
         if self.session_factory is None:
-            return DEFAULT_PROMPTS.get(entity_type, "")
+            return PROMPTS.get(entity_type, "")
         async with self.session_factory() as db:
-            result = await db.execute(
-                select(CustomPrompt).where(
-                    CustomPrompt.entity_type == entity_type,
-                    CustomPrompt.is_active
-                )
-            )
-            prompt = result.scalar_one_or_none()
-
-            if prompt:
-                return prompt.prompt_template
-
-            return DEFAULT_PROMPTS.get(entity_type, "")
+            if not self._prompts_registered:
+                await self._register_prompts(db)
+            prompt_template = await get_prompt(entity_type, db)
+            if prompt_template:
+                return prompt_template
+            return PROMPTS.get(entity_type, "")
 
     async def _get_ignored_patterns(self) -> List[Dict]:
         """Get all ignored tag patterns."""
