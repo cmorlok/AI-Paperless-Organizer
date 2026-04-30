@@ -1,8 +1,11 @@
 """Document Types Router — thin endpoints only."""
 
+import logging
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from typing import List
+
+logger = logging.getLogger(__name__)
 from app.services.paperless import PaperlessClient
 from app.services.similarity import SimilarityService
 from app.services.merge import MergeService
@@ -127,4 +130,5 @@ async def delete_document_type_by_id(document_type_id: int, client: FromDishka[P
         await client.delete_document_type(document_type_id)
         return {"success": True}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error("Delete document type failed: %s", e)
+        raise HTTPException(status_code=500, detail="Internal server error")

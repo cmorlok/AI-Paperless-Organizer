@@ -112,7 +112,8 @@ async def sync_source_now(
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error("Sync failed: %s", e)
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 # ── Folder browser ───────────────────────────────────────────────────────────
@@ -131,7 +132,8 @@ async def browse_source_folders(
         folders = await service.list_folders(source, path)
         return {"path": path, "folders": folders}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error("Folder listing failed: %s", e)
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 # ── File listing ─────────────────────────────────────────────────────────────
@@ -147,7 +149,8 @@ async def list_source_files(source_id: int, service: FromDishka[CloudImportServi
         files = await service.list_files(source)
         return {"files": files}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error("File listing failed: %s", e)
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 # ── Import log ───────────────────────────────────────────────────────────────

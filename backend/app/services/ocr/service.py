@@ -617,7 +617,8 @@ class OcrService:
                     })
                     save_ocr_ignore_list(ignore_list)
                 raise ValueError(f"{error_msg} Dokument wird künftig komplett ignoriert.")
-            raise ValueError(f"Download fehlgeschlagen: {e}")
+            logger.error(f"Document download failed for {document_id}: {e}")
+            raise ValueError("Download fehlgeschlagen")
 
         if not force:
             native_text = self._extract_text_from_pdf(file_bytes, smart_skip_enabled)
@@ -797,7 +798,8 @@ class OcrService:
                         logger.warning(f"PDF conversion failed (attempt 1), retrying: {e}")
                         await asyncio.sleep(2)
                     else:
-                        raise ValueError(f"PDF-Konvertierung fehlgeschlagen nach 2 Versuchen ({mime_type}): {e}")
+                        logger.error(f"PDF conversion failed after 2 attempts ({mime_type}): {e}")
+                        raise ValueError(f"PDF-Konvertierung fehlgeschlagen nach 2 Versuchen ({mime_type})")
         else:
             try:
                 img = Image.open(io.BytesIO(file_bytes))
@@ -805,7 +807,8 @@ class OcrService:
                 logger.info(f"Loaded as single image ({img.format}, {img.size[0]}x{img.size[1]})")
                 return [img]
             except Exception as e:
-                raise ValueError(f"Dateiformat nicht unterstützt ({mime_type}, {len(file_bytes)} bytes): {e}")
+                logger.error(f"Image format not supported ({mime_type}, {len(file_bytes)} bytes): {e}")
+                raise ValueError(f"Dateiformat nicht unterstützt ({mime_type})")
         return []
 
     async def _load_completed_pages(self, db_session, document_id: int, total_pages: int) -> Dict[int, str]:

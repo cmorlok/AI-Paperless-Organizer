@@ -1,5 +1,6 @@
 """Debug and diagnostics endpoints for network troubleshooting."""
 
+import logging
 from fastapi import APIRouter
 from pydantic import BaseModel
 from typing import Optional
@@ -9,6 +10,8 @@ import asyncio
 from urllib.parse import urlparse
 from dishka.integrations.fastapi import inject
 from dishka import FromDishka
+
+logger = logging.getLogger(__name__)
 
 from app.services.ocr import OcrState
 from app.services.classifier import AutoClassifyState
@@ -51,18 +54,20 @@ async def dns_lookup(request: DnsRequest):
             "message": f"DNS aufgelöst: {hostname} -> {', '.join(ips)}"
         }
     except socket.gaierror as e:
+        logger.error("DNS lookup failed: %s", e)
         return {
             "success": False,
             "hostname": request.hostname,
-            "error": str(e),
-            "message": f"DNS-Auflösung fehlgeschlagen: {e}"
+            "error": "DNS-Auflösung fehlgeschlagen",
+            "message": "DNS-Auflösung fehlgeschlagen"
         }
     except Exception as e:
+        logger.error("DNS lookup error: %s", e)
         return {
             "success": False,
             "hostname": request.hostname,
-            "error": str(e),
-            "message": f"Fehler: {e}"
+            "error": "DNS-Auflösung fehlgeschlagen",
+            "message": "DNS-Auflösung fehlgeschlagen"
         }
 
 
@@ -111,11 +116,12 @@ async def tcp_connect(request: PingRequest):
             "message": f"Timeout: Keine Verbindung zu {request.host} innerhalb von 5 Sekunden"
         }
     except Exception as e:
+        logger.error("TCP connect failed: %s", e)
         return {
             "success": False,
             "host": request.host,
-            "error": str(e),
-            "message": f"Verbindung fehlgeschlagen: {e}"
+            "error": "Verbindung fehlgeschlagen",
+            "message": "Verbindung fehlgeschlagen"
         }
 
 
@@ -149,11 +155,12 @@ async def http_test(request: HttpTestRequest):
                 "message": f"HTTP {response.status_code} - {len(response.content)} Bytes empfangen"
             }
     except httpx.ConnectError as e:
+        logger.error("HTTP test failed: %s", e)
         return {
             "success": False,
             "url": request.url,
             "error": "ConnectError",
-            "details": str(e),
+            "details": "Verbindungsfehler",
             "message": f"Verbindungsfehler: Kann {request.url} nicht erreichen"
         }
     except httpx.TimeoutException:
@@ -164,12 +171,13 @@ async def http_test(request: HttpTestRequest):
             "message": f"Timeout nach {request.timeout} Sekunden"
         }
     except Exception as e:
+        logger.error("HTTP test error: %s", e)
         return {
             "success": False,
             "url": request.url,
-            "error": type(e).__name__,
-            "details": str(e),
-            "message": f"Fehler: {e}"
+            "error": "Verbindungsfehler",
+            "details": "Verbindungsfehler",
+            "message": "Verbindungsfehler"
         }
 
 

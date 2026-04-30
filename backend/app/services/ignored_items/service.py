@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Callable, List, Optional
 
-from sqlalchemy import select, and_
+from sqlalchemy import select, and_, delete as sa_delete
 
 
 class IgnoredItemsServiceImpl:
@@ -98,7 +98,7 @@ class IgnoredItemsServiceImpl:
             item = result.scalar_one_or_none()
             if not item:
                 raise ValueError("Item nicht gefunden")
-            await db.delete(item)
+            await db.execute(sa_delete(IgnoredItem).where(IgnoredItem.id == item_id))
             await db.commit()
 
     async def check_if_ignored(

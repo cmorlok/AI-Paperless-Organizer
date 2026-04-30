@@ -1,6 +1,9 @@
+import logging
 from fastapi import APIRouter, Query
 from pydantic import BaseModel
 from typing import Optional
+
+logger = logging.getLogger(__name__)
 from app.services.llm import LLMService
 from app.models.settings_model import LLM_KEY_CLASSIFIER_PROVIDER, LLM_KEY_CLASSIFIER_MODEL
 from app.services.config import ConfigService
@@ -38,7 +41,8 @@ async def test_llm_connection(
         result = await llm_service.test_connection(provider=test_provider, model=test_model)
         return {"success": True, "provider": result["provider"], "model": result["model"]}
     except Exception as e:
-        return {"success": False, "error": str(e)}
+        logger.error("LLM connection test failed: %s", e)
+        return {"success": False, "error": "Verbindung fehlgeschlagen"}
 
 
 @router.post("/test-prompt")
@@ -63,7 +67,8 @@ async def test_prompt(
         )
         return {"success": True, "response": (result.content or "").strip()}
     except Exception as e:
-        return {"success": False, "error": str(e)}
+        logger.error("LLM prompt test failed: %s", e)
+        return {"success": False, "error": "Verbindung fehlgeschlagen"}
 
 
 @router.get("/status")
