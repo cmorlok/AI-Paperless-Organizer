@@ -27,11 +27,12 @@ _CONTEXTUAL_RETRIEVAL_MAX_CONTENT_LEN = 999_999
 class Indexer:
     """Manages document indexing: fetches from Paperless, chunks, embeds, stores."""
 
-    def __init__(self, search_engine, paperless_client, llm_service: LLMService):
+    def __init__(self, search_engine, paperless_client, llm_service: LLMService, get_prompt=None):
         self.search_engine = search_engine
         self.paperless_client = paperless_client
         self.llm_service = llm_service
         self._indexing_task: Optional[asyncio.Task] = None
+        self._get_prompt = get_prompt
 
     async def _get_config(self, db: AsyncSession) -> Optional[RagConfig]:
         result = await db.execute(sa_select(RagConfig).where(RagConfig.id == 1))
@@ -327,7 +328,11 @@ class Indexer:
             + (f", Korrespondent: {doc.get('correspondent_name', '')}" if doc.get('correspondent_name') else "")
             + (f", Datum: {(doc.get('created') or '')[:10]}" if doc.get('created') else "")
         )
-        prompt = CHUNK_CONTEXT_PROMPT.format(doc_info=doc_info, chunk_text=chunk_text[:500])
+        if self._get_prompt:
+            prompt_template = await self._get_prompt("chunk_context")
+        else:
+            prompt_template = CHUNK_CONTEXT_PROMPT
+        prompt = prompt_template.format(doc_info=doc_info, chunk_text=chunk_text[:500])
         try:
             import re as _re
             result: LLMResponse = await self.llm_service.complete(

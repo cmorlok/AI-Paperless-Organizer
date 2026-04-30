@@ -17,7 +17,9 @@ from app.services.rag.prompts import (
     CHAT_SYSTEM_PROMPT,
     CHAT_USER_CONTEXT_TEMPLATE,
     QUERY_REWRITE_PROMPT,
+    PROMPTS,
 )
+from app.services.settings_service import register_prompt, get_prompt
 
 logger = logging.getLogger(__name__)
 
@@ -27,16 +29,37 @@ class RAGService:
 
     def __init__(self, session_factory, paperless_client, llm_service: LLMService):
         self.search_engine = SearchEngine()
-        self.indexer = Indexer(self.search_engine, paperless_client=paperless_client, llm_service=llm_service)
+        self.indexer = Indexer(self.search_engine, paperless_client=paperless_client, llm_service=llm_service, get_prompt=self._get_prompt)
         self._initialized = False
+        self._prompts_registered = False
         self.session_factory = session_factory or async_session
         self.paperless_client = paperless_client
         self.llm_service = llm_service
+
+    async def _register_prompts(self, db: Any) -> None:
+        """Register all RAG prompts with settings_service. Called once on initialization."""
+        for key, prompt_template in PROMPTS.items():
+            await register_prompt(key, prompt_template, db)
+        self._prompts_registered = True
+
+    async def _get_prompt(self, key: str) -> str:
+        """Get a prompt template by key."""
+        if self.session_factory is None:
+            return PROMPTS.get(key, "")
+        async with self.session_factory() as db:
+            if not self._prompts_registered:
+                await self._register_prompts(db)
+            prompt_template = await get_prompt(key, db)
+            if prompt_template:
+                return prompt_template
+            return PROMPTS.get(key, "")
 
     async def initialize(self):
         assert self.llm_service is not None
         if self._initialized:
             return
+        async with self.session_factory() as db:
+            await self._register_prompts(db)
         self.search_engine.init_chroma()
         self.search_engine.load_bm25_index()
         self._initialized = True
@@ -392,14 +415,14 @@ class RAGService:
         context = "\n---\n".join(context_parts)
 
         # Build prompt
-        system_prompt = config.chat_system_prompt or CHAT_SYSTEM_PROMPT
+        system_prompt = config.chat_system_prompt or await self._get_prompt("chat_system")
 
         messages = [{"role": "system", "content": system_prompt}]
         messages.extend(chat_history)
 
         user_content = question
         if context:
-            user_content = CHAT_USER_CONTEXT_TEMPLATE.format(context=context, question=question)
+            user_content = (await self._get_prompt("chat_user_context")).format(context=context, question=question)
         messages.append({"role": "user", "content": user_content})
 
         # Yield session info first
@@ -496,7 +519,7 @@ class RAGService:
             if last_user and last_user.strip() != question.strip():
                 history_context = f"\nKontext (vorherige Frage): {last_user[:200]}"
 
-        prompt = QUERY_REWRITE_PROMPT.format(history_context=history_context, question=question)
+        prompt = (await self._get_prompt("query_rewrite")).format(history_context=history_context, question=question)
 
         messages = [{"role": "user", "content": prompt}]
 

@@ -33,3 +33,10 @@ CHUNK_CONTEXT_PROMPT = (
     "- Für welche Suchanfragen er relevant ist\n"
     "Nur der Kontext, keine Erklärungen, keine Einleitung wie 'Dieser Abschnitt...'."
 )
+
+PROMPTS = {
+    "chat_system": CHAT_SYSTEM_PROMPT,
+    "chat_user_context": CHAT_USER_CONTEXT_TEMPLATE,
+    "query_rewrite": QUERY_REWRITE_PROMPT,
+    "chunk_context": CHUNK_CONTEXT_PROMPT,
+}
