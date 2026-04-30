@@ -6,8 +6,12 @@ with default insertion.  The router stays thin: validate → call service → re
 
 from typing import Optional
 
-from sqlalchemy import select
+from sqlalchemy import select, delete as sa_delete
 from sqlalchemy.ext.asyncio import AsyncSession
+
+import ipaddress
+import socket
+from urllib.parse import urlparse
 
 from app.database import get_db
 from app.models import AppSettings, CustomPrompt, PaperlessSettings, LLMProvider, IgnoredTag
@@ -185,8 +189,38 @@ async def get_paperless_settings(db: AsyncSession) -> dict:
     }
 
 
+def _validate_base_url(url: str) -> None:
+    """Validate URL against SSRF: reject private/link-local IP addresses.
+
+    Note: DNS rebinding is not addressed — validation resolves the hostname at
+    check time, but a malicious DNS server could return a public IP then a
+    private IP at request time. Acceptable for a sidecar service over an
+    internal network.
+    """
+    parsed = urlparse(url)
+    hostname = parsed.hostname
+    if not hostname:
+        raise ValueError("Ungültige URL: kein Hostname gefunden")
+    if parsed.scheme not in ("http", "https"):
+        raise ValueError("URL muss http oder https verwenden")
+    # Resolve hostname to IP addresses
+    try:
+        addr_info = socket.getaddrinfo(hostname, None)
+    except socket.gaierror:
+        raise ValueError("Hostname konnte nicht aufgelöst werden")
+    for family, _, _, _, sockaddr in addr_info:
+        addr = sockaddr[0]
+        ip = ipaddress.ip_address(addr)
+        if ip.is_private or ip.is_loopback or ip.is_link_local:
+            raise ValueError("URL resolves to a private/internal IP address")
+        # Also block IPv6 private/loopback/link-local
+        if ip.is_private:
+            raise ValueError("URL resolves to a private/internal IP address")
+
+
 async def save_paperless_settings(url: str, api_token: str, db: AsyncSession) -> dict:
     """Save Paperless connection settings."""
+    _validate_base_url(url)
     result = await db.execute(select(PaperlessSettings).where(PaperlessSettings.id == 1))
     settings = result.scalar_one_or_none()
     if settings:
@@ -356,7 +390,7 @@ async def delete_ignored_tag(tag_id: int, db: AsyncSession) -> None:
     tag = result.scalar_one_or_none()
     if not tag:
         raise ValueError("Pattern not found")
-    await db.delete(tag)
+    await db.execute(sa_delete(IgnoredTag).where(IgnoredTag.id == tag_id))
     await db.commit()
 
 
