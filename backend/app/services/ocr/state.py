@@ -2,11 +2,10 @@
 
 from __future__ import annotations
 
-import asyncio
 from pathlib import Path
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field, PrivateAttr
+from pydantic import BaseModel, ConfigDict, Field
 
 from app.services.base_state import BaseState, CancelMixin
 

@@ -18,7 +18,6 @@ init_logging()
 logger = get_logger("app.main")
 
 from app.routers import paperless, correspondents, tags, document_types, settings, llm, debug, statistics, ignored_items, ocr, cleanup, classifier, rag, api_keys, cloud_import, duplicates, auth  # noqa: E402
-from app.services.ocr.state import DEFAULT_OCR_MODEL  # noqa: E402
 from app.services.ocr import OcrState, OcrService  # noqa: E402
 from app.services.classifier import AutoClassifyState, auto_classify_loop  # noqa: E402
 from app.services.paperless import PaperlessClient  # noqa: E402
@@ -166,7 +165,7 @@ async def lifespan(app: FastAPI):
         try:
             from app.models.cloud_import import CloudSource
             src_q = await db_sess.execute(
-                sa_select(CloudSource).where(CloudSource.enabled == True)
+                sa_select(CloudSource).where(CloudSource.enabled)
             )
             kv_cloud_sync_enabled = src_q.scalars().first() is not None
         except Exception:

@@ -20,6 +20,9 @@ from app.services.config import ConfigService
 from app.services.tags import TagsService
 from app.services.correspondents import CorrespondentsService
 from app.services.document_types import DocumentTypesService
+from app.services.ignored_items import IgnoredItemsService
+from app.services.api_keys import ApiKeysService
+from app.services.auth import AuthService
 # Implementation imports use aliases to avoid name collision with Protocols
 from app.services.config.service import ConfigServiceImpl
 from app.services.llm.service import LitellmService
@@ -35,6 +38,9 @@ from app.services.cloud_import.service import CloudImportService as CloudImportS
 from app.services.tags.service import TagsServiceImpl
 from app.services.correspondents.service import CorrespondentsServiceImpl
 from app.services.document_types.service import DocumentTypesServiceImpl
+from app.services.ignored_items.service import IgnoredItemsServiceImpl
+from app.services.api_keys.service import ApiKeysServiceImpl
+from app.services.auth.service import AuthServiceImpl
 
 
 class AppProvider(Provider):
@@ -231,6 +237,27 @@ class AppProvider(Provider):
             statistics_service=statistics_service,
             session_factory=session_factory,
         )
+
+    @provide(scope=Scope.APP)
+    def ignored_items_service(
+        self,
+        session_factory: async_sessionmaker,
+    ) -> IgnoredItemsService:
+        return IgnoredItemsServiceImpl(session_factory=session_factory)
+
+    @provide(scope=Scope.APP)
+    def api_keys_service(
+        self,
+        session_factory: async_sessionmaker,
+    ) -> ApiKeysService:
+        return ApiKeysServiceImpl(session_factory=session_factory)
+
+    @provide(scope=Scope.APP)
+    def auth_service(
+        self,
+        session_factory: async_sessionmaker,
+    ) -> AuthService:
+        return AuthServiceImpl(session_factory=session_factory)
 
 
 # Module-level container singleton

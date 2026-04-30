@@ -116,9 +116,23 @@ def test_cors_default_origins_when_env_absent(monkeypatch):
 def test_login_logout_end_to_end(test_session_factory, monkeypatch):
     import app.database as db_mod
     monkeypatch.setattr(db_mod, "async_session", test_session_factory)
+    import app.container as container_mod
+    monkeypatch.setattr(container_mod, "async_session", test_session_factory)
     from app.services.auth.state import SESSIONS
     SESSIONS.clear()
     import app.main as main_mod
+    # Create a fresh Dishka container with test providers
+    from dishka import Provider, Scope, provide, make_async_container
+    from dishka.integrations.fastapi import setup_dishka
+    from app.services.auth import AuthService, AuthServiceImpl
+
+    class TestProvider(Provider):
+        @provide(scope=Scope.APP)
+        def auth_service(self) -> AuthService:
+            return AuthServiceImpl(session_factory=test_session_factory)
+
+    test_container = make_async_container(TestProvider())
+    setup_dishka(test_container, main_mod.app)
     with TestClient(main_mod.app) as client:
         # Setup password
         resp = client.post("/api/auth/setup", json={"password": "test-pw-123"})

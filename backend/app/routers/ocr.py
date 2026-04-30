@@ -15,7 +15,6 @@ from app.services.paperless import PaperlessClient
 from app.services.config import ConfigService
 from app.services.ocr import (
     OcrService,
-    OcrState,
     OcrCompareState,
     OcrCompareSlot,
     DEFAULT_OCR_MODEL,
@@ -461,9 +460,6 @@ async def start_compare(
 @inject
 async def get_compare_status(compare_state: FromDishka[OcrCompareState] = None):
     assert compare_state is not None
-    service = None
-    # We need the service to call get_compare_status_dict, but compare_state is enough
-    # Let's use the state directly since it has all the data
     return {
         "running": compare_state.running,
         "phase": compare_state.phase,

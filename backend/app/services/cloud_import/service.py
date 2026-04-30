@@ -507,6 +507,7 @@ class CloudImportService:
     async def sync_source_now(self, source_id: int, client) -> dict:
         """Sync a source now and update timestamps."""
         from datetime import datetime
+        from sqlalchemy import select
         source = await self.get_source(source_id)
         if not source:
             raise ValueError("Quelle nicht gefunden")
@@ -515,6 +516,8 @@ class CloudImportService:
                 select(source.__class__).where(source.__class__.id == source_id)
             )
             source = result.scalar_one_or_none()
+            if source is None:
+                return {"ok": False, "error": "Source not found"}
             stats = await self.sync_source(source, client, db)
             source.last_checked_at = datetime.utcnow()
             source.last_status = "idle"
@@ -567,7 +570,7 @@ class CloudImportService:
 
     async def start_sync_daemon(self, config_svc) -> dict:
         """Start the cloud sync daemon."""
-        from app.services.cloud_import.state import cloud_sync_loop
+        from app.services.cloud_import.sync_loop import cloud_sync_loop
         from app.container import container as di_container
         if self._sync_state.enabled:
             return {"status": "already_running"}

@@ -71,3 +71,78 @@ def is_auth_disabled() -> bool:
 
 def _cookie_secure_flag() -> bool:
     return os.getenv("COOKIE_SECURE", "").lower() == "true"
+
+
+class AuthServiceImpl:
+    """Service for auth operations with DB access."""
+
+    def __init__(self, session_factory):
+        self._session_factory = session_factory
+
+    async def get_or_create_auth_config(self) -> dict:
+        """Get or create auth config."""
+        from sqlalchemy import select
+        from app.models.auth_config import AuthConfig
+
+        async with self._session_factory() as db:
+            result = await db.execute(select(AuthConfig).where(AuthConfig.id == 1))
+            config = result.scalar_one_or_none()
+            if config is None:
+                config = AuthConfig(id=1, password_hash="")
+                db.add(config)
+                await db.commit()
+                await db.refresh(config)
+            return {
+                "id": config.id,
+                "password_hash": config.password_hash,
+            }
+
+    async def set_password(self, password: str) -> None:
+        """Set or update the admin password."""
+        from sqlalchemy import select
+        from app.models.auth_config import AuthConfig
+
+        async with self._session_factory() as db:
+            result = await db.execute(select(AuthConfig).where(AuthConfig.id == 1))
+            config = result.scalar_one_or_none()
+            if config is None:
+                config = AuthConfig(id=1, password_hash="")
+                db.add(config)
+            config.password_hash = await hash_password(password)
+            await db.commit()
+
+    async def validate_password(self, password: str) -> bool:
+        """Validate password against stored hash."""
+        config = await self.get_or_create_auth_config()
+        if not config.get("password_hash"):
+            return False
+        return await verify_password(password, config["password_hash"])
+
+    async def change_password(self, current_password: str, new_password: str) -> bool:
+        """Change password after verifying current password."""
+        config = await self.get_or_create_auth_config()
+        if not config.get("password_hash"):
+            return False
+
+        ok = await verify_password(current_password, config["password_hash"])
+        if not ok:
+            return False
+
+        await self.set_password(new_password)
+        return True
+
+    def create_session(self) -> str:
+        """Create a new session token."""
+        return create_session()
+
+    def revoke_session(self, token: str) -> None:
+        """Revoke a session token."""
+        revoke_session(token)
+
+    def is_session_valid(self, token: Optional[str]) -> bool:
+        """Check if a session token is valid."""
+        return is_session_valid(token)
+
+    def is_auth_disabled(self) -> bool:
+        """Check if auth is disabled."""
+        return is_auth_disabled()

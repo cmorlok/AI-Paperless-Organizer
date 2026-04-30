@@ -152,6 +152,8 @@ class TagsServiceImpl:
                     db_entry.count = len(db_entry.data)
             await db.commit()
 
+        return {"deleted": len(deleted_set)}
+
     # ------------------------------------------------------------------
     # Saved analysis CRUD (extracted from router)
     # ------------------------------------------------------------------
@@ -188,7 +190,7 @@ class TagsServiceImpl:
             )
             saved = result.scalar_one_or_none()
             if not saved:
-                return None
+                return {}
             return {
                 "groups": saved.groups,
                 "stats": saved.stats,
@@ -299,8 +301,6 @@ class TagsServiceImpl:
     async def delete_saved_doctype_matches(self) -> None:
         """Delete saved doctype matches analysis."""
         await self.delete_saved_analysis("tags_doctypes")
-
-        return result
 
     # ------------------------------------------------------------------
     # Remove tags from ALL saved analyses

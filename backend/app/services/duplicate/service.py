@@ -138,7 +138,7 @@ class DuplicateService:
                 )
             )
             await db.commit()
-            if result.rowcount == 0:
+            if result.rowcount == 0:  # type: ignore[union-attr]
                 raise ValueError("Paar nicht gefunden")
 
         logger.info("Removed ignore pair (%d, %d)", a, b)

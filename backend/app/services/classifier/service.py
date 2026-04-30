@@ -1939,7 +1939,7 @@ class DocumentClassifierService:
             return {"status": "already_running"}
         if self.state:
             self.state.enabled, self.state.processed, self.state.errors, self.state.reviewed = True, 0, 0, 0
-            from app.services.classifier.state import auto_classify_loop
+            from app.services.classifier.auto_classify_loop import auto_classify_loop
             self.state._task = asyncio.create_task(auto_classify_loop(di_container))
         try:
             await config_svc.set("auto_classify_enabled", "true", "bool")

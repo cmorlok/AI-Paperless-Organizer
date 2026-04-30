@@ -1,6 +1,6 @@
 """Protocol for Paperless-ngx API client."""
 
-from typing import Protocol, runtime_checkable, Optional, List, Dict
+from typing import Any, Protocol, runtime_checkable, Optional, List, Dict
 
 
 @runtime_checkable
@@ -116,3 +116,7 @@ class PaperlessClient(Protocol):
     def get_thumbnail_url(self, document_id: int) -> str: ...
 
     def get_document_view_url(self, document_id: int) -> str: ...
+
+    async def get_tags_cached(self, db: Any) -> list: ...
+
+    async def refresh_cache(self, db: Any) -> dict: ...

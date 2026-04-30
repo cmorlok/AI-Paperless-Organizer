@@ -1,6 +1,6 @@
 """Protocol for correspondents business-logic service."""
 
-from typing import Dict, Protocol, runtime_checkable
+from typing import Dict, Optional, Protocol, runtime_checkable
 
 
 @runtime_checkable
@@ -12,3 +12,11 @@ class CorrespondentsService(Protocol):
     async def save_similarity_analysis(self, result: Dict) -> None: ...
 
     async def delete_empty_correspondents(self) -> Dict: ...
+
+    async def get_saved_analysis(self) -> dict: ...
+
+    async def load_saved_analysis(self) -> Optional[dict]: ...
+
+    async def delete_saved_analysis(self) -> None: ...
+
+    async def mark_group_processed(self, group_index: int) -> None: ...

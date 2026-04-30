@@ -5,7 +5,7 @@ from pydantic import BaseModel
 from typing import Optional
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import get_db
-from app.services.llm import LLMService, PROVIDER_DISPLAY_NAMES
+from app.services.llm import LLMService
 from app.services import settings_service as svc
 from dishka.integrations.fastapi import inject
 from dishka import FromDishka

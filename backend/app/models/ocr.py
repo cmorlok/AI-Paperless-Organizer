@@ -1,5 +1,6 @@
-from datetime import datetime
 """Models for OCR page-level persistence."""
+
+from datetime import datetime
 
 from sqlalchemy import Integer, String, Text, DateTime, Float
 from sqlalchemy.orm import Mapped, mapped_column

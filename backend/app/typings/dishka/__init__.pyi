@@ -5,7 +5,7 @@ The @inject decorator replaces None with the actual service at runtime.
 This stub tells pyright that FromDishka[X] accepts None as a default.
 """
 
-from typing import TypeVar, Generic, Union
+from typing import TypeVar, Generic
 
 T = TypeVar("T")
 

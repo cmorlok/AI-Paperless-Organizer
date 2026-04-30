@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 from app.services.paperless import PaperlessClient
 from app.services.llm import LLMService
