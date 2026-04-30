@@ -167,7 +167,9 @@ async def _extract_invoice_data(
     prompt_template: Optional[str] = None,
 ) -> Optional[Dict]:
     """Extract invoice number and amount from document content via LiteLLM."""
-    prompt = (prompt_template or INVOICE_EXTRACTION_PROMPT).format(content=content)
+    from jinja2 import Template
+    template_str = prompt_template or INVOICE_EXTRACTION_PROMPT
+    prompt = Template(template_str, autoescape=False).render(content=content)
 
     try:
         result = await llm_service.complete(

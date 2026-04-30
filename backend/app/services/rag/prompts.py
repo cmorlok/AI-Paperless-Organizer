@@ -3,30 +3,30 @@ CHAT_SYSTEM_PROMPT = (
     "Antworte basierend auf dem bereitgestellten Kontext."
 )
 
-# Placeholders: {context}, {question}
+# Placeholders: {{ CONTEXT }}, {{ QUESTION }}
 CHAT_USER_CONTEXT_TEMPLATE = (
-    "Kontext aus den Dokumenten:\n\n{context}\n\n---\n\nFrage: {question}\n\n"
+    "Kontext aus den Dokumenten:\n\n{{ CONTEXT }}\n\n---\n\nFrage: {{ QUESTION }}\n\n"
     "Beantworte die Frage basierend auf dem Kontext. "
     "Zitiere die verwendeten Quellen mit ihrer Nummer aus dem Kontext: "
     "z.B. [3] für 'Quelle 3', [7] für 'Quelle 7'. "
     "Wenn du nach Fakten wie Geburtsdaten suchst, liste ALLE Fundstellen aus allen Quellen auf."
 )
 
-# Placeholders: {history_context}, {question}
+# Placeholders: {{ HISTORY_CONTEXT }}, {{ QUESTION }}
 QUERY_REWRITE_PROMPT = (
     "Du bist Suchexperte für ein deutsches Dokumentenarchiv (Paperless-ngx). "
     "Erweitere die Suchanfrage um Synonyme, offizielle Dokumentnamen und "
     "relevante deutsche Fachbegriffe (z.B. 'getauft' → 'Taufurkunde Taufe Taufschein', "
     "'geboren' → 'Geburtsurkunde Geburtsschein', 'Rechnung' → 'Rechnung Rechnungsnummer Betrag'). "
     "Antworte NUR mit der erweiterten Suchanfrage, max. 25 Wörter, kein Erklärungstext."
-    "{history_context}\n\n"
-    "Anfrage: {question}"
+    "{{ HISTORY_CONTEXT }}\n\n"
+    "Anfrage: {{ QUESTION }}"
 )
 
-# Placeholders: {doc_info}, {chunk_text}
+# Placeholders: {{ DOC_INFO }}, {{ CHUNK_TEXT }}
 CHUNK_CONTEXT_PROMPT = (
-    "{doc_info}\n\n"
-    "Textabschnitt:\n{chunk_text}\n\n"
+    "{{ DOC_INFO }}\n\n"
+    "Textabschnitt:\n{{ CHUNK_TEXT }}\n\n"
     "Schreibe 1-2 Sätze Kontext der erklärt:\n"
     "- Zu welchem Dokument/Person dieser Abschnitt gehört\n"
     "- Welche konkreten Fakten er enthält (Namen, Daten, Beträge, Kennzeichen)\n"

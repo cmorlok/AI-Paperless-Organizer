@@ -38,15 +38,15 @@ OCR_DEFAULT_GERMAN_HINT = (
 )
 
 
-# Placeholders: {document_title}, {version_count}, {models_text}
+# Placeholders: {{ DOCUMENT_TITLE }}, {{ VERSION_COUNT }}, {{ MODELS_TEXT }}
 OCR_EVALUATION_PROMPT = """Du bist ein erfahrener OCR-Qualitätsprüfer und Dokumentenanalyst. Du bewertest OCR-Ergebnisse für ein deutsches Dokumentenmanagementsystem (Paperless-ngx).
 
-DOKUMENT: "{document_title}"
-ANZAHL VERSIONEN: {version_count}
+DOKUMENT: "{{ DOCUMENT_TITLE }}"
+ANZAHL VERSIONEN: {{ VERSION_COUNT }}
 
 Folgende OCR-Versionen desselben Dokuments wurden von verschiedenen lokalen Vision-Modellen (Ollama) erstellt. Vergleiche sie gründlich.
 
-{models_text}
+{{ MODELS_TEXT }}
 
 BEWERTUNGSANLEITUNG:
 Du musst jede Version sorgfältig auf folgende Kriterien prüfen. Vergleiche die Versionen untereinander -- wenn mehrere Versionen den gleichen Wert haben, ist er wahrscheinlich korrekt. Abweichungen deuten auf Fehler hin.

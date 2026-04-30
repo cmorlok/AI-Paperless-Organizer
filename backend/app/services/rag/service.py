@@ -42,17 +42,24 @@ class RAGService:
             await register_prompt(key, prompt_template, db)
         self._prompts_registered = True
 
-    async def _get_prompt(self, key: str) -> str:
-        """Get a prompt template by key."""
+    async def _get_prompt(self, key: str, variables: Optional[Dict[str, Any]] = None) -> str:
+        """Get a prompt template by key, optionally rendered with variables."""
+        from jinja2 import Template
         if self.session_factory is None:
-            return PROMPTS.get(key, "")
+            template_str = PROMPTS.get(key, "")
+            if variables:
+                return Template(template_str, autoescape=False).render(**variables)
+            return template_str
         async with self.session_factory() as db:
             if not self._prompts_registered:
                 await self._register_prompts(db)
-            prompt_template = await get_prompt(key, db)
+            prompt_template = await get_prompt(key, db, variables)
             if prompt_template:
                 return prompt_template
-            return PROMPTS.get(key, "")
+            template_str = PROMPTS.get(key, "")
+            if variables:
+                return Template(template_str, autoescape=False).render(**variables)
+            return template_str
 
     async def initialize(self):
         assert self.llm_service is not None
@@ -422,7 +429,7 @@ class RAGService:
 
         user_content = question
         if context:
-            user_content = (await self._get_prompt("rag_chat_user_context")).format(context=context, question=question)
+            user_content = await self._get_prompt("rag_chat_user_context", variables={"context": context, "question": question})
         messages.append({"role": "user", "content": user_content})
 
         # Yield session info first
@@ -519,7 +526,7 @@ class RAGService:
             if last_user and last_user.strip() != question.strip():
                 history_context = f"\nKontext (vorherige Frage): {last_user[:200]}"
 
-        prompt = (await self._get_prompt("rag_query_rewrite")).format(history_context=history_context, question=question)
+        prompt = await self._get_prompt("rag_query_rewrite", variables={"history_context": history_context, "question": question})
 
         messages = [{"role": "user", "content": prompt}]
 

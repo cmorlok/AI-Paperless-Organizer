@@ -188,11 +188,11 @@ Antworte NUR mit dem JSON, kein anderer Text."""
 SYSTEM_PROMPT_OLLAMA_TAGS = """Waehle aus der folgenden Tag-Liste die passenden Tags fuer das beschriebene Dokument.
 Waehle 2-5 Tags. Bevorzuge Tags aus dieser Liste:
 
-{available_tags}
+{{ AVAILABLE_TAGS }}
 
 Falls KEIN passender Tag in der Liste existiert, darfst du EINEN neuen kurzen Tag vorschlagen.
 
-Dokument-Zusammenfassung: {summary}
+Dokument-Zusammenfassung: {{ SUMMARY }}
 
 Antworte als JSON-Array mit den Tag-Namen:
 ["Tag1", "Tag2", "Tag3"]
@@ -202,9 +202,9 @@ Antworte NUR mit dem JSON-Array, kein anderer Text."""
 
 SYSTEM_PROMPT_OLLAMA_DOCTYPE = """Waehle den passenden Dokumenttyp aus dieser Liste:
 
-{available_types}
+{{ AVAILABLE_TYPES }}
 
-Dokument-Zusammenfassung: {summary}
+Dokument-Zusammenfassung: {{ SUMMARY }}
 
 Antworte NUR mit dem Namen des Dokumenttyps als einfacher String. Wenn keiner passt, antworte mit "null"."""
 
@@ -212,17 +212,17 @@ Antworte NUR mit dem Namen des Dokumenttyps als einfacher String. Wenn keiner pa
 SYSTEM_PROMPT_OLLAMA_STORAGE_PATH = """Ordne dieses Dokument dem BESTEN verfuegbaren Speicherpfad zu.
 
 ERKANNTE DOKUMENT-INFOS:
-- Titel: {title}
-- Korrespondent: {correspondent}
-- Dokumenttyp: {document_type}
-- Tags: {tags}
-- Zusammenfassung: {summary}
+- Titel: {{ TITLE }}
+- Korrespondent: {{ CORRESPONDENT }}
+- Dokumenttyp: {{ DOCUMENT_TYPE }}
+- Tags: {{ TAGS }}
+- Zusammenfassung: {{ SUMMARY }}
 
 DOKUMENTINHALT (Anfang):
-{content_snippet}
+{{ CONTENT_SNIPPET }}
 
 VERFUEGBARE SPEICHERPFADE:
-{path_profiles}
+{{ PATH_PROFILES }}
 
 ENTSCHEIDUNGS-REGELN:
 - Lies die Kontext-Beschreibungen der Profile sorgfaeltig — sie definieren wem/welchem Bereich ein Pfad zugeordnet ist
@@ -240,7 +240,7 @@ Antworte NUR mit dem JSON, kein anderer Text."""
 SYSTEM_PROMPT_OLLAMA_CUSTOM_FIELDS = """Extrahiere die folgenden Felder aus dem Dokumentinhalt.
 Kopiere die Werte GENAU so wie sie im Dokument stehen.
 
-{field_definitions}
+{{ FIELD_DEFINITIONS }}
 
 REGELN:
 - Wenn ein Feld NICHT im Dokument vorkommt: null setzen
@@ -256,19 +256,19 @@ Antworte NUR mit dem JSON, kein anderer Text."""
 
 SYSTEM_PROMPT_OLLAMA_VERIFY = """Pruefe dieses Klassifizierungs-Ergebnis auf Vollstaendigkeit und Plausibilitaet.
 
-DOKUMENT-ZUSAMMENFASSUNG: {summary}
+DOKUMENT-ZUSAMMENFASSUNG: {{ SUMMARY }}
 
 AKTUELLES ERGEBNIS:
-- Titel: {title}
-- Korrespondent: {correspondent}
-- Dokumenttyp: {document_type}
-- Tags: {tags}
-- Speicherpfad-ID: {storage_path_id}
-- Speicherpfad-Grund: {storage_path_reason}
-- Erstelldatum: {created_date}
+- Titel: {{ TITLE }}
+- Korrespondent: {{ CORRESPONDENT }}
+- Dokumenttyp: {{ DOCUMENT_TYPE }}
+- Tags: {{ TAGS }}
+- Speicherpfad-ID: {{ STORAGE_PATH_ID }}
+- Speicherpfad-Grund: {{ STORAGE_PATH_REASON }}
+- Erstelldatum: {{ CREATED_DATE }}
 
 VERFUEGBARE SPEICHERPFADE:
-{storage_paths}
+{{ STORAGE_PATHS }}
 
 PRUEF-REGELN:
 1. Wenn storage_path_id null ist aber Speicherpfade verfuegbar sind: Waehle den BESTEN Pfad

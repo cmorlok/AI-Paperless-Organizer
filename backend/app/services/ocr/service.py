@@ -81,19 +81,26 @@ class OcrService:
             await register_prompt(key, prompt_template, db)
         self._prompts_registered = True
 
-    async def _get_prompt(self, key: str) -> str:
-        """Get a prompt template by key."""
+    async def _get_prompt(self, key: str, variables: Optional[Dict[str, Any]] = None) -> str:
+        """Get a prompt template by key, optionally rendered with variables."""
+        from jinja2 import Template
         from app.services.ocr.prompts import PROMPTS
         from app.services.settings_service import get_prompt
         if self.session_factory is None:
-            return PROMPTS.get(key, "")
+            template_str = PROMPTS.get(key, "")
+            if variables:
+                return Template(template_str, autoescape=False).render(**variables)
+            return template_str
         async with self.session_factory() as db:
             if not self._prompts_registered:
                 await self._register_prompts(db)
-            prompt_template = await get_prompt(key, db)
+            prompt_template = await get_prompt(key, db, variables)
             if prompt_template:
                 return prompt_template
-            return PROMPTS.get(key, "")
+            template_str = PROMPTS.get(key, "")
+            if variables:
+                return Template(template_str, autoescape=False).render(**variables)
+            return template_str
 
     async def _get_provider(self) -> str:
         assert self.llm_service is not None
@@ -1086,10 +1093,13 @@ class OcrService:
         models_text = "\n\n".join(model_sections)
 
         evaluation_prompt = await self._get_prompt("ocr_evaluation")
-        prompt = evaluation_prompt.format(
-            document_title=document_title,
-            version_count=len(results),
-            models_text=models_text,
+        prompt = await self._get_prompt(
+            "ocr_evaluation",
+            variables={
+                "document_title": document_title,
+                "version_count": len(results),
+                "models_text": models_text,
+            }
         )
 
         used_model = eval_model or "gpt-4o"

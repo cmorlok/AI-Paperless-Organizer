@@ -4,7 +4,7 @@ Houses key-value helpers, app settings aggregation/update, and prompt loading
 with default insertion.  The router stays thin: validate → call service → return.
 """
 
-from typing import Optional
+from typing import Optional, Dict, Any
 
 from sqlalchemy import select, delete as sa_delete
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -328,8 +328,13 @@ async def reset_prompt(entity_type: str, db: AsyncSession) -> dict:
     return {"success": True}
 
 
-async def get_prompt(key: str, db: AsyncSession) -> Optional[str]:
-    """Get a prompt template by entity type. Returns None if not found or not active."""
+async def get_prompt(key: str, db: AsyncSession, variables: Optional[Dict[str, Any]] = None) -> Optional[str]:
+    """Get a prompt template by entity type. Returns None if not found or not active.
+
+    If variables is provided and not empty, the template is rendered with Jinja2
+    before being returned.
+    """
+    from jinja2 import Template
     result = await db.execute(
         select(CustomPrompt).where(
             CustomPrompt.entity_type == key,
@@ -337,7 +342,13 @@ async def get_prompt(key: str, db: AsyncSession) -> Optional[str]:
         )
     )
     prompt = result.scalar_one_or_none()
-    return prompt.prompt_template if prompt else None
+    if not prompt:
+        return None
+    template_str = prompt.prompt_template
+    if variables:
+        template = Template(template_str, autoescape=False)
+        return template.render(**variables)
+    return template_str
 
 
 async def register_prompt(key: str, prompt: str, db: AsyncSession) -> None:

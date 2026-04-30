@@ -35,17 +35,24 @@ class SimilarityService:
             await register_prompt(key, prompt_template, db)
         self._prompts_registered = True
 
-    async def _get_prompt(self, entity_type: str) -> str:
-        """Get the prompt template for an entity type."""
+    async def _get_prompt(self, entity_type: str, variables: Optional[Dict[str, Any]] = None) -> str:
+        """Get the prompt template for an entity type, optionally rendered with variables."""
+        from jinja2 import Template
         if self.session_factory is None:
-            return PROMPTS.get(entity_type, "")
+            template_str = PROMPTS.get(entity_type, "")
+            if variables:
+                return Template(template_str, autoescape=False).render(**variables)
+            return template_str
         async with self.session_factory() as db:
             if not self._prompts_registered:
                 await self._register_prompts(db)
-            prompt_template = await get_prompt(entity_type, db)
+            prompt_template = await get_prompt(entity_type, db, variables)
             if prompt_template:
                 return prompt_template
-            return PROMPTS.get(entity_type, "")
+            template_str = PROMPTS.get(entity_type, "")
+            if variables:
+                return Template(template_str, autoescape=False).render(**variables)
+            return template_str
 
     async def _get_ignored_patterns(self) -> List[Dict]:
         """Get all ignored tag patterns."""
@@ -223,7 +230,8 @@ class SimilarityService:
             return {"groups": [], "stats": {"items_count": 0, "estimated_tokens": 0}}
 
         items_str = json.dumps([item["name"] for item in items], ensure_ascii=False, indent=2)
-        prompt = prompt_template.replace("{items}", items_str)
+        from jinja2 import Template
+        prompt = Template(prompt_template, autoescape=False).render(items=items_str)
         estimated_input_tokens = self.llm.estimate_tokens(prompt)
 
         import logging
@@ -314,7 +322,8 @@ class SimilarityService:
         
         # Estimate tokens for all items
         items_str = json.dumps([item["name"] for item in all_items], ensure_ascii=False)
-        full_prompt = prompt_template.replace("{items}", items_str)
+        from jinja2 import Template
+        full_prompt = Template(prompt_template, autoescape=False).render(items=items_str)
         estimated_tokens = self.llm.estimate_tokens(full_prompt)
         
         # Leave 20% buffer for output
@@ -654,7 +663,8 @@ Wenn nichts zusammengehört: {{"group_merges": [], "add_to_groups": []}}"""
             ignore_info += "\n".join([f"- {p['pattern']} ({p['reason']})" for p in ignored_patterns])
         
         prompt_template = await self._get_prompt("similarity_tags_nonsense")
-        prompt = prompt_template.replace("{items}", items_text) + ignore_info
+        from jinja2 import Template
+        prompt = Template(prompt_template, autoescape=False).render(items=items_text) + ignore_info
         
         # Token estimation
         estimated_input_tokens = self.llm.estimate_tokens(prompt)
@@ -753,7 +763,8 @@ Wenn nichts zusammengehört: {{"group_merges": [], "add_to_groups": []}}"""
         corr_text = "\n".join([f"- {c['name']}" for c in correspondents])
         
         prompt_template = await self._get_prompt("similarity_tags_are_correspondents")
-        prompt = prompt_template.replace("{items}", tags_text).replace("{correspondents}", corr_text)
+        from jinja2 import Template
+        prompt = Template(prompt_template, autoescape=False).render(items=tags_text, correspondents=corr_text)
         
         # Token estimation
         estimated_input_tokens = self.llm.estimate_tokens(prompt)
@@ -855,7 +866,8 @@ Wenn nichts zusammengehört: {{"group_merges": [], "add_to_groups": []}}"""
         dt_text = "\n".join([f"- {dt['name']}" for dt in doc_types])
         
         prompt_template = await self._get_prompt("similarity_tags_are_document_types")
-        prompt = prompt_template.replace("{items}", tags_text).replace("{document_types}", dt_text)
+        from jinja2 import Template
+        prompt = Template(prompt_template, autoescape=False).render(items=tags_text, document_types=dt_text)
         
         # Token estimation
         estimated_input_tokens = self.llm.estimate_tokens(prompt)

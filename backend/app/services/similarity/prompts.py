@@ -5,7 +5,7 @@ CORRESPONDENTS = """Du bist ein Experte für die Analyse von Korrespondenten-Nam
 Analysiere die folgende Liste und finde Gruppen von ÄHNLICHEN Korrespondenten die zusammengelegt werden könnten.
 
 Korrespondenten-Liste:
-{items}
+{{ ITEMS }}
 
 WICHTIG - NUR Gruppen mit MINDESTENS 2 verschiedenen Einträgen erstellen!
 
@@ -42,7 +42,7 @@ TAGS = """Du bist ein Experte für die Analyse von Tags/Schlagwörtern in einem 
 Analysiere die folgende Liste von Tags und gruppiere ähnliche Einträge, die das gleiche Konzept beschreiben.
 
 Tags-Liste:
-{items}
+{{ ITEMS }}
 
 Regeln:
 1. Gruppiere Tags die das gleiche oder sehr ähnliche Konzept beschreiben
@@ -69,7 +69,7 @@ DOCUMENT_TYPES = """Du bist ein Experte für die Analyse von Dokumententypen in 
 Analysiere die folgende Liste von Dokumententypen und finde Gruppen von ÄHNLICHEN Einträgen die zusammengelegt werden könnten.
 
 Dokumententypen-Liste:
-{items}
+{{ ITEMS }}
 
 WICHTIG - NUR Gruppen mit MINDESTENS 2 verschiedenen Einträgen erstellen!
 
@@ -106,7 +106,7 @@ TAGS_NONSENSE = """Du bist ein Experte für Dokumentenmanagement und analysierst
 Analysiere diese Tags und identifiziere UNSINNIGE Tags, die gelöscht werden sollten.
 
 Tags-Liste (Name: Anzahl Dokumente):
-{items}
+{{ ITEMS }}
 
 Ein Tag ist UNSINNIG wenn es:
 - Zu generisch/nichtssagend ist (z.B. "Dokument", "Datei", "Sonstiges", "Allgemein")
@@ -136,10 +136,10 @@ TAGS_ARE_CORRESPONDENTS = """Du bist ein Experte für Dokumentenmanagement.
 Analysiere diese Tags und identifiziere Tags, die eigentlich KORRESPONDENTEN (Firmen/Personen) sind und nicht als Tag verwendet werden sollten.
 
 Tags-Liste:
-{items}
+{{ ITEMS }}
 
 Existierende Korrespondenten zum Vergleich:
-{correspondents}
+{{ CORRESPONDENTS }}
 
 Ein Tag sollte ein Korrespondent sein wenn es:
 - Ein Firmenname ist (GmbH, AG, Inc, Ltd, etc.)
@@ -166,10 +166,10 @@ TAGS_ARE_DOCUMENT_TYPES = """Du bist ein Experte für Dokumentenmanagement.
 Analysiere diese Tags und identifiziere Tags, die eigentlich DOKUMENTENTYPEN sind und nicht als Tag verwendet werden sollten.
 
 Tags-Liste:
-{items}
+{{ ITEMS }}
 
 Existierende Dokumententypen zum Vergleich:
-{document_types}
+{{ DOCUMENT_TYPES }}
 
 Ein Tag sollte ein Dokumententyp sein wenn es:
 - Eine Dokumentart beschreibt (Rechnung, Vertrag, Brief, Bescheid, etc.)

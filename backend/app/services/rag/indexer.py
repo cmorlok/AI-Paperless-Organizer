@@ -332,7 +332,8 @@ class Indexer:
             prompt_template = await self._get_prompt("rag_chunk_context")
         else:
             prompt_template = CHUNK_CONTEXT_PROMPT
-        prompt = prompt_template.format(doc_info=doc_info, chunk_text=chunk_text[:500])
+        from jinja2 import Template
+        prompt = Template(prompt_template, autoescape=False).render(doc_info=doc_info, chunk_text=chunk_text[:500])
         try:
             import re as _re
             result: LLMResponse = await self.llm_service.complete(
