@@ -200,7 +200,7 @@ async def analyze_document(document_id: int, service: FromDishka[DocumentClassif
         raise
     except Exception as e:
         logger.error("Analyze failed for document_id=%s: %s", document_id, e, exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.post("/benchmark")
@@ -358,7 +358,7 @@ async def bulk_approve_tag_idea(
     try:
         return await service.bulk_approve_tag_idea(req.tag_name, client)
     except ValueError as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=400, detail=str(e))
 
 
 @router.post("/tag-ideas/bulk-dismiss")

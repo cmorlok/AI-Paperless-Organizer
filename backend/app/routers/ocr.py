@@ -142,7 +142,8 @@ async def ensure_ocr_tags(client: FromDishka[PaperlessClient] = None):
             "ocrfinish": {"id": ocrfinish_tag.get("id"), "name": "ocrfinish"},
         }
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Tag-Fehler: {str(e)}")
+        logger.error("Tag-Fehler: %s", e)
+        raise HTTPException(status_code=500, detail="Interner Serverfehler")
 
 
 @router.post("/test-connection")
@@ -170,8 +171,8 @@ async def get_ocr_status(
     try:
         return await service.get_ocr_status(client)
     except Exception as e:
-        logger.error(f"Error getting OCR status: {e}")
-        raise HTTPException(status_code=500, detail=f"Fehler beim Abrufen des OCR-Status: {str(e)}")
+        logger.error("OCR-Status-Fehler: %s", e)
+        raise HTTPException(status_code=500, detail="Interner Serverfehler")
 
 
 # --- Single Document OCR ---
@@ -195,8 +196,8 @@ async def ocr_single_document(
             raise HTTPException(status_code=404, detail=error_msg)
         raise HTTPException(status_code=422, detail=f"OCR Verarbeitungsfehler: {error_msg}")
     except Exception as e:
-        logger.error(f"OCR single document error: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"OCR Fehler: {str(e)}")
+        logger.error("OCR-Fehler: %s", e, exc_info=True)
+        raise HTTPException(status_code=500, detail="Interner Serverfehler")
 
 
 @router.get("/progress/{document_id}")
@@ -291,7 +292,8 @@ async def apply_review_item(
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error("Review-Apply-Fehler: %s", e)
+        raise HTTPException(status_code=500, detail="Interner Serverfehler")
 
 
 @router.post("/review/dismiss/{document_id}")
@@ -315,7 +317,8 @@ async def reset_all_review_items(
     try:
         return await service.reset_all_review_items(client)
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Tag-Lookup fehlgeschlagen: {e}")
+        logger.error("Tag-Lookup fehlgeschlagen: %s", e)
+        raise HTTPException(status_code=500, detail="Interner Serverfehler")
 
 
 @router.post("/review/keep-all-originals")
@@ -329,7 +332,8 @@ async def keep_all_originals(
     try:
         return await service.keep_all_originals(client)
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Tag-Lookup fehlgeschlagen: {e}")
+        logger.error("Tag-Lookup fehlgeschlagen: %s", e)
+        raise HTTPException(status_code=500, detail="Interner Serverfehler")
 
 
 @router.post("/review/ignore/{document_id}")
@@ -507,5 +511,5 @@ async def evaluate_ocr_results(
             eval_model=request.evaluation_model,
         )
     except Exception as e:
-        logger.error(f"Evaluation failed: {e}")
-        raise HTTPException(status_code=500, detail=f"LLM-Auswertung fehlgeschlagen: {str(e)}")
+        logger.error("LLM-Auswertung fehlgeschlagen: %s", e)
+        raise HTTPException(status_code=500, detail="Interner Serverfehler")

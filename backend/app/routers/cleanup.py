@@ -73,7 +73,7 @@ async def scan_junk_documents(
 
     except Exception as e:
         logger.error(f"Error scanning documents: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.get("/thumbnail/{document_id}")
@@ -108,8 +108,8 @@ async def delete_junk_documents(
             await client.delete_document(doc_id)
             deleted_count += 1
         except Exception as e:
-            logger.error(f"Error deleting document {doc_id}: {e}")
-            errors.append({"id": doc_id, "error": str(e)})
+            logger.error("Error deleting document %s: %s", doc_id, e)
+            errors.append({"id": doc_id, "error": "Deletion failed"})
 
     return {
         "success": True,

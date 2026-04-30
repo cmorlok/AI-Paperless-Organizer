@@ -1,8 +1,11 @@
 """Correspondents Router — thin endpoints only."""
 
+import logging
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from typing import List
+
+logger = logging.getLogger(__name__)
 from app.services.paperless import PaperlessClient
 from app.services.similarity import SimilarityService
 from app.services.merge import MergeService
@@ -127,4 +130,5 @@ async def delete_correspondent(correspondent_id: int, client: FromDishka[Paperle
         await client.delete_correspondent(correspondent_id)
         return {"success": True}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error("Delete correspondent failed: %s", e)
+        raise HTTPException(status_code=500, detail="Internal server error")
