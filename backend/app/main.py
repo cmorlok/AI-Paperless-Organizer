@@ -87,11 +87,11 @@ async def lifespan(app: FastAPI):
                 ocr_state.processor.interval_minutes = startup_settings.get("processor_interval", 5)
                 loop = asyncio.get_running_loop()
                 ocr_state.processor.task = loop.create_task(service.processor_loop(client))
-                logging.getLogger(__name__).info(
+                logger.info(
                     f"Processor auto-started from KV store (interval: {ocr_state.processor.interval_minutes} min)"
                 )
         except Exception as e:
-            logging.getLogger(__name__).error(f"Processor auto-start failed: {e}")
+            logger.error(f"Processor auto-start failed: {e}")
 
     # Auto-start classifier background job if enabled (STATE-08: check KV store first)
     kv_classify_enabled = await _read_kv_setting("auto_classify_enabled")
@@ -103,9 +103,9 @@ async def lifespan(app: FastAPI):
                 ac_state.reset()
                 ac_state.enabled = True
             asyncio.get_running_loop().create_task(auto_classify_loop(di_container))
-            logging.getLogger(__name__).info("Auto-classify auto-started from KV store")
+            logger.info("Auto-classify auto-started from KV store")
         except Exception as e:
-            logging.getLogger(__name__).error(f"Auto-classify auto-start failed: {e}")
+            logger.error(f"Auto-classify auto-start failed: {e}")
 
     # Reset stale RAG indexing status + auto-resume incomplete indexing
     try:
@@ -120,7 +120,7 @@ async def lifespan(app: FastAPI):
             if rag_cfg and getattr(rag_cfg, "chat_model", "") == "mistral-nemo:12b":
                 setattr(rag_cfg, "chat_model", "qwen3.5:4b")
                 await db_sess.commit()
-                logging.getLogger(__name__).info("RAG: migrated chat_model from mistral-nemo:12b to qwen3.5:4b")
+                logger.info("RAG: migrated chat_model from mistral-nemo:12b to qwen3.5:4b")
 
             # Auto-enable RAG for existing users who already have indexed data
             if (
@@ -131,14 +131,14 @@ async def lifespan(app: FastAPI):
             ):
                 rag_cfg.rag_enabled = True
                 await db_sess.commit()
-                logging.getLogger(__name__).info("RAG: auto-enabled for existing user with indexed data")
+                logger.info("RAG: auto-enabled for existing user with indexed data")
 
             rag_active = rag_cfg and getattr(rag_cfg, "rag_enabled", False)
 
             if rag_state and rag_state.status == "indexing":
                 rag_state.status = "idle"
                 await db_sess.commit()
-                logging.getLogger(__name__).info("Reset stale RAG indexing status to 'idle'")
+                logger.info("Reset stale RAG indexing status to 'idle'")
 
             # Auto-resume if indexing was incomplete and RAG is enabled
             if (
@@ -151,11 +151,11 @@ async def lifespan(app: FastAPI):
                 async with di_container() as ctx:
                     rag_service = await ctx.get(RAGService)
                     asyncio.get_running_loop().create_task(rag_service.indexer.start_indexing(force=False))
-                    logging.getLogger(__name__).info(
+                    logger.info(
                         f"RAG: auto-resuming indexing ({rag_state.indexed_documents}/{rag_state.total_documents} already done)"
                     )
     except Exception as e:
-        logging.getLogger(__name__).error(f"RAG status reset failed: {e}")
+        logger.error(f"RAG status reset failed: {e}")
 
     # Auto-start cloud sync daemon if enabled in KV store (STATE-08)
     kv_cloud_sync_enabled = await _read_kv_setting("cloud_sync_enabled")
@@ -179,9 +179,9 @@ async def lifespan(app: FastAPI):
                 css.reset()
                 css.enabled = True
             asyncio.get_running_loop().create_task(cloud_sync_loop(di_container))
-            logging.getLogger(__name__).info("Cloud sync daemon auto-started from KV store")
+            logger.info("Cloud sync daemon auto-started from KV store")
         except Exception as e:
-            logging.getLogger(__name__).error(f"Cloud sync auto-start failed: {e}")
+            logger.error(f"Cloud sync auto-start failed: {e}")
 
     # Close the session used for reading settings
     await db_sess.close()
@@ -340,8 +340,8 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=_allowed_origins,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allow_headers=["Content-Type", "Authorization", "X-API-Key"],
 )
 app.add_middleware(SessionAuthMiddleware)
 app.add_middleware(LoggingMiddleware)
@@ -373,7 +373,7 @@ async def global_exception_handler(request: Request, exc: Exception):
     )
     return JSONResponse(
         status_code=500,
-        content={"detail": str(exc)},
+        content={"detail": "Internal server error"},
     )
 
 # Include routers
