@@ -1,9 +1,9 @@
 """Tests for AppSettings KV persistence of enabled flags (STATE-08).
 
 Verifies:
-- _persist_auto_classify_enabled writes correct key/value to AppSettings
-- _persist_ocr_processor_enabled writes correct key/value to AppSettings
-- _persist_cloud_sync_enabled writes correct key/value to AppSettings
+- auto_classify_enabled persistence via ConfigService
+- ocr_processor_enabled persistence via ConfigService
+- cloud_sync_enabled persistence via ConfigService
 - ConfigService.get returns None when key is not found
 - ConfigService.set creates/updates rows correctly
 """
@@ -100,29 +100,26 @@ class TestConfigService:
         assert rows[0].value == "v2"
 
 
-# ── Tests for _persist_auto_classify_enabled ──────────────────────────────────
+# ── Tests for auto_classify_enabled persistence via ConfigService ─────────────
 
 class TestPersistAutoClassifyEnabled:
     @pytest.mark.asyncio
     async def test_persist_true_writes_true_string(self, config_service, test_session_factory):
-        from app.routers.classifier import _persist_auto_classify_enabled
-        await _persist_auto_classify_enabled(True, config_service)
+        await config_service.set("auto_classify_enabled", "true", "bool")
         async with test_session_factory() as session:
             stored = await _read_key(session, "auto_classify_enabled")
         assert stored == "true"
 
     @pytest.mark.asyncio
     async def test_persist_false_writes_false_string(self, config_service, test_session_factory):
-        from app.routers.classifier import _persist_auto_classify_enabled
-        await _persist_auto_classify_enabled(False, config_service)
+        await config_service.set("auto_classify_enabled", "false", "bool")
         async with test_session_factory() as session:
             stored = await _read_key(session, "auto_classify_enabled")
         assert stored == "false"
 
     @pytest.mark.asyncio
     async def test_persist_key_is_auto_classify_enabled(self, config_service, test_session_factory):
-        from app.routers.classifier import _persist_auto_classify_enabled
-        await _persist_auto_classify_enabled(True, config_service)
+        await config_service.set("auto_classify_enabled", "true", "bool")
         async with test_session_factory() as session:
             result = await session.execute(
                 select(AppSettings).where(AppSettings.key == "auto_classify_enabled")
@@ -132,29 +129,26 @@ class TestPersistAutoClassifyEnabled:
         assert row.key == "auto_classify_enabled"
 
 
-# ── Tests for _persist_ocr_processor_enabled ───────────────────────────────────
+# ── Tests for ocr_processor_enabled persistence via ConfigService ─────────────
 
 class TestPersistOcrProcessorEnabled:
     @pytest.mark.asyncio
     async def test_persist_true_writes_true_string(self, config_service, test_session_factory):
-        from app.routers.ocr import _persist_ocr_processor_enabled
-        await _persist_ocr_processor_enabled(True, config_service)
+        await config_service.set("ocr_processor_enabled", "true", "bool")
         async with test_session_factory() as session:
             stored = await _read_key(session, "ocr_processor_enabled")
         assert stored == "true"
 
     @pytest.mark.asyncio
     async def test_persist_false_writes_false_string(self, config_service, test_session_factory):
-        from app.routers.ocr import _persist_ocr_processor_enabled
-        await _persist_ocr_processor_enabled(False, config_service)
+        await config_service.set("ocr_processor_enabled", "false", "bool")
         async with test_session_factory() as session:
             stored = await _read_key(session, "ocr_processor_enabled")
         assert stored == "false"
 
     @pytest.mark.asyncio
     async def test_persist_key_is_ocr_processor_enabled(self, config_service, test_session_factory):
-        from app.routers.ocr import _persist_ocr_processor_enabled
-        await _persist_ocr_processor_enabled(True, config_service)
+        await config_service.set("ocr_processor_enabled", "true", "bool")
         async with test_session_factory() as session:
             result = await session.execute(
                 select(AppSettings).where(AppSettings.key == "ocr_processor_enabled")
@@ -164,29 +158,26 @@ class TestPersistOcrProcessorEnabled:
         assert row.key == "ocr_processor_enabled"
 
 
-# ── Tests for _persist_cloud_sync_enabled ─────────────────────────────────────
+# ── Tests for cloud_sync_enabled persistence via ConfigService ────────────────
 
 class TestPersistCloudSyncEnabled:
     @pytest.mark.asyncio
     async def test_persist_true_writes_true_string(self, config_service, test_session_factory):
-        from app.routers.cloud_import import _persist_cloud_sync_enabled
-        await _persist_cloud_sync_enabled(True, config_service)
+        await config_service.set("cloud_sync_enabled", "true", "bool")
         async with test_session_factory() as session:
             stored = await _read_key(session, "cloud_sync_enabled")
         assert stored == "true"
 
     @pytest.mark.asyncio
     async def test_persist_false_writes_false_string(self, config_service, test_session_factory):
-        from app.routers.cloud_import import _persist_cloud_sync_enabled
-        await _persist_cloud_sync_enabled(False, config_service)
+        await config_service.set("cloud_sync_enabled", "false", "bool")
         async with test_session_factory() as session:
             stored = await _read_key(session, "cloud_sync_enabled")
         assert stored == "false"
 
     @pytest.mark.asyncio
     async def test_persist_key_is_cloud_sync_enabled(self, config_service, test_session_factory):
-        from app.routers.cloud_import import _persist_cloud_sync_enabled
-        await _persist_cloud_sync_enabled(True, config_service)
+        await config_service.set("cloud_sync_enabled", "true", "bool")
         async with test_session_factory() as session:
             result = await session.execute(
                 select(AppSettings).where(AppSettings.key == "cloud_sync_enabled")
