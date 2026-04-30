@@ -502,14 +502,14 @@ class CloudImportService:
 
     async def delete_source(self, source_id: int) -> None:
         """Delete a cloud source."""
-        from sqlalchemy import select
+        from sqlalchemy import select, delete as sa_delete
         from app.models.cloud_import import CloudSource
         async with self.session_factory() as db:
             result = await db.execute(select(CloudSource).where(CloudSource.id == source_id))
             source = result.scalar_one_or_none()
             if not source:
                 raise ValueError("Quelle nicht gefunden")
-            await db.delete(source)
+            await db.execute(sa_delete(CloudSource).where(CloudSource.id == source_id))
             await db.commit()
 
     async def get_source(self, source_id: int):
