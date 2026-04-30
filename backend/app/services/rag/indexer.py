@@ -329,7 +329,7 @@ class Indexer:
             + (f", Datum: {(doc.get('created') or '')[:10]}" if doc.get('created') else "")
         )
         if self._get_prompt:
-            prompt_template = await self._get_prompt("chunk_context")
+            prompt_template = await self._get_prompt("rag_chunk_context")
         else:
             prompt_template = CHUNK_CONTEXT_PROMPT
         prompt = prompt_template.format(doc_info=doc_info, chunk_text=chunk_text[:500])

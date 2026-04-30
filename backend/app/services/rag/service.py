@@ -415,14 +415,14 @@ class RAGService:
         context = "\n---\n".join(context_parts)
 
         # Build prompt
-        system_prompt = config.chat_system_prompt or await self._get_prompt("chat_system")
+        system_prompt = config.chat_system_prompt or await self._get_prompt("rag_chat_system")
 
         messages = [{"role": "system", "content": system_prompt}]
         messages.extend(chat_history)
 
         user_content = question
         if context:
-            user_content = (await self._get_prompt("chat_user_context")).format(context=context, question=question)
+            user_content = (await self._get_prompt("rag_chat_user_context")).format(context=context, question=question)
         messages.append({"role": "user", "content": user_content})
 
         # Yield session info first
@@ -519,7 +519,7 @@ class RAGService:
             if last_user and last_user.strip() != question.strip():
                 history_context = f"\nKontext (vorherige Frage): {last_user[:200]}"
 
-        prompt = (await self._get_prompt("query_rewrite")).format(history_context=history_context, question=question)
+        prompt = (await self._get_prompt("rag_query_rewrite")).format(history_context=history_context, question=question)
 
         messages = [{"role": "user", "content": prompt}]
 

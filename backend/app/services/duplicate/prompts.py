@@ -9,5 +9,5 @@ INVOICE_EXTRACTION_PROMPT = (
 )
 
 PROMPTS = {
-    "invoice_extraction": INVOICE_EXTRACTION_PROMPT,
+    "duplicate_invoice_extraction": INVOICE_EXTRACTION_PROMPT,
 }

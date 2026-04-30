@@ -35,8 +35,8 @@ CHUNK_CONTEXT_PROMPT = (
 )
 
 PROMPTS = {
-    "chat_system": CHAT_SYSTEM_PROMPT,
-    "chat_user_context": CHAT_USER_CONTEXT_TEMPLATE,
-    "query_rewrite": QUERY_REWRITE_PROMPT,
-    "chunk_context": CHUNK_CONTEXT_PROMPT,
+    "rag_chat_system": CHAT_SYSTEM_PROMPT,
+    "rag_chat_user_context": CHAT_USER_CONTEXT_TEMPLATE,
+    "rag_query_rewrite": QUERY_REWRITE_PROMPT,
+    "rag_chunk_context": CHUNK_CONTEXT_PROMPT,
 }

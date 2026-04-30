@@ -191,10 +191,10 @@ Antworte NUR mit validem JSON:
 Wenn keine solchen Tags gefunden werden: {"doctype_tags": []}"""
 
 PROMPTS = {
-    "correspondents": CORRESPONDENTS,
-    "tags": TAGS,
-    "document_types": DOCUMENT_TYPES,
-    "tags_nonsense": TAGS_NONSENSE,
-    "tags_are_correspondents": TAGS_ARE_CORRESPONDENTS,
-    "tags_are_document_types": TAGS_ARE_DOCUMENT_TYPES,
+    "similarity_correspondents": CORRESPONDENTS,
+    "similarity_tags": TAGS,
+    "similarity_document_types": DOCUMENT_TYPES,
+    "similarity_tags_nonsense": TAGS_NONSENSE,
+    "similarity_tags_are_correspondents": TAGS_ARE_CORRESPONDENTS,
+    "similarity_tags_are_document_types": TAGS_ARE_DOCUMENT_TYPES,
 }

@@ -585,7 +585,7 @@ Wenn nichts zusammengehört: {{"group_merges": [], "add_to_groups": []}}"""
             for c in correspondents
         ]
         
-        prompt_template = await self._get_prompt("correspondents")
+        prompt_template = await self._get_prompt("similarity_correspondents")
         return await self._analyze_with_batching(items, prompt_template, batch_size)
     
     async def find_similar_tags(self, batch_size: int = 200) -> Dict:
@@ -602,7 +602,7 @@ Wenn nichts zusammengehört: {{"group_merges": [], "add_to_groups": []}}"""
             for t in tags
         ]
         
-        prompt_template = await self._get_prompt("tags")
+        prompt_template = await self._get_prompt("similarity_tags")
         return await self._analyze_with_batching(items, prompt_template, batch_size)
     
     async def find_similar_document_types(self, batch_size: int = 200) -> Dict:
@@ -619,7 +619,7 @@ Wenn nichts zusammengehört: {{"group_merges": [], "add_to_groups": []}}"""
             for dt in doc_types
         ]
         
-        prompt_template = await self._get_prompt("document_types")
+        prompt_template = await self._get_prompt("similarity_document_types")
         return await self._analyze_with_batching(items, prompt_template, batch_size)
     
     async def find_nonsense_tags(self, batch_size: int = 300) -> Dict:
@@ -653,7 +653,7 @@ Wenn nichts zusammengehört: {{"group_merges": [], "add_to_groups": []}}"""
             ignore_info = "\n\nFolgende Tags sind GESCHÜTZT und dürfen NICHT als unsinnig markiert werden:\n"
             ignore_info += "\n".join([f"- {p['pattern']} ({p['reason']})" for p in ignored_patterns])
         
-        prompt_template = await self._get_prompt("tags_nonsense")
+        prompt_template = await self._get_prompt("similarity_tags_nonsense")
         prompt = prompt_template.replace("{items}", items_text) + ignore_info
         
         # Token estimation
@@ -752,7 +752,7 @@ Wenn nichts zusammengehört: {{"group_merges": [], "add_to_groups": []}}"""
         tags_text = "\n".join([f"- {t['name']}" for t in tags])
         corr_text = "\n".join([f"- {c['name']}" for c in correspondents])
         
-        prompt_template = await self._get_prompt("tags_are_correspondents")
+        prompt_template = await self._get_prompt("similarity_tags_are_correspondents")
         prompt = prompt_template.replace("{items}", tags_text).replace("{correspondents}", corr_text)
         
         # Token estimation
@@ -854,7 +854,7 @@ Wenn nichts zusammengehört: {{"group_merges": [], "add_to_groups": []}}"""
         tags_text = "\n".join([f"- {t['name']}" for t in tags])
         dt_text = "\n".join([f"- {dt['name']}" for dt in doc_types])
         
-        prompt_template = await self._get_prompt("tags_are_document_types")
+        prompt_template = await self._get_prompt("similarity_tags_are_document_types")
         prompt = prompt_template.replace("{items}", tags_text).replace("{document_types}", dt_text)
         
         # Token estimation
