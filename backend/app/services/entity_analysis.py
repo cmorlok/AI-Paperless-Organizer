@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Any, Callable, Dict, List
+from typing import Any, Callable, Dict, List, Optional
 
-from sqlalchemy import delete
+from sqlalchemy import select, delete
 from app.models import SavedAnalysis
 
 
@@ -32,6 +32,73 @@ async def persist_analysis(
             )
         )
         await db.commit()
+
+
+async def get_saved_analysis(session_factory: Any, entity_type: str) -> dict:
+    """Check if there's a saved analysis for the given entity type."""
+    async with session_factory() as db:
+        result = await db.execute(
+            select(SavedAnalysis)
+            .where(SavedAnalysis.entity_type == entity_type)
+            .order_by(SavedAnalysis.created_at.desc())
+            .limit(1)
+        )
+        saved = result.scalar_one_or_none()
+        if saved:
+            return {
+                "exists": True,
+                "id": saved.id,
+                "created_at": saved.created_at.isoformat() if saved.created_at else None,
+                "items_count": saved.items_count,
+                "groups_count": saved.groups_count,
+                "processed_groups": saved.processed_groups or [],
+            }
+        return {"exists": False}
+
+
+async def load_saved_analysis(session_factory: Any, entity_type: str) -> Optional[dict]:
+    """Load the saved analysis results."""
+    async with session_factory() as db:
+        result = await db.execute(
+            select(SavedAnalysis)
+            .where(SavedAnalysis.entity_type == entity_type)
+            .order_by(SavedAnalysis.created_at.desc())
+            .limit(1)
+        )
+        saved = result.scalar_one_or_none()
+        if not saved:
+            return None
+        return {
+            "groups": saved.groups,
+            "stats": saved.stats,
+            "created_at": saved.created_at.isoformat() if saved.created_at else None,
+            "processed_groups": saved.processed_groups or [],
+        }
+
+
+async def delete_saved_analysis(session_factory: Any, entity_type: str) -> None:
+    """Delete saved analysis for the given entity type."""
+    async with session_factory() as db:
+        await db.execute(delete(SavedAnalysis).where(SavedAnalysis.entity_type == entity_type))
+        await db.commit()
+
+
+async def mark_group_processed(session_factory: Any, entity_type: str, group_index: int) -> None:
+    """Mark a group as processed (merged or dismissed)."""
+    async with session_factory() as db:
+        result = await db.execute(
+            select(SavedAnalysis)
+            .where(SavedAnalysis.entity_type == entity_type)
+            .order_by(SavedAnalysis.created_at.desc())
+            .limit(1)
+        )
+        saved = result.scalar_one_or_none()
+        if saved:
+            processed = saved.processed_groups or []
+            if group_index not in processed:
+                processed.append(group_index)
+                saved.processed_groups = processed
+                await db.commit()
 
 
 async def estimate_entity_tokens(

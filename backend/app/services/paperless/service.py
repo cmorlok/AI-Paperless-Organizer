@@ -671,3 +671,66 @@ class PaperlessClient:
             )
             response.raise_for_status()
             return response.text  # returns task ID string
+
+    # ── Extracted router business logic ─────────────────────────────────────
+
+    async def update_db_cache(self, db, key: str, data: list) -> None:
+        """Update the persistent DB cache."""
+        from app.models import PaperlessCache
+        result = await db.execute(
+            select(PaperlessCache).where(PaperlessCache.cache_key == key)
+        )
+        cache_entry = result.scalar_one_or_none()
+        if cache_entry:
+            cache_entry.data = data
+            cache_entry.count = len(data)
+        else:
+            cache_entry = PaperlessCache(cache_key=key, data=data, count=len(data))
+            db.add(cache_entry)
+        await db.commit()
+
+    async def get_tags_cached(self, db) -> list:
+        """Get tags with 3-tier caching: in-memory → DB → Paperless."""
+        cache = get_cache()
+        cache_key = f"paperless:tags:{self.base_url}"
+
+        # 1. In-memory cache
+        cached = await cache.get(cache_key)
+        if cached is not None:
+            return cached
+
+        # 2. DB cache
+        from app.models import PaperlessCache
+        db_result = await db.execute(
+            select(PaperlessCache).where(PaperlessCache.cache_key == "tags")
+        )
+        db_entry = db_result.scalar_one_or_none()
+        if db_entry and db_entry.data:
+            await cache.set(cache_key, db_entry.data, CACHE_TTL)
+            return db_entry.data
+
+        # 3. Fetch from Paperless
+        data = await self.get_tags(use_cache=False)
+        await self.update_db_cache(db, "tags", data)
+        return data
+
+    async def refresh_cache(self, db) -> dict:
+        """Refresh cache by fetching fresh data from Paperless."""
+        cache = get_cache()
+        await cache.clear("paperless:")
+
+        correspondents = await self.get_correspondents(use_cache=False)
+        tags = await self.get_tags(use_cache=False)
+        doc_types = await self.get_document_types(use_cache=False)
+
+        await self.update_db_cache(db, "correspondents", correspondents)
+        await self.update_db_cache(db, "tags", tags)
+        await self.update_db_cache(db, "document_types", doc_types)
+
+        return {
+            "success": True,
+            "correspondents": len(correspondents),
+            "tags": len(tags),
+            "document_types": len(doc_types),
+            "message": "Cache aktualisiert",
+        }

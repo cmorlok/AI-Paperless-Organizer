@@ -12,6 +12,10 @@ from app.services.entity_analysis import (
     persist_analysis,
     estimate_entity_tokens,
     delete_empty_entities,
+    get_saved_analysis,
+    load_saved_analysis,
+    delete_saved_analysis,
+    mark_group_processed,
 )
 
 
@@ -64,3 +68,19 @@ class DocumentTypesServiceImpl:
             entity_type="document_types",
             stats_service=self._stats,
         )
+
+    async def get_saved_analysis(self) -> dict:
+        """Check if there's a saved analysis."""
+        return await get_saved_analysis(self._session_factory, "document_types")
+
+    async def load_saved_analysis(self) -> Optional[dict]:
+        """Load saved analysis results."""
+        return await load_saved_analysis(self._session_factory, "document_types")
+
+    async def delete_saved_analysis(self) -> None:
+        """Delete saved analysis."""
+        await delete_saved_analysis(self._session_factory, "document_types")
+
+    async def mark_group_processed(self, group_index: int) -> None:
+        """Mark a group as processed."""
+        await mark_group_processed(self._session_factory, "document_types", group_index)

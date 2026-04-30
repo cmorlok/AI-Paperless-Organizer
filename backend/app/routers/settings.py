@@ -1,38 +1,31 @@
+"""Settings Router — thin endpoints only: validate input, call service, return response."""
+
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from typing import Optional
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
 from app.database import get_db
-from app.models import PaperlessSettings, LLMProvider, CustomPrompt, IgnoredTag, AppSettings
-from app.models.settings_model import (
-    LLM_KEY_CLASSIFIER_PROVIDER,
-    LLM_KEY_CLASSIFIER_MODEL,
-    LLM_KEY_OCR_MODEL,
-)
+from app.services.llm import LLMService, PROVIDER_DISPLAY_NAMES
+from app.services import settings_service as svc
 from dishka.integrations.fastapi import inject
 from dishka import FromDishka
 
-from app.services.llm import LLMService, PROVIDER_DISPLAY_NAMES
-from app.services.settings_service import get_setting, set_setting
-from app.prompts.default_prompts import DEFAULT_PROMPTS
-
 router = APIRouter()
 
+
+# ── Pydantic schemas ─────────────────────────────────────────────────────────
 
 class SettingUpdateSchema(BaseModel):
     value: str
     value_type: Optional[str] = "str"
 
 
-# Pydantic models for requests/responses
 class PaperlessSettingsSchema(BaseModel):
     url: str
     api_token: str
 
 
 class LLMProviderSchema(BaseModel):
-    """Full LLMProvider update schema (used by PUT, now without model fields per D-05)."""
     name: str
     display_name: str
     api_key: Optional[str] = ""
@@ -40,13 +33,11 @@ class LLMProviderSchema(BaseModel):
 
 
 class LLMProviderPatchSchema(BaseModel):
-    """Patch schema for updating connection fields only (per D-05)."""
     api_key: Optional[str] = None
     api_base_url: Optional[str] = None
 
 
 class LLMProviderCreateSchema(BaseModel):
-    """Schema for creating a new LLM provider record."""
     name: str
     display_name: Optional[str] = None
     api_key: Optional[str] = ""
@@ -59,98 +50,53 @@ class CustomPromptSchema(BaseModel):
     is_active: bool = True
 
 
-# Paperless Settings
+class IgnoredTagSchema(BaseModel):
+    pattern: str
+    reason: Optional[str] = ""
+    is_regex: bool = False
+
+
+class AppSettingsSchema(BaseModel):
+    show_debug_menu: Optional[bool] = None
+    sidebar_compact: Optional[bool] = None
+    classifier_provider: Optional[str] = None
+    classifier_model: Optional[str] = None
+    ocr_model: Optional[str] = None
+
+
+# ── Paperless Settings ───────────────────────────────────────────────────────
+
 @router.get("/paperless")
 async def get_paperless_settings(db: AsyncSession = Depends(get_db)):
-    """Get Paperless connection settings."""
-    result = await db.execute(select(PaperlessSettings).where(PaperlessSettings.id == 1))
-    settings = result.scalar_one_or_none()
-    
-    if not settings:
-        return {"url": "", "api_token": "", "is_configured": False}
-    
-    return {
-        "url": settings.url,
-        "api_token": "***" if settings.api_token else "",
-        "is_configured": settings.is_configured
-    }
+    return await svc.get_paperless_settings(db)
 
 
 @router.post("/paperless")
-async def save_paperless_settings(
-    data: PaperlessSettingsSchema,
-    db: AsyncSession = Depends(get_db)
-):
-    """Save Paperless connection settings."""
-    result = await db.execute(select(PaperlessSettings).where(PaperlessSettings.id == 1))
-    settings = result.scalar_one_or_none()
-    
-    if settings:
-        settings.url = data.url
-        # Only update token if it's not the masked value "***"
-        if data.api_token and data.api_token != "***":
-            settings.api_token = data.api_token
-        # Check if configured (use existing token if masked)
-        actual_token = settings.api_token if data.api_token == "***" else data.api_token
-        settings.is_configured = bool(data.url and actual_token)
-    else:
-        # New settings - token must be provided
-        if data.api_token == "***":
-            raise HTTPException(status_code=400, detail="API Token muss angegeben werden")
-        settings = PaperlessSettings(
-            id=1,
-            url=data.url,
-            api_token=data.api_token,
-            is_configured=bool(data.url and data.api_token)
-        )
-        db.add(settings)
-    
-    await db.commit()
-    return {"success": True, "is_configured": settings.is_configured}
+async def save_paperless_settings(data: PaperlessSettingsSchema, db: AsyncSession = Depends(get_db)):
+    try:
+        return await svc.save_paperless_settings(data.url, data.api_token, db)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
 
-# LLM Providers - DB-based (for internal/admin use)
+# ── LLM Providers ────────────────────────────────────────────────────────────
+
 @router.get("/llm-providers/db")
 async def get_llm_providers_from_db(db: AsyncSession = Depends(get_db)):
-    """Get all LLM provider configurations from database.
-    
-    Returns only providers that have been explicitly configured via POST.
-    The SettingsPanel uses the LiteLLM-based /llm-providers endpoint for the provider dropdown.
-    """
-    result = await db.execute(select(LLMProvider).order_by(LLMProvider.name))
-    providers = result.scalars().all()
-    
-    return [
-        {
-            "id": p.id,
-            "name": p.name,
-            "display_name": p.display_name,
-            "api_key": "***" if p.api_key else "",
-            "api_base_url": p.api_base_url or "",
-        }
-        for p in providers
-    ]
+    return await svc.get_llm_providers_from_db(db)
 
 
-# LLM Providers - LiteLLM-based (for SettingsPanel UI)
 @router.get("/llm-providers")
 @inject
-async def get_llm_providers_from_litellm(
-    llm_service: FromDishka[LLMService] = None,
-):
+async def get_llm_providers_from_litellm(llm_service: FromDishka[LLMService] = None):
     assert llm_service is not None
-    """Get all LiteLLM-supported providers."""
     return llm_service.list_providers()
 
 
 @router.get("/llm-providers/models")
 @inject
-async def get_llm_provider_models(
-    provider: str,
-    llm_service: FromDishka[LLMService] = None,
-):
+async def get_llm_provider_models(provider: str, llm_service: FromDishka[LLMService] = None):
     assert llm_service is not None
-    """Get available models for a specific LiteLLM provider."""
     try:
         models = await llm_service.list_models(provider)
         return {"provider": provider, "models": models}
@@ -159,267 +105,90 @@ async def get_llm_provider_models(
 
 
 @router.put("/llm-providers/db/{provider_id}")
-async def update_llm_provider(
-    provider_id: int,
-    data: LLMProviderSchema,
-    db: AsyncSession = Depends(get_db)
-):
-    """Update an LLM provider configuration (connection fields only per D-05)."""
-    result = await db.execute(select(LLMProvider).where(LLMProvider.id == provider_id))
-    provider = result.scalar_one_or_none()
-    
-    if not provider:
-        raise HTTPException(status_code=404, detail="Provider not found")
-    
-    # Keep old key if *** or empty string is sent (don't accidentally clear the key)
-    if data.api_key and data.api_key != "***":
-        provider.api_key = data.api_key
-    # else: keep existing provider.api_key
-    if data.api_base_url is not None:
-        provider.api_base_url = data.api_base_url
-    
-    await db.commit()
-    return {"success": True}
+async def update_llm_provider(provider_id: int, data: LLMProviderSchema, db: AsyncSession = Depends(get_db)):
+    try:
+        return await svc.update_llm_provider(
+            provider_id, data.name, data.display_name, data.api_key, data.api_base_url, db,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
 
 
 @router.patch("/llm-providers/db/{provider_id}")
-async def patch_llm_provider(
-    provider_id: int,
-    data: LLMProviderPatchSchema,
-    db: AsyncSession = Depends(get_db)
-):
-    """Update only connection fields (api_key, api_base_url) of an LLM provider.
-
-    Does NOT update model fields — those are set via AppSettings key-value per LLM-08.
-    """
-    result = await db.execute(select(LLMProvider).where(LLMProvider.id == provider_id))
-    provider = result.scalar_one_or_none()
-    
-    if not provider:
-        raise HTTPException(status_code=404, detail="Provider not found")
-    
-    # Only update fields that are provided
-    if data.api_key is not None:
-        # Don't overwrite with empty string if *** is sent (masked = don't change)
-        if data.api_key and data.api_key != "***":
-            provider.api_key = data.api_key
-    
-    if data.api_base_url is not None:
-        provider.api_base_url = data.api_base_url
-    
-    await db.commit()
-    return {"success": True}
+async def patch_llm_provider(provider_id: int, data: LLMProviderPatchSchema, db: AsyncSession = Depends(get_db)):
+    try:
+        return await svc.patch_llm_provider(provider_id, data.api_key, data.api_base_url, db)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
 
 
 @router.post("/llm-providers/db")
-async def create_llm_provider(
-    data: LLMProviderCreateSchema,
-    db: AsyncSession = Depends(get_db)
-):
-    """Create a new LLM provider configuration.
-    
-    Used when user selects a provider from LiteLLM list that doesn't exist in DB yet.
-    """
-    # Check if provider with this name already exists
-    result = await db.execute(select(LLMProvider).where(LLMProvider.name == data.name))
-    existing = result.scalar_one_or_none()
-    
-    if existing:
-        raise HTTPException(status_code=409, detail="Provider already exists")
-    
-    # Use provided display_name or derive from PROVIDER_DISPLAY_NAMES
-    display_name = data.display_name or PROVIDER_DISPLAY_NAMES.get(data.name, data.name.title())
-    
-    provider = LLMProvider(
-        name=data.name,
-        display_name=display_name,
-        api_key=data.api_key or "",
-        api_base_url=data.api_base_url or "",
-    )
-    
-    db.add(provider)
-    await db.commit()
-    await db.refresh(provider)
-    
-    return {"id": provider.id, "name": provider.name, "display_name": provider.display_name}
+async def create_llm_provider(data: LLMProviderCreateSchema, db: AsyncSession = Depends(get_db)):
+    try:
+        return await svc.create_llm_provider(data.name, data.display_name, data.api_key, data.api_base_url, db)
+    except ValueError as e:
+        if str(e) == "already_exists":
+            raise HTTPException(status_code=409, detail="Provider already exists")
+        raise
 
 
-# Custom Prompts - Display names for UI
-PROMPT_DISPLAY_NAMES = {
-    "correspondents": "Korrespondenten gruppieren",
-    "tags": "Tags gruppieren",
-    "document_types": "Dokumententypen gruppieren",
-    "tags_nonsense": "Sinnlose Tags erkennen",
-    "tags_are_correspondents": "Tags als Korrespondenten erkennen",
-    "tags_are_document_types": "Tags als Dokumententypen erkennen",
-}
+# ── Custom Prompts ───────────────────────────────────────────────────────────
 
 @router.get("/prompts")
 async def get_prompts(db: AsyncSession = Depends(get_db)):
-    """Get all custom prompts."""
-    from app.services.settings_service import get_prompts as _get
-    return await _get(db)
+    return await svc.get_prompts(db)
 
 
 @router.put("/prompts/{prompt_id}")
-async def update_prompt(
-    prompt_id: int,
-    data: CustomPromptSchema,
-    db: AsyncSession = Depends(get_db)
-):
-    """Update a custom prompt."""
-    result = await db.execute(select(CustomPrompt).where(CustomPrompt.id == prompt_id))
-    prompt = result.scalar_one_or_none()
-    
-    if not prompt:
-        raise HTTPException(status_code=404, detail="Prompt not found")
-    
-    prompt.prompt_template = data.prompt_template
-    prompt.is_active = data.is_active
-    
-    await db.commit()
-    return {"success": True}
+async def update_prompt(prompt_id: int, data: CustomPromptSchema, db: AsyncSession = Depends(get_db)):
+    try:
+        return await svc.update_prompt(prompt_id, data.prompt_template, data.is_active, db)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
 
 
 @router.post("/prompts/reset/{entity_type}")
-async def reset_prompt(
-    entity_type: str,
-    db: AsyncSession = Depends(get_db)
-):
-    """Reset a prompt to its default."""
-    if entity_type not in DEFAULT_PROMPTS:
-        raise HTTPException(status_code=400, detail="Invalid entity type")
-    
-    result = await db.execute(
-        select(CustomPrompt).where(CustomPrompt.entity_type == entity_type)
-    )
-    prompt = result.scalar_one_or_none()
-    
-    if prompt:
-        prompt.prompt_template = DEFAULT_PROMPTS[entity_type]
-        await db.commit()
-    
-    return {"success": True, "prompt_template": DEFAULT_PROMPTS[entity_type]}
+async def reset_prompt(entity_type: str, db: AsyncSession = Depends(get_db)):
+    try:
+        return await svc.reset_prompt(entity_type, db)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
 
-# Ignored Tags
-class IgnoredTagSchema(BaseModel):
-    pattern: str
-    reason: Optional[str] = ""
-    is_regex: bool = False
-
-
-# Default ignored patterns
-DEFAULT_IGNORED_TAGS = [
-    {"pattern": "INBOX", "reason": "System-Tag für Paperless Eingang"},
-    {"pattern": "ai-done", "reason": "Paperless-AI Verarbeitungsmarker"},
-    {"pattern": "paperless-ai", "reason": "Paperless-AI System-Tag"},
-    {"pattern": "TODO", "reason": "Aufgaben-Marker"},
-    {"pattern": "*@*", "reason": "E-Mail-Adressen (Muster)"},
-]
-
+# ── Ignored Tags ─────────────────────────────────────────────────────────────
 
 @router.get("/ignored-tags")
 async def get_ignored_tags(db: AsyncSession = Depends(get_db)):
-    """Get all ignored tag patterns."""
-    result = await db.execute(select(IgnoredTag).order_by(IgnoredTag.pattern))
-    tags = result.scalars().all()
-    
-    # If empty, create defaults
-    if not tags:
-        for item in DEFAULT_IGNORED_TAGS:
-            tag = IgnoredTag(**item)
-            db.add(tag)
-        await db.commit()
-        
-        result = await db.execute(select(IgnoredTag).order_by(IgnoredTag.pattern))
-        tags = result.scalars().all()
-    
-    return [
-        {
-            "id": t.id,
-            "pattern": t.pattern,
-            "reason": t.reason,
-            "is_regex": t.is_regex
-        }
-        for t in tags
-    ]
+    return await svc.get_ignored_tags(db)
 
 
 @router.post("/ignored-tags")
-async def add_ignored_tag(
-    data: IgnoredTagSchema,
-    db: AsyncSession = Depends(get_db)
-):
-    """Add a new ignored tag pattern."""
-    # Check if already exists
-    result = await db.execute(
-        select(IgnoredTag).where(IgnoredTag.pattern == data.pattern)
-    )
-    existing = result.scalar_one_or_none()
-    
-    if existing:
+async def add_ignored_tag(data: IgnoredTagSchema, db: AsyncSession = Depends(get_db)):
+    try:
+        return await svc.add_ignored_tag(data.pattern, data.reason or "", data.is_regex, db)
+    except ValueError:
         raise HTTPException(status_code=400, detail="Pattern already exists")
-    
-    tag = IgnoredTag(
-        pattern=data.pattern,
-        reason=data.reason,
-        is_regex=data.is_regex
-    )
-    db.add(tag)
-    await db.commit()
-    await db.refresh(tag)
-    
-    return {
-        "id": tag.id,
-        "pattern": tag.pattern,
-        "reason": tag.reason,
-        "is_regex": tag.is_regex
-    }
 
 
 @router.delete("/ignored-tags/{tag_id}")
-async def delete_ignored_tag(
-    tag_id: int,
-    db: AsyncSession = Depends(get_db)
-):
-    """Delete an ignored tag pattern."""
-    result = await db.execute(select(IgnoredTag).where(IgnoredTag.id == tag_id))
-    tag = result.scalar_one_or_none()
-    
-    if not tag:
+async def delete_ignored_tag(tag_id: int, db: AsyncSession = Depends(get_db)):
+    try:
+        await svc.delete_ignored_tag(tag_id, db)
+    except ValueError:
         raise HTTPException(status_code=404, detail="Pattern not found")
-    
-    await db.delete(tag)
-    await db.commit()
-    
     return {"success": True}
 
 
-# App Settings (Debug Toggle, etc.)
-class AppSettingsSchema(BaseModel):
-    show_debug_menu: Optional[bool] = None
-    sidebar_compact: Optional[bool] = None
-    classifier_provider: Optional[str] = None
-    classifier_model: Optional[str] = None  # Stored in key-value store (LLM-09)
-    ocr_model: Optional[str] = None  # Stored in key-value store (LLM-09)
-
+# ── App Settings ─────────────────────────────────────────────────────────────
 
 @router.get("/app")
 async def get_app_settings(db: AsyncSession = Depends(get_db)):
-    """Get application settings."""
-    from app.services.settings_service import get_app_settings as _get
-    return await _get(db)
+    return await svc.get_app_settings(db)
 
 
 @router.put("/app")
-async def update_app_settings(
-    data: AppSettingsSchema,
-    db: AsyncSession = Depends(get_db)
-):
-    """Update application settings."""
-    from app.services.settings_service import update_app_settings as _update
-    await _update(
+async def update_app_settings(data: AppSettingsSchema, db: AsyncSession = Depends(get_db)):
+    await svc.update_app_settings(
         show_debug_menu=data.show_debug_menu,
         sidebar_compact=data.sidebar_compact,
         classifier_provider=data.classifier_provider,
@@ -430,34 +199,22 @@ async def update_app_settings(
     return {"success": True}
 
 
-# ── Key-Value Settings Endpoints (LLM-08) ──────────────────────────────────────
+# ── Key-Value Settings ───────────────────────────────────────────────────────
 
 @router.get("/settings/{key}")
 async def get_setting_endpoint(key: str, db: AsyncSession = Depends(get_db)):
-    """Get a setting value by key."""
-    value = await get_setting(key, db)
+    value = await svc.get_setting(key, db)
     if value is None:
         raise HTTPException(status_code=404, detail=f"Setting '{key}' not found")
     return {"key": key, "value": value}
 
 
 @router.put("/settings/{key}")
-async def set_setting_endpoint(
-    key: str,
-    data: SettingUpdateSchema,
-    db: AsyncSession = Depends(get_db)
-):
-    """Set a setting value."""
-    await set_setting(key, data.value, data.value_type or "str", db)
+async def set_setting_endpoint(key: str, data: SettingUpdateSchema, db: AsyncSession = Depends(get_db)):
+    await svc.set_setting(key, data.value, data.value_type or "str", db)
     return {"success": True, "key": key, "value": data.value}
 
 
 @router.post("/settings/seed-llm-keys")
 async def seed_llm_keys(db: AsyncSession = Depends(get_db)):
-    """Seed LLM key-value settings from existing LLMProvider records. Run once during migration."""
-    result = await db.execute(select(LLMProvider).limit(1))
-    provider = result.scalar_one_or_none()
-    if provider and provider.name:
-        await set_setting(LLM_KEY_CLASSIFIER_PROVIDER, provider.name, "str", db)
-    return {"success": True}
-
+    return await svc.seed_llm_keys(db)

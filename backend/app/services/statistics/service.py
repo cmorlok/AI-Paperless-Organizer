@@ -172,3 +172,75 @@ class StatisticsService:
                 }
                 for d in daily
             ]
+
+    # ── Extracted router business logic ─────────────────────────────────────
+
+    async def get_cached_counts(self, db, paperless_client) -> dict:
+        """Get counts from DB cache, or load from Paperless if cache is empty."""
+        import asyncio
+        from app.models import PaperlessCache
+        import logging
+        logger = logging.getLogger(__name__)
+
+        result = {}
+        cache_empty = False
+
+        for key in ['correspondents', 'tags', 'document_types']:
+            cache_result = await db.execute(
+                select(PaperlessCache).where(PaperlessCache.cache_key == key)
+            )
+            cache_entry = cache_result.scalar_one_or_none()
+            if cache_entry and cache_entry.count > 0:
+                result[key] = cache_entry.count
+            else:
+                cache_empty = True
+                result[key] = 0
+
+        if cache_empty and paperless_client.base_url:
+            try:
+                correspondents, tags, doc_types = await asyncio.gather(
+                    paperless_client.get_correspondents(),
+                    paperless_client.get_tags(),
+                    paperless_client.get_document_types(),
+                )
+                result = {
+                    'correspondents': len(correspondents),
+                    'tags': len(tags),
+                    'document_types': len(doc_types),
+                }
+                for key, data in [('correspondents', correspondents), ('tags', tags), ('document_types', doc_types)]:
+                    cache_result = await db.execute(
+                        select(PaperlessCache).where(PaperlessCache.cache_key == key)
+                    )
+                    cache_entry = cache_result.scalar_one_or_none()
+                    if cache_entry:
+                        cache_entry.data = data
+                        cache_entry.count = len(data)
+                    else:
+                        cache_entry = PaperlessCache(cache_key=key, data=data, count=len(data))
+                        db.add(cache_entry)
+                await db.commit()
+            except Exception as e:
+                logger.error("Paperless loading failed", extra={"error": str(e)})
+
+        return result
+
+    async def get_statistics_summary(self, db, paperless_client) -> dict:
+        """Get comprehensive statistics summary for dashboard."""
+        import asyncio
+
+        cleanup_stats, current_counts = await asyncio.gather(
+            self.get_total_stats(),
+            self.get_cached_counts(db, paperless_client),
+        )
+
+        total_cleaned = cleanup_stats['total_items_cleaned']
+
+        return {
+            'current_counts': current_counts,
+            'cleanup_stats': cleanup_stats,
+            'savings': {
+                'total_items_cleaned': total_cleaned,
+                'estimated_time_saved_minutes': total_cleaned * 2,
+            },
+        }

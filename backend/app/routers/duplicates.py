@@ -1,14 +1,11 @@
-import asyncio
+"""Duplicates Router — thin endpoints only."""
+
 import logging
 from typing import List
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, delete, and_
 
-from app.database import get_db
-from app.models.duplicates import DuplicateIgnore
 from app.services.duplicate import DuplicateService, DuplicateScanState
 from dishka.integrations.fastapi import inject
 from dishka import FromDishka
@@ -16,8 +13,6 @@ from dishka import FromDishka
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
-
-# ── Pydantic schemas ─────────────────────────────────────────────────────────
 
 class ScanRequest(BaseModel):
     modes: List[str] = ["exact", "similar", "invoices"]
@@ -28,8 +23,6 @@ class IgnoreRequest(BaseModel):
     doc_ids: List[int]
 
 
-# ── Scan endpoints ───────────────────────────────────────────────────────────
-
 @router.post("/scan")
 @inject
 async def start_scan(
@@ -39,17 +32,10 @@ async def start_scan(
 ):
     assert service is not None
     assert state is not None
-    """Startet einen Duplikat-Scan im Hintergrund."""
+    import asyncio
     if state.running:
         raise HTTPException(status_code=409, detail="Scan läuft bereits")
-
-    asyncio.create_task(
-        service.scan_all(
-            modes=body.modes,
-            similarity_threshold=body.similarity_threshold,
-        )
-    )
-
+    asyncio.create_task(service.scan_all(modes=body.modes, similarity_threshold=body.similarity_threshold))
     return {"status": "started", "modes": body.modes}
 
 
@@ -57,7 +43,6 @@ async def start_scan(
 @inject
 async def scan_status(state: FromDishka[DuplicateScanState] = None):
     assert state is not None
-    """Polling-Endpoint für den Scan-Fortschritt."""
     return {
         "running": state.running,
         "phase": state.phase,
@@ -71,7 +56,6 @@ async def scan_status(state: FromDishka[DuplicateScanState] = None):
 @inject
 async def stop_scan(state: FromDishka[DuplicateScanState] = None):
     assert state is not None
-    """Stoppt den laufenden Scan."""
     if not state.running:
         return {"status": "not_running"}
     state.request_cancel()
@@ -83,75 +67,34 @@ async def stop_scan(state: FromDishka[DuplicateScanState] = None):
 @inject
 async def scan_results(state: FromDishka[DuplicateScanState] = None):
     assert state is not None
-    """Gibt die Ergebnis-Gruppen des letzten Scans zurück."""
     if state.running:
         raise HTTPException(status_code=409, detail="Scan läuft noch")
     return {"groups": state.results}
 
 
-# ── Ignore-Liste ─────────────────────────────────────────────────────────────
-
 @router.post("/ignore")
-async def ignore_group(body: IgnoreRequest, db: AsyncSession = Depends(get_db)):
-    """Markiert eine Gruppe von Dokumenten als 'kein Duplikat'."""
-    if len(body.doc_ids) < 2:
-        raise HTTPException(status_code=400, detail="Mindestens 2 Dokument-IDs erforderlich")
-
-    # Alle Paare speichern (sortiert, um Duplikate zu vermeiden)
-    added = 0
-    for i in range(len(body.doc_ids)):
-        for j in range(i + 1, len(body.doc_ids)):
-            a, b = sorted([body.doc_ids[i], body.doc_ids[j]])
-            # Prüfen ob Paar schon existiert
-            existing = await db.execute(
-                select(DuplicateIgnore).where(
-                    and_(
-                        DuplicateIgnore.doc_id_a == a,
-                        DuplicateIgnore.doc_id_b == b,
-                    )
-                )
-            )
-            if existing.scalar_one_or_none() is None:
-                db.add(DuplicateIgnore(doc_id_a=a, doc_id_b=b))
-                added += 1
-
-    await db.commit()
-    logger.info("Added %d ignore pair(s) for doc_ids=%s", added, body.doc_ids)
-    return {"added": added}
+@inject
+async def ignore_group(body: IgnoreRequest, service: FromDishka[DuplicateService] = None):
+    assert service is not None
+    try:
+        return await service.ignore_group(body.doc_ids)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
 
 @router.get("/ignored")
-async def list_ignored(db: AsyncSession = Depends(get_db)):
-    """Gibt alle ignorierten Paare zurück."""
-    result = await db.execute(select(DuplicateIgnore).order_by(DuplicateIgnore.created_at.desc()))
-    rows = result.scalars().all()
-    return [
-        {
-            "id": row.id,
-            "doc_id_a": row.doc_id_a,
-            "doc_id_b": row.doc_id_b,
-            "created_at": row.created_at.isoformat() if row.created_at else None,
-        }
-        for row in rows
-    ]
+@inject
+async def list_ignored(service: FromDishka[DuplicateService] = None):
+    assert service is not None
+    return await service.list_ignored()
 
 
 @router.delete("/ignore/{doc_id_a}/{doc_id_b}")
-async def remove_ignore(doc_id_a: int, doc_id_b: int, db: AsyncSession = Depends(get_db)):
-    """Hebt die Ignorierung eines Paares auf."""
-    a, b = sorted([doc_id_a, doc_id_b])
-    result = await db.execute(
-        delete(DuplicateIgnore).where(
-            and_(
-                DuplicateIgnore.doc_id_a == a,
-                DuplicateIgnore.doc_id_b == b,
-            )
-        )
-    )
-    await db.commit()
-
-    if getattr(result, "rowcount", 0) == 0:
-        raise HTTPException(status_code=404, detail="Paar nicht gefunden")
-
-    logger.info("Removed ignore pair (%d, %d)", a, b)
+@inject
+async def remove_ignore(doc_id_a: int, doc_id_b: int, service: FromDishka[DuplicateService] = None):
+    assert service is not None
+    try:
+        await service.remove_ignore(doc_id_a, doc_id_b)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
     return {"removed": True}

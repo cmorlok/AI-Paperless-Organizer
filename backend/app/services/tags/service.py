@@ -150,7 +150,155 @@ class TagsServiceImpl:
                 if db_entry and db_entry.data:
                     db_entry.data = [t for t in db_entry.data if t.get("id") not in deleted_set]
                     db_entry.count = len(db_entry.data)
+            await db.commit()
+
+    # ------------------------------------------------------------------
+    # Saved analysis CRUD (extracted from router)
+    # ------------------------------------------------------------------
+
+    async def get_saved_analysis(self, entity_type: str) -> dict:
+        """Check if there's a saved analysis for the given entity type."""
+        async with self._session_factory() as db:
+            result = await db.execute(
+                select(SavedAnalysis)
+                .where(SavedAnalysis.entity_type == entity_type)
+                .order_by(SavedAnalysis.created_at.desc())
+                .limit(1)
+            )
+            saved = result.scalar_one_or_none()
+            if saved:
+                return {
+                    "exists": True,
+                    "id": saved.id,
+                    "created_at": saved.created_at.isoformat() if saved.created_at else None,
+                    "items_count": saved.items_count,
+                    "groups_count": saved.groups_count,
+                    "processed_groups": saved.processed_groups or [],
+                }
+            return {"exists": False}
+
+    async def load_saved_analysis(self, entity_type: str) -> dict:
+        """Load the saved analysis results."""
+        async with self._session_factory() as db:
+            result = await db.execute(
+                select(SavedAnalysis)
+                .where(SavedAnalysis.entity_type == entity_type)
+                .order_by(SavedAnalysis.created_at.desc())
+                .limit(1)
+            )
+            saved = result.scalar_one_or_none()
+            if not saved:
+                return None
+            return {
+                "groups": saved.groups,
+                "stats": saved.stats,
+                "created_at": saved.created_at.isoformat() if saved.created_at else None,
+                "processed_groups": saved.processed_groups or [],
+            }
+
+    async def delete_saved_analysis(self, entity_type: str) -> None:
+        """Delete saved analysis for the given entity type."""
+        async with self._session_factory() as db:
+            await db.execute(delete(SavedAnalysis).where(SavedAnalysis.entity_type == entity_type))
+            await db.commit()
+
+    async def mark_group_processed(self, entity_type: str, group_index: int) -> None:
+        """Mark a group as processed (merged or dismissed)."""
+        async with self._session_factory() as db:
+            result = await db.execute(
+                select(SavedAnalysis)
+                .where(SavedAnalysis.entity_type == entity_type)
+                .order_by(SavedAnalysis.created_at.desc())
+                .limit(1)
+            )
+            saved = result.scalar_one_or_none()
+            if saved:
+                processed = saved.processed_groups or []
+                if group_index not in processed:
+                    processed.append(group_index)
+                    saved.processed_groups = processed
                     await db.commit()
+
+    async def get_saved_nonsense_analysis(self) -> dict:
+        """Check if there's a saved nonsense analysis."""
+        return await self.get_saved_analysis("tags_nonsense")
+
+    async def load_saved_nonsense_analysis(self) -> dict:
+        """Load saved nonsense analysis results."""
+        async with self._session_factory() as db:
+            result = await db.execute(
+                select(SavedAnalysis)
+                .where(SavedAnalysis.entity_type == "tags_nonsense")
+                .order_by(SavedAnalysis.created_at.desc())
+                .limit(1)
+            )
+            saved = result.scalar_one_or_none()
+            if not saved:
+                return {"exists": False, "nonsense_tags": []}
+            return {
+                "exists": True,
+                "nonsense_tags": saved.groups,
+                "stats": saved.stats,
+                "created_at": saved.created_at.isoformat() if saved.created_at else None,
+            }
+
+    async def delete_saved_nonsense_analysis(self) -> None:
+        """Delete saved nonsense analysis."""
+        await self.delete_saved_analysis("tags_nonsense")
+
+    async def get_saved_correspondent_matches(self) -> dict:
+        """Check if there's a saved correspondent matches analysis."""
+        return await self.get_saved_analysis("tags_correspondents")
+
+    async def load_saved_correspondent_matches(self) -> dict:
+        """Load saved correspondent matches analysis results."""
+        async with self._session_factory() as db:
+            result = await db.execute(
+                select(SavedAnalysis)
+                .where(SavedAnalysis.entity_type == "tags_correspondents")
+                .order_by(SavedAnalysis.created_at.desc())
+                .limit(1)
+            )
+            saved = result.scalar_one_or_none()
+            if not saved:
+                return {"exists": False, "correspondent_tags": []}
+            return {
+                "exists": True,
+                "correspondent_tags": saved.groups,
+                "stats": saved.stats,
+                "created_at": saved.created_at.isoformat() if saved.created_at else None,
+            }
+
+    async def delete_saved_correspondent_matches(self) -> None:
+        """Delete saved correspondent matches analysis."""
+        await self.delete_saved_analysis("tags_correspondents")
+
+    async def get_saved_doctype_matches(self) -> dict:
+        """Check if there's a saved doctype matches analysis."""
+        return await self.get_saved_analysis("tags_doctypes")
+
+    async def load_saved_doctype_matches(self) -> dict:
+        """Load saved doctype matches analysis results."""
+        async with self._session_factory() as db:
+            result = await db.execute(
+                select(SavedAnalysis)
+                .where(SavedAnalysis.entity_type == "tags_doctypes")
+                .order_by(SavedAnalysis.created_at.desc())
+                .limit(1)
+            )
+            saved = result.scalar_one_or_none()
+            if not saved:
+                return {"exists": False, "doctype_tags": []}
+            return {
+                "exists": True,
+                "doctype_tags": saved.groups,
+                "stats": saved.stats,
+                "created_at": saved.created_at.isoformat() if saved.created_at else None,
+            }
+
+    async def delete_saved_doctype_matches(self) -> None:
+        """Delete saved doctype matches analysis."""
+        await self.delete_saved_analysis("tags_doctypes")
 
         return result
 
