@@ -69,10 +69,14 @@ async def toggle_api_key(key_id: int, service: FromDishka[ApiKeysService] = None
 
 
 def extract_api_token(request: Request) -> Optional[str]:
-    """Extract API key token from request headers/query params. Pure parsing, no DB."""
+    """Extract API key token from Authorization header only.
+
+    Query parameter api_key is no longer supported per D-21 — API keys
+    in query params leak into server logs and browser history.
+    """
     auth_header = request.headers.get("Authorization", "")
     if auth_header.startswith("Bearer "):
         return auth_header[7:]
     if auth_header.startswith("Api-Key "):
         return auth_header[8:]
-    return request.query_params.get("api_key", "") or None
+    return None
