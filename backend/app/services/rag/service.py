@@ -13,6 +13,11 @@ from app.services.rag.search_engine import SearchEngine, SearchResult
 from app.services.rag.indexer import Indexer
 from app.services.rag.rerank_service import RerankService
 from app.services.llm import LLMService, LLMLockTimeoutError
+from app.services.rag.prompts import (
+    CHAT_SYSTEM_PROMPT,
+    CHAT_USER_CONTEXT_TEMPLATE,
+    QUERY_REWRITE_PROMPT,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -387,23 +392,14 @@ class RAGService:
         context = "\n---\n".join(context_parts)
 
         # Build prompt
-        system_prompt = config.chat_system_prompt or (
-            "Du bist ein hilfreicher Assistent der Fragen zu Dokumenten beantwortet. "
-            "Antworte basierend auf dem bereitgestellten Kontext."
-        )
+        system_prompt = config.chat_system_prompt or CHAT_SYSTEM_PROMPT
 
         messages = [{"role": "system", "content": system_prompt}]
         messages.extend(chat_history)
 
         user_content = question
         if context:
-            user_content = (
-                f"Kontext aus den Dokumenten:\n\n{context}\n\n---\n\nFrage: {question}\n\n"
-                f"Beantworte die Frage basierend auf dem Kontext. "
-                f"Zitiere die verwendeten Quellen mit ihrer Nummer aus dem Kontext: "
-                f"z.B. [3] für 'Quelle 3', [7] für 'Quelle 7'. "
-                f"Wenn du nach Fakten wie Geburtsdaten suchst, liste ALLE Fundstellen aus allen Quellen auf."
-            )
+            user_content = CHAT_USER_CONTEXT_TEMPLATE.format(context=context, question=question)
         messages.append({"role": "user", "content": user_content})
 
         # Yield session info first
@@ -500,15 +496,7 @@ class RAGService:
             if last_user and last_user.strip() != question.strip():
                 history_context = f"\nKontext (vorherige Frage): {last_user[:200]}"
 
-        prompt = (
-            "Du bist Suchexperte für ein deutsches Dokumentenarchiv (Paperless-ngx). "
-            "Erweitere die Suchanfrage um Synonyme, offizielle Dokumentnamen und "
-            "relevante deutsche Fachbegriffe (z.B. 'getauft' → 'Taufurkunde Taufe Taufschein', "
-            "'geboren' → 'Geburtsurkunde Geburtsschein', 'Rechnung' → 'Rechnung Rechnungsnummer Betrag'). "
-            "Antworte NUR mit der erweiterten Suchanfrage, max. 25 Wörter, kein Erklärungstext."
-            f"{history_context}\n\n"
-            f"Anfrage: {question}"
-        )
+        prompt = QUERY_REWRITE_PROMPT.format(history_context=history_context, question=question)
 
         messages = [{"role": "user", "content": prompt}]
 

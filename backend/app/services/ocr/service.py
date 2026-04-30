@@ -15,6 +15,16 @@ from PIL import Image
 from pdf2image import convert_from_bytes
 
 from app.services.llm import LLMService
+from app.services.ocr.prompts import (
+    OCR_SYSTEM_MESSAGE,
+    OCR_ANTI_TABLE_PROMPT,
+    OCR_EVALUATION_PROMPT,
+    OCR_DEEPSEEK_PROMPT,
+    OCR_GLM_PROMPT,
+    OCR_GEMMA3_PROMPT,
+    OCR_DEFAULT_PARTS,
+    OCR_DEFAULT_GERMAN_HINT,
+)
 
 from .state import (
     DEFAULT_OCR_MODEL,
@@ -238,9 +248,8 @@ class OcrService:
         return text
 
     def _build_ocr_prompt(self, model: str, page_num: int = 0, total_pages: int = 0) -> str:
-        """Build model-specific OCR prompt.
+        """Select the appropriate OCR prompt for the given model.
 
-        Based on paperless-gpt's proven universal prompt as baseline.
         Model-specific adjustments only where absolutely needed:
         - deepseek-ocr: Minimal prompt (echoes anything longer)
         - glm-ocr: Keyword format per official docs
@@ -251,42 +260,24 @@ class OcrService:
 
         # deepseek-ocr: ultra-minimal, NO <|grounding|> (that's for bounding boxes!)
         if "deepseek-ocr" in name:
-            return "OCR this document."
+            return OCR_DEEPSEEK_PROMPT
 
         # glm-ocr: keyword-based per official Ollama docs
         if "glm-ocr" in name or "glm_ocr" in name:
-            return "Text Recognition:"
+            return OCR_GLM_PROMPT
 
         # gemma3: shorter prompt (echoes/repeats long prompts verbatim)
         if "gemma3" in name or "gemma-3" in name:
-            prompt = (
-                "Just transcribe the text in this image. Preserve the formatting and layout. "
-                "Be thorough, continue until the bottom of the page. "
-                "Use markdown format but without a code block."
-            )
+            prompt = OCR_GEMMA3_PROMPT
             if page_num > 0 and total_pages > 0:
                 prompt += f" This is page {page_num} of {total_pages}."
             return prompt
 
         # Default: paperless-gpt proven prompt + German hints
-        parts = [
-            "Transcribe ALL text in this image EXACTLY as it appears – high quality OCR.",
-            "CRITICAL: Do NOT summarize, skip, or abbreviate any content. Continue until the very bottom of the page.",
-            "CRITICAL: Every single number, amount, percentage, account number, and code MUST be transcribed exactly.",
-            "For tables: transcribe each row completely, including all columns and values.",
-            "For checkboxes/tick boxes: write [ ] for unchecked and [X] for checked, followed by the label text.",
-            "For form fields: write the label followed by the filled-in value or a blank line if empty.",
-            "For structured forms (tax notices, invoices, bank statements): preserve every field label and its value.",
-            "Use markdown format without code blocks. Preserve the original layout as closely as possible.",
-        ]
+        parts = list(OCR_DEFAULT_PARTS)
         if page_num > 0 and total_pages > 0:
             parts.append(f"This is page {page_num} of {total_pages}.")
-        parts.append(
-            "The document is in German. "
-            "Pay special attention to: names, dates (DD.MM.YYYY), IBANs, BIC codes, "
-            "tax IDs (Steuernummer), amounts in EUR, account numbers, reference numbers, "
-            "and addresses. Transcribe every value exactly as printed – no rounding, no omitting."
-        )
+        parts.append(OCR_DEFAULT_GERMAN_HINT)
         return "\n".join(parts)
 
     @staticmethod
@@ -382,12 +373,7 @@ class OcrService:
             retry_params = {**model_params}
             retry_params["num_predict"] = min(model_params["num_predict"], 4096)
 
-            anti_table_prompt = (
-                "Transcribe ALL text in this image completely from top to bottom. "
-                "Do NOT use table formatting, pipes |, or dashes ---. "
-                "Write each piece of information on its own line, using colons for labels. "
-                "Include every single line of text: headers, items, prices, totals, footer, company details, IBAN."
-            )
+            anti_table_prompt = OCR_ANTI_TABLE_PROMPT
 
             retry_text = await self._run_vision_ocr(
                 image_b64, model, provider, anti_table_prompt, retry_params, timeout
@@ -424,13 +410,7 @@ class OcrService:
         logger.debug(f"Model: {model}, repeat_pen={model_params['repeat_penalty']}, predict={model_params['num_predict']}")
 
         try:
-            system_msg = (
-                "You are a precise OCR module. Output ONLY the verbatim transcribed text from the image – nothing else. "
-                "No summaries, no descriptions, no commentary, no 'Let me...', no 'Here is...'. "
-                "Every number, every EUR amount, every date, every code must appear EXACTLY as printed. "
-                "For tables: every row, every column, every cell value. "
-                "Missing a single number is a critical OCR failure. Raw verbatim transcription only."
-            )
+            system_msg = OCR_SYSTEM_MESSAGE
 
             # LiteLLM multimodal format (OpenAI-compatible, works with Ollama vision)
             user_content = [
@@ -1082,85 +1062,11 @@ class OcrService:
 
         models_text = "\n\n".join(model_sections)
 
-        prompt = f"""Du bist ein erfahrener OCR-Qualitätsprüfer und Dokumentenanalyst. Du bewertest OCR-Ergebnisse für ein deutsches Dokumentenmanagementsystem (Paperless-ngx).
-
-DOKUMENT: "{document_title}"
-ANZAHL VERSIONEN: {len(results)}
-
-Folgende OCR-Versionen desselben Dokuments wurden von verschiedenen lokalen Vision-Modellen (Ollama) erstellt. Vergleiche sie gründlich.
-
-{models_text}
-
-BEWERTUNGSANLEITUNG:
-Du musst jede Version sorgfältig auf folgende Kriterien prüfen. Vergleiche die Versionen untereinander -- wenn mehrere Versionen den gleichen Wert haben, ist er wahrscheinlich korrekt. Abweichungen deuten auf Fehler hin.
-
-KRITISCHE FELDER (Fehler hier = sofortiger Punktabzug):
-- Namen (Vor-/Nachname): Auch ein einziger falscher Buchstabe ist ein Fehler
-- Datumsangaben: Falsches Jahr/Monat = KO-Kriterium (schlimmer als Tippfehler!)
-- IBAN/Kontonummern: Ziffern müssen exakt stimmen, Leerzeichen-Gruppierung egal
-- Geldbeträge: Müssen exakt stimmen
-
-WICHTIGE FELDER:
-- Adressen, Zählernummern, Referenznummern
-- Checkbox-Zustände (angekreuzt vs. leer)
-- Formularlogik (Felder richtig zugeordnet?)
-
-ALLGEMEINE QUALITÄT:
-- Vollständigkeit (fehlen Textblöcke/Absätze?)
-- Halluzinationen (hat das Modell Text erfunden der nicht im Original steht?)
-- Wiederholungen (Textblöcke die sich wiederholen)
-- Formatierung und Lesbarkeit
-
-PRAXISTAUGLICHKEIT:
-- Kann der Text automatisiert weiterverarbeitet werden?
-- Wie viel manuelle Nacharbeit wäre nötig?
-
-Antworte NUR mit validem JSON (kein Text davor/danach, keine Markdown-Codeblöcke):
-{{
-  "ranking": [
-    {{
-      "rank": 1,
-      "model": "<modellname>",
-      "overall_score": <0-100>,
-      "category_scores": {{
-        "names_persons": <0-10>,
-        "dates_periods": <0-10>,
-        "iban_banking": <0-10>,
-        "amounts_numbers": <0-10>,
-        "addresses": <0-10>,
-        "form_logic": <0-10>,
-        "completeness": <0-10>,
-        "formatting": <0-10>,
-        "no_hallucinations": <0-10>,
-        "automatizability": <0-10>
-      }},
-      "speed_seconds": <dauer>,
-      "strengths": ["Stärke 1", "Stärke 2"],
-      "weaknesses": ["Schwäche 1"],
-      "specific_errors": [
-        {{"field": "Name", "expected": "korrekt", "got": "was das Modell geschrieben hat", "severity": "critical"}},
-        {{"field": "IBAN", "expected": "DE12 3456...", "got": "DE12 3546...", "severity": "high"}}
-      ],
-      "verdict": "<1-2 Sätze Praxisurteil auf Deutsch>"
-    }}
-  ],
-  "best_quality": "<modellname mit bester Qualität>",
-  "best_speed": "<schnellstes Modell>",
-  "best_value": "<bestes Preis-Leistungs-Verhältnis (Qualität vs. Geschwindigkeit)>",
-  "recommendation": "<3-4 Sätze Empfehlung auf Deutsch: welches Modell für Produktion, welches Backup, welches nicht verwenden>",
-  "critical_finding": "<wichtigste Erkenntnis, z.B. 'Datumsfehler bei Modell X sind ein KO-Kriterium'>",
-  "cross_comparison": {{
-    "agreement": ["Felder wo alle Versionen übereinstimmen"],
-    "disagreement": ["Felder wo die Versionen sich widersprechen -- hier liegt wahrscheinlich mindestens ein Fehler"]
-  }}
-}}
-
-WICHTIG:
-- Severity-Stufen: "critical" (Daten, Namen, IBAN falsch), "high" (wichtige Felder), "medium" (Formatierung), "low" (kosmetisch)
-- Score 0-100: unter 50 = nicht verwendbar, 50-70 = bedingt brauchbar, 70-85 = gut, 85+ = sehr gut
-- Sei STRENG aber FAIR. Ein falsches Datum ist schlimmer als 5 Tippfehler.
-- Wenn du nicht sicher bist ob ein Wert richtig ist, vergleiche die Versionen untereinander.
-"""
+        prompt = OCR_EVALUATION_PROMPT.format(
+            document_title=document_title,
+            version_count=len(results),
+            models_text=models_text,
+        )
 
         used_model = eval_model or "gpt-4o"
         logger.info("Evaluating OCR results", extra={"count": len(results), "provider": eval_provider, "model": used_model})

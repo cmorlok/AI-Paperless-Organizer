@@ -13,6 +13,7 @@ from app.services.rag.embedding_service import EmbeddingService
 from app.services.rag.chunking import ChunkingService
 from app.services.llm import LLMResponse
 from app.services.llm import LLMService
+from app.services.rag.prompts import CHUNK_CONTEXT_PROMPT
 
 logger = logging.getLogger(__name__)
 
@@ -326,15 +327,7 @@ class Indexer:
             + (f", Korrespondent: {doc.get('correspondent_name', '')}" if doc.get('correspondent_name') else "")
             + (f", Datum: {(doc.get('created') or '')[:10]}" if doc.get('created') else "")
         )
-        prompt = (
-            f"{doc_info}\n\n"
-            f"Textabschnitt:\n{chunk_text[:500]}\n\n"
-            "Schreibe 1-2 Sätze Kontext der erklärt:\n"
-            "- Zu welchem Dokument/Person dieser Abschnitt gehört\n"
-            "- Welche konkreten Fakten er enthält (Namen, Daten, Beträge, Kennzeichen)\n"
-            "- Für welche Suchanfragen er relevant ist\n"
-            "Nur der Kontext, keine Erklärungen, keine Einleitung wie 'Dieser Abschnitt...'."
-        )
+        prompt = CHUNK_CONTEXT_PROMPT.format(doc_info=doc_info, chunk_text=chunk_text[:500])
         try:
             import re as _re
             result: LLMResponse = await self.llm_service.complete(

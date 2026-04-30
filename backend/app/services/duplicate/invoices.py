@@ -10,6 +10,7 @@ from sqlalchemy import select as sa_select, text
 
 from app.models.duplicates import DuplicateInvoiceCache
 from app.services.llm import LLMService
+from app.services.duplicate.prompts import INVOICE_EXTRACTION_PROMPT
 
 logger = logging.getLogger(__name__)
 
@@ -154,14 +155,7 @@ async def _get_chat_provider_and_model(session_factory) -> tuple[str, str]:
 
 async def _extract_invoice_data(content: str, model: str, provider: str, llm_service: LLMService) -> Optional[Dict]:
     """Extract invoice number and amount from document content via LiteLLM."""
-    prompt = (
-        "Extrahiere aus dem folgenden Dokumenttext die Rechnungsnummer und den Gesamtbetrag.\n"
-        "Antworte NUR mit einem JSON-Objekt im Format:\n"
-        '{"invoice_number": "...", "amount": "..."}\n'
-        "Wenn du keine Rechnungsnummer findest, sette den Wert auf einen leeren String.\n"
-        "Wenn du keinen Betrag findest, sette den Wert auf einen leeren String.\n\n"
-        f"Dokumenttext:\n{content}"
-    )
+    prompt = INVOICE_EXTRACTION_PROMPT.format(content=content)
 
     try:
         result = await llm_service.complete(
