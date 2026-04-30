@@ -1,5 +1,6 @@
 """Settings Router — thin endpoints only: validate input, call service, return response."""
 
+import logging
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from typing import Optional
@@ -9,6 +10,8 @@ from app.services.llm import LLMService
 from app.services import settings_service as svc
 from dishka.integrations.fastapi import inject
 from dishka import FromDishka
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -101,7 +104,8 @@ async def get_llm_provider_models(provider: str, llm_service: FromDishka[LLMServ
         models = await llm_service.list_models(provider)
         return {"provider": provider, "models": models}
     except Exception as e:
-        return {"provider": provider, "models": [], "error": str(e)}
+        logger.error("Model listing failed: %s", e)
+        return {"provider": provider, "models": [], "error": "Modellliste konnte nicht geladen werden"}
 
 
 @router.put("/llm-providers/db/{provider_id}")

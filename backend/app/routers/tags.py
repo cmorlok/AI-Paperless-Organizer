@@ -1,8 +1,11 @@
 """Tags Router — thin endpoints only: validate input, call service, return response."""
 
+import logging
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from typing import List
+
+logger = logging.getLogger(__name__)
 from app.services.paperless import PaperlessClient
 from app.services.similarity import SimilarityService
 from app.services.merge import MergeService
@@ -146,7 +149,8 @@ async def bulk_delete_tags(request: BulkDeleteRequest, tags_service: FromDishka[
     try:
         return await tags_service.bulk_delete_tags(request.tag_ids)
     except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        logger.error("Bulk delete failed: %s", e)
+        raise HTTPException(status_code=400, detail="Löschen fehlgeschlagen")
 
 
 # ============ REMOVE FROM SAVED ANALYSES ============
@@ -170,7 +174,8 @@ async def delete_tag(tag_id: int, client: FromDishka[PaperlessClient] = None):
         await client.delete_tag(tag_id)
         return {"success": True, "message": f"Tag {tag_id} deleted"}
     except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        logger.error("Tag delete failed: %s", e)
+        raise HTTPException(status_code=400, detail="Löschen fehlgeschlagen")
 
 
 # ============ NONSENSE TAGS ============

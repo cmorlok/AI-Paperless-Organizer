@@ -94,9 +94,11 @@ async def chat(
             ):
                 yield f"data: {chunk}\n\n"
         except Exception as e:
-            logger.error(f"Chat stream error: {e}", exc_info=True)
+            logger.error("Chat stream error: %s", e, exc_info=True)
             import json
-            yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
+            yield f"data: {json.dumps({'type': 'error', 'message': 'Stream-Fehler'})}\n\n"
+            yield "data: [DONE]\n\n"
+            return
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")
 
@@ -222,4 +224,5 @@ async def _probe_embedding(config: dict, llm_service) -> dict:
         )
         return {"healthy": True, "provider": provider, "model": model}
     except Exception as e:
-        return {"healthy": False, "provider": provider, "model": model, "error": str(e)}
+        logger.error("Embedding probe failed: %s", e)
+        return {"healthy": False, "provider": provider, "model": model, "error": "Embedding-Test fehlgeschlagen"}

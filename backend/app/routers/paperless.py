@@ -1,11 +1,14 @@
 """Paperless Router — thin endpoints only."""
 
+import logging
 from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import get_db
 from app.services.paperless import PaperlessClient
 from dishka.integrations.fastapi import inject
 from dishka import FromDishka
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -20,7 +23,8 @@ async def get_paperless_status(client: FromDishka[PaperlessClient] = None):
         is_connected = await client.test_connection()
         return {"connected": is_connected, "url": client.base_url}
     except Exception as e:
-        return {"connected": False, "url": client.base_url, "error": str(e)}
+        logger.error("Paperless connection test failed: %s", e)
+        return {"connected": False, "url": client.base_url, "error": "Verbindung fehlgeschlagen"}
 
 
 @router.get("/correspondents")
