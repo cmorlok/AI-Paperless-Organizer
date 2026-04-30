@@ -12,7 +12,7 @@ from app.models.settings_model import LLM_KEY_CLASSIFIER_PROVIDER, LLM_KEY_CLASS
 from app.services.paperless import PaperlessClient
 from app.services.llm import LLMService
 from app.prompts.default_prompts import DEFAULT_PROMPTS
-from app.routers.settings import get_setting as gs
+from app.services.settings_service import get_setting as gs
 
 
 class SimilarityService:

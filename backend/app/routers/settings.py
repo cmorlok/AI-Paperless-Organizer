@@ -14,40 +14,10 @@ from dishka.integrations.fastapi import inject
 from dishka import FromDishka
 
 from app.services.llm import LLMService, PROVIDER_DISPLAY_NAMES
+from app.services.settings_service import get_setting, set_setting
 from app.prompts.default_prompts import DEFAULT_PROMPTS
 
 router = APIRouter()
-
-
-# ── Key-Value Setting Helpers (LLM-08) ─────────────────────────────────────────
-
-async def get_setting(key: str, db: AsyncSession) -> Optional[str]:
-    """Get a setting value by key. Returns None if not found."""
-    result = await db.execute(
-        select(AppSettings).where(AppSettings.key == key)
-    )
-    setting = result.scalar_one_or_none()
-    return setting.value if setting else None
-
-
-async def set_setting(key: str, value: str, value_type: str = "str", db: AsyncSession | None = None):
-    """Set a setting value. Creates new row if key doesn't exist, updates if it does."""
-    if db is None:
-        async for session in get_db():
-            await set_setting(key, value, value_type, session)
-            break   # exits cleanly; generator finally-block runs
-        return
-    result = await db.execute(
-        select(AppSettings).where(AppSettings.key == key)
-    )
-    setting = result.scalar_one_or_none()
-    if setting:
-        setting.value = value
-        setting.value_type = value_type
-    else:
-        setting = AppSettings(id=None, key=key, value=value, value_type=value_type)
-        db.add(setting)
-    await db.commit()
 
 
 class SettingUpdateSchema(BaseModel):
@@ -186,39 +156,6 @@ async def get_llm_provider_models(
         return {"provider": provider, "models": models}
     except Exception as e:
         return {"provider": provider, "models": [], "error": str(e)}
-
-
-def _validate_base_url(url: str) -> str:
-    """Validate URL scheme to prevent SSRF attacks (WR-04)."""
-    from urllib.parse import urlparse
-    parsed = urlparse(url)
-    if parsed.scheme not in ("http", "https"):
-        raise ValueError(f"Unsupported URL scheme for provider: {parsed.scheme!r}")
-    return url.rstrip("/")
-
-
-def _format_model_display_name(model_name: str) -> str:
-    """Format model name for display in dropdown."""
-    # Common model name cleanups
-    name = model_name.replace("-", " ").replace("_", " ")
-    
-    # Capitalize words
-    name = " ".join(word.capitalize() for word in name.split())
-    
-    # Common replacements
-    replacements = {
-        "Gpt": "GPT",
-        "Claude": "Claude",
-        "Llama": "Llama",
-        "Mistral": "Mistral",
-        "Qwen": "Qwen",
-        "Gemma": "Gemma",
-        "Deepseek": "DeepSeek",
-    }
-    for old, new in replacements.items():
-        name = name.replace(old, new)
-    
-    return name
 
 
 @router.put("/llm-providers/db/{provider_id}")

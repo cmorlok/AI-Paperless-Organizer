@@ -66,7 +66,7 @@ class OcrService:
         assert self.llm_service is not None
         assert self.session_factory is not None
         """Read OCR provider from KV store."""
-        from app.routers.settings import get_setting
+        from app.services.settings_service import get_setting
         async with self.session_factory() as db:
             provider = await get_setting("ocr_provider", db)
             if not provider:
@@ -77,7 +77,7 @@ class OcrService:
         assert self.llm_service is not None
         assert self.session_factory is not None
         """Read OCR model from KV store."""
-        from app.routers.settings import get_setting
+        from app.services.settings_service import get_setting
         async with self.session_factory() as db:
             return await get_setting("ocr_model", db) or DEFAULT_OCR_MODEL
 
@@ -85,7 +85,7 @@ class OcrService:
         assert self.llm_service is not None
         assert self.session_factory is not None
         """Lazy-load max image size from KV store."""
-        from app.routers.settings import get_setting
+        from app.services.settings_service import get_setting
         async with self.session_factory() as db:
             val = await get_setting("max_image_size", db)
             return int(val) if val else 2048
@@ -94,7 +94,7 @@ class OcrService:
         assert self.llm_service is not None
         assert self.session_factory is not None
         """Lazy-load smart skip setting from KV store."""
-        from app.routers.settings import get_setting
+        from app.services.settings_service import get_setting
         async with self.session_factory() as db:
             val = await get_setting("smart_skip_enabled", db)
             return val != "false" if val else True

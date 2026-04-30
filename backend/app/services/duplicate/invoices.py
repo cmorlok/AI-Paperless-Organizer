@@ -143,7 +143,7 @@ async def _build_correspondent_map(paperless_client) -> Dict[int, str]:
 
 async def _get_chat_provider_and_model(session_factory) -> tuple[str, str]:
     """Get the configured chat provider and model from KV store."""
-    from app.routers.settings import get_setting
+    from app.services.settings_service import get_setting
     async with session_factory() as db:
         provider = await get_setting("duplicate_chat_provider", db)
         model = await get_setting("duplicate_chat_model", db)

@@ -66,7 +66,7 @@ async def lifespan(app: FastAPI):
     # Helper to read from KV store
     async def _read_kv_setting(key: str) -> Optional[bool]:
         try:
-            from app.routers.settings import get_setting
+            from app.services.settings_service import get_setting
             val = await get_setting(key, db_sess)
             return val == "true" if val is not None else None
         except Exception:

@@ -19,7 +19,7 @@ from app.models.settings_model import (
     LLM_KEY_CLASSIFIER_PROVIDER,
     LLM_KEY_CLASSIFIER_MODEL,
 )
-from app.routers.settings import get_setting
+from app.services.settings_service import get_setting
 from app.services.paperless import PaperlessClient
 from app.services.classifier.base_provider import (
     BaseClassifierProvider, ClassificationResult, DocumentContext,
@@ -332,7 +332,7 @@ class DocumentClassifierService:
         if self.session_factory is None:
             raise ValueError("classifier_provider is not configured")
         # Try key-value store first
-        from app.routers.settings import get_setting
+        from app.services.settings_service import get_setting
         async with self.session_factory() as db:
             kv_provider = await get_setting(LLM_KEY_CLASSIFIER_PROVIDER, db)
             if kv_provider:

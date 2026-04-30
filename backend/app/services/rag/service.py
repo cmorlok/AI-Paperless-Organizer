@@ -604,7 +604,7 @@ class RAGService:
         config = await self._get_config()
 
         async with self.session_factory() as db:
-            from app.routers.settings import get_setting
+            from app.services.settings_service import get_setting
             emb_provider = await get_setting("rag_embedding_provider", db)
             emb_model = await get_setting("rag_embedding_model", db)
             chat_provider = await get_setting("rag_chat_provider", db)
@@ -629,7 +629,7 @@ class RAGService:
         }
 
     async def update_config(self, updates: dict) -> dict:
-        from app.routers.settings import set_setting
+        from app.services.settings_service import set_setting
 
         async with self.session_factory() as db:
             result = await db.execute(sa_select(RagConfig).where(RagConfig.id == 1))
