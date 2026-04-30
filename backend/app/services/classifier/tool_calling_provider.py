@@ -15,7 +15,7 @@ from app.services.classifier.tool_definitions import (
 from app.services.classifier.tool_executor import ToolExecutor
 from app.services.classifier.prompts import (
     SYSTEM_PROMPT_OPENAI, RULES_TITLE, RULES_TAGS, RULES_CORRESPONDENT,
-    RULES_DOCTYPE, RULES_DATE, get_correspondent_rules,
+    RULES_DOCTYPE, RULES_DATE, RULES_CUSTOM_FIELDS, get_correspondent_rules, PROMPTS,
 )
 from app.services.classifier.llm_schemas import _MAX_TOOL_ROUNDS
 
@@ -43,12 +43,43 @@ class ToolCallingLlmProvider(BaseClassifierProvider):
         tool_executor: Optional[ToolExecutor] = None,
         provider_label: str = "",
         llm_service: LLMService | None = None,
+        session_factory=None,
     ):
         self.model = model
         self.provider = provider
         self.tool_executor = tool_executor
         self._provider_label = provider_label or provider
         self.llm_service = llm_service
+        self.session_factory = session_factory
+        self._prompts_registered = False
+
+    async def _register_prompts(self, db: Any) -> None:
+        """Register all classifier prompts with settings_service. Called once on first use."""
+        from app.services.settings_service import register_prompt
+        for key, prompt_template in PROMPTS.items():
+            await register_prompt(key, prompt_template, db)
+        self._prompts_registered = True
+
+    async def _get_prompt(self, key: str, variables: Optional[Dict[str, Any]] = None) -> str:
+        """Get a prompt template by key, optionally rendered with variables."""
+        from app.services.settings_service import get_prompt
+        if self.session_factory is None:
+            template_str = PROMPTS.get(key, "")
+            if variables:
+                from jinja2 import Template
+                return Template(template_str, autoescape=False).render(**variables)
+            return template_str
+        async with self.session_factory() as db:
+            if not self._prompts_registered:
+                await self._register_prompts(db)
+            prompt_template = await get_prompt(key, db, variables)
+            if prompt_template:
+                return prompt_template
+            template_str = PROMPTS.get(key, "")
+            if variables:
+                from jinja2 import Template
+                return Template(template_str, autoescape=False).render(**variables)
+            return template_str
 
     def get_name(self) -> str:
         return f"{self._provider_label} ({self.model})"
@@ -82,7 +113,22 @@ class ToolCallingLlmProvider(BaseClassifierProvider):
 
         enabled_fields = self._get_enabled_fields(config)
 
-        system_prompt = config.get("system_prompt") or SYSTEM_PROMPT_OPENAI
+        trim_prompt = config.get("correspondent_trim_prompt", False)
+        effective_correspondent_rule = config.get("prompt_correspondent") or (
+            get_correspondent_rules(trim_prompt) if trim_prompt else RULES_CORRESPONDENT
+        )
+        system_prompt = await self._get_prompt(
+            "classifier_openai",
+            variables={
+                "RULES_TITLE": config.get("prompt_title") or RULES_TITLE,
+                "RULES_TAGS": config.get("prompt_tags") or RULES_TAGS,
+                "RULES_CORRESPONDENT": effective_correspondent_rule or RULES_CORRESPONDENT,
+                "RULES_DOCTYPE": config.get("prompt_document_type") or RULES_DOCTYPE,
+                "RULES_DATE": config.get("prompt_date") or RULES_DATE,
+                "RULES_CUSTOM_FIELDS": RULES_CUSTOM_FIELDS,
+            },
+        )
+
         system_prompt += f"\n\nAktivierte Felder: {', '.join(enabled_fields)}"
         tags_min = config.get("tags_min", 1)
         tags_max = config.get("tags_max", 5)
@@ -95,21 +141,6 @@ class ToolCallingLlmProvider(BaseClassifierProvider):
             system_prompt += "\nDu MUSST get_storage_paths aufrufen und einen Pfad zuordnen! storage_path_id und storage_path_reason MUESSEN im Ergebnis stehen!"
         else:
             system_prompt += "\nSpeicherpfad ist deaktiviert, ignoriere get_storage_paths."
-
-        trim_prompt = config.get("correspondent_trim_prompt", False)
-        effective_correspondent_rule = config.get("prompt_correspondent") or (
-            get_correspondent_rules(trim_prompt) if trim_prompt else None
-        )
-        replacements = {
-            RULES_TITLE: config.get("prompt_title"),
-            RULES_TAGS: config.get("prompt_tags"),
-            RULES_CORRESPONDENT: effective_correspondent_rule,
-            RULES_DOCTYPE: config.get("prompt_document_type"),
-            RULES_DATE: config.get("prompt_date"),
-        }
-        for default_rule, user_rule in replacements.items():
-            if user_rule and user_rule.strip():
-                system_prompt = system_prompt.replace(default_rule, user_rule)
 
         user_content = self._build_user_message(document)
         logger.info(f"LiteLLM tool-calling user message length: {len(user_content)} chars")

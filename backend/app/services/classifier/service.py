@@ -369,11 +369,11 @@ class DocumentClassifierService:
             model = model_override or ""
 
         if provider_name == "ollama":
-            return OllamaLlmProvider(model=model, provider=provider_name, tool_executor=tool_executor, llm_service=self.llm_service)
+            return OllamaLlmProvider(model=model, provider=provider_name, tool_executor=tool_executor, llm_service=self.llm_service, session_factory=self.session_factory)
 
         from app.services.llm import PROVIDER_DISPLAY_NAMES
         label = PROVIDER_DISPLAY_NAMES.get(provider_name, provider_name.replace("_", " ").title())
-        return ToolCallingLlmProvider(model=model, provider=provider_name, tool_executor=tool_executor, provider_label=label, llm_service=self.llm_service)
+        return ToolCallingLlmProvider(model=model, provider=provider_name, tool_executor=tool_executor, provider_label=label, llm_service=self.llm_service, session_factory=self.session_factory)
 
     async def _get_active_classifier_provider_name(self) -> str:
         assert self.paperless is not None

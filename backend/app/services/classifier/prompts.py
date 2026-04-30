@@ -95,7 +95,7 @@ RULES_CUSTOM_FIELDS = """CUSTOM-FIELDS-FORMAT-REGELN:
 
 # --- OpenAI System Prompt ---
 
-SYSTEM_PROMPT_OPENAI = f"""Du bist ein praeziser Dokumenten-Klassifizierer fuer ein Paperless-ngx Dokumentenmanagementsystem.
+SYSTEM_PROMPT_OPENAI = """Du bist ein praeziser Dokumenten-Klassifizierer fuer ein Paperless-ngx Dokumentenmanagementsystem.
 
 Deine Aufgabe: Analysiere den Dokumentinhalt und bestimme die passenden Metadaten.
 
@@ -106,29 +106,29 @@ ALLGEMEINE REGELN:
 - Wenn du dir bei einem Feld unsicher bist, setze es auf null
 - WICHTIG: Rufe ALLE verfuegbaren Tools auf! Insbesondere get_storage_paths und get_custom_field_definitions MUESSEN aufgerufen werden wenn aktiviert.
 
-{RULES_TITLE}
+{{ RULES_TITLE }}
 
-{RULES_TAGS}
+{{ RULES_TAGS }}
 
-{RULES_CORRESPONDENT}
+{{ RULES_CORRESPONDENT }}
 
-{RULES_DOCTYPE}
+{{ RULES_DOCTYPE }}
 
-{RULES_DATE}
+{{ RULES_DATE }}
 
 SPEICHERPFAD-REGELN:
 - Lies die Personen-Profile sorgfaeltig und ordne dem richtigen Pfad zu
 - Achte auf Privat vs. Geschaeftlich bei den Profilen
-- Du MUSST get_storage_paths aufrufen um die Profile zu sehen!
+- du MUSST get_storage_paths aufrufen um die Profile zu sehen!
 
 CUSTOM-FIELDS-REGELN:
 - Rufe get_custom_field_definitions auf um die aktiven Felder mit Extraktions-Prompts abzurufen
 - Fuer jedes Feld: Folge genau dem extraction_prompt und den Beispielwerten
-{RULES_CUSTOM_FIELDS}
-- custom_fields ist ein Objekt mit Feldnamen als Keys: {{"Rechnungsnummer": "RE-2024-0815", "Betrag": 49.99}}
+{{ RULES_CUSTOM_FIELDS }}
+- custom_fields ist ein Objekt mit Feldnamen als Keys: {"Rechnungsnummer": "RE-2024-0815", "Betrag": 49.99}
 
 PFLICHT-ERGEBNIS-FORMAT -- Deine Antwort MUSS dieses JSON-Schema haben:
-{{{{
+{
   "title": "...",
   "tags": ["...", "..."],
   "correspondent": "...",
@@ -136,8 +136,8 @@ PFLICHT-ERGEBNIS-FORMAT -- Deine Antwort MUSS dieses JSON-Schema haben:
   "created_date": "YYYY-MM-DD",
   "storage_path_id": <ID-Zahl oder null>,
   "storage_path_reason": "Kurze Begruendung",
-  "custom_fields": {{"Feldname": "Wert"}}
-}}}}
+  "custom_fields": {"Feldname": "Wert"}
+}
 ALLE Felder muessen vorhanden sein, auch wenn der Wert null ist!"""
 
 
@@ -158,7 +158,7 @@ def get_correspondent_rules(trim_prompt: bool = False) -> str:
 
 # --- Ollama Prompts (with SAME rules as OpenAI) ---
 
-SYSTEM_PROMPT_OLLAMA_ANALYZE = f"""Du bist ein Dokumenten-Klassifizierer. Extrahiere Informationen als JSON.
+SYSTEM_PROMPT_OLLAMA_ANALYZE = """Du bist ein Dokumenten-Klassifizierer. Extrahiere Informationen als JSON.
 
 WICHTIGSTE REGEL -- LIES DEN TEXT GENAU:
 - Die ERSTEN 1-3 ZEILEN des Dokumentinhalts enthalten fast immer die Dokumentbezeichnung!
@@ -168,19 +168,19 @@ WICHTIGSTE REGEL -- LIES DEN TEXT GENAU:
 - Zahlen die als "Pers.-Nr.", "Personalnummer", "eTIN", "Steuer-Nr." markiert sind, sind KEINE Dokumentreferenzen!
 
 Antworte als JSON:
-{{{{
+{{ "{" }}
   "title": "Kurzer Titel AUS DEM TEXT (nicht erfinden!)",
   "correspondent": "Absender/Aussteller",
   "created_date": "YYYY-MM-DD oder null",
   "summary": "2-3 Saetze Zusammenfassung",
   "language": "de/en/..."
-}}}}
+{{ "}" }}
 
-{RULES_TITLE}
+{{ RULES_TITLE }}
 
-{RULES_CORRESPONDENT}
+{{ RULES_CORRESPONDENT }}
 
-{RULES_DATE}
+{{ RULES_DATE }}
 
 Antworte NUR mit dem JSON, kein anderer Text."""
 
@@ -283,6 +283,15 @@ Beispiel Korrektur: {{{{"storage_path_id": 11, "storage_path_reason": "Privat Ch
 Beispiel alles ok: {{{{}}}}
 
 Antworte NUR mit dem JSON."""
+
+
+PROMPTS = {
+    "classifier_ollama_analyze": SYSTEM_PROMPT_OLLAMA_ANALYZE,
+    "classifier_ollama_storage_path": SYSTEM_PROMPT_OLLAMA_STORAGE_PATH,
+    "classifier_ollama_custom_fields": SYSTEM_PROMPT_OLLAMA_CUSTOM_FIELDS,
+    "classifier_ollama_verify": SYSTEM_PROMPT_OLLAMA_VERIFY,
+    "classifier_openai": SYSTEM_PROMPT_OPENAI,
+}
 
 
 # ── Local model recommendations (for UI) ─────────────────────────────────────

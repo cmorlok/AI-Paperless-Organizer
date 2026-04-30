@@ -16,7 +16,7 @@ from app.services.classifier.prompts import (
     SYSTEM_PROMPT_OLLAMA_ANALYZE,
     SYSTEM_PROMPT_OLLAMA_STORAGE_PATH, SYSTEM_PROMPT_OLLAMA_CUSTOM_FIELDS,
     SYSTEM_PROMPT_OLLAMA_VERIFY, RULES_TITLE, RULES_TAGS, RULES_CORRESPONDENT,
-    RULES_DOCTYPE, RULES_DATE, get_correspondent_rules,
+    RULES_DOCTYPE, RULES_DATE, get_correspondent_rules, PROMPTS,
 )
 from app.services.classifier.llm_schemas import (
     _MAX_TOOL_ROUNDS, _MAX_CONTENT_CHARS, _LOCAL_LLM_CALL_TIMEOUT,
@@ -48,17 +48,46 @@ class OllamaLlmProvider(BaseClassifierProvider):
         provider: str = "ollama",
         tool_executor: Optional[ToolExecutor] = None,
         llm_service: LLMService | None = None,
+        session_factory=None,
     ):
         self.model = model
         self.provider = provider
         self.tool_executor = tool_executor
         self.llm_service = llm_service
+        self.session_factory = session_factory
         self._is_thinking = any(
             k in self.model.lower() for k in _THINKING_MODEL_PREFIXES
         )
         self._use_strict_schemas = any(
             k in self.model.lower() for k in _STRICT_SCHEMA_MODELS
         )
+        self._prompts_registered = False
+
+    async def _register_prompts(self, db: Any) -> None:
+        """Register all Ollama prompts with settings_service. Called once on first use."""
+        from app.services.settings_service import register_prompt
+        for key, prompt_template in PROMPTS.items():
+            await register_prompt(key, prompt_template, db)
+        self._prompts_registered = True
+
+    async def _get_prompt(self, key: str, variables: Optional[Dict[str, Any]] = None) -> str:
+        """Get a prompt template by key, optionally rendered with variables."""
+        from app.services.settings_service import get_prompt
+        if self.session_factory is None:
+            template_str = PROMPTS.get(key, "")
+            if variables:
+                return Template(template_str, autoescape=False).render(**variables)
+            return template_str
+        async with self.session_factory() as db:
+            if not self._prompts_registered:
+                await self._register_prompts(db)
+            prompt_template = await get_prompt(key, db, variables)
+            if prompt_template:
+                return prompt_template
+            template_str = PROMPTS.get(key, "")
+            if variables:
+                return Template(template_str, autoescape=False).render(**variables)
+            return template_str
 
     def get_name(self) -> str:
         return f"Ollama ({self.model})"
@@ -342,14 +371,17 @@ class OllamaLlmProvider(BaseClassifierProvider):
                         f"Typ: {p.get('type', '-')})\n  Kontext: {p.get('context_prompt', 'Kein Kontext')}"
                         for p in paths
                     )
-                    path_prompt = SYSTEM_PROMPT_OLLAMA_STORAGE_PATH.format(
-                        path_profiles=profiles_text,
-                        title=result.title or "unbekannt",
-                        summary=summary,
-                        content_snippet=content_snippet,
-                        correspondent=result.correspondent or "unbekannt",
-                        document_type=result.document_type or "unbekannt",
-                        tags=", ".join(result.tags) if result.tags else "keine",
+                    path_prompt = await self._get_prompt(
+                        "classifier_ollama_storage_path",
+                        variables={
+                            "path_profiles": profiles_text,
+                            "title": result.title or "unbekannt",
+                            "summary": summary,
+                            "content_snippet": content_snippet,
+                            "correspondent": result.correspondent or "unbekannt",
+                            "document_type": result.document_type or "unbekannt",
+                            "tags": ", ".join(result.tags) if result.tags else "keine",
+                        },
                     )
 
                     result.debug_info["storage_path_profiles"] = [
@@ -399,8 +431,9 @@ class OllamaLlmProvider(BaseClassifierProvider):
                         + (f"\n  Beispiele: {f['example_values']}" if f.get("example_values") else "")
                         for f in fields
                     )
-                    cf_prompt = SYSTEM_PROMPT_OLLAMA_CUSTOM_FIELDS.format(
-                        field_definitions=fields_text,
+                    cf_prompt = await self._get_prompt(
+                        "classifier_ollama_custom_fields",
+                        variables={"field_definitions": fields_text},
                     )
                     cf_response = await self._call_ollama(
                         cf_prompt,
@@ -438,16 +471,19 @@ class OllamaLlmProvider(BaseClassifierProvider):
                     except Exception:
                         pass
 
-                verify_prompt = SYSTEM_PROMPT_OLLAMA_VERIFY.format(
-                    summary=summary,
-                    title=result.title or "fehlt",
-                    correspondent=result.correspondent or "fehlt",
-                    document_type=result.document_type or "fehlt",
-                    tags=", ".join(result.tags) if result.tags else "keine",
-                    storage_path_id=result.storage_path_id or "null",
-                    storage_path_reason=result.storage_path_reason or "fehlt",
-                    created_date=result.created_date or "fehlt",
-                    storage_paths=paths_text,
+                verify_prompt = await self._get_prompt(
+                    "classifier_ollama_verify",
+                    variables={
+                        "summary": summary,
+                        "title": result.title or "fehlt",
+                        "correspondent": result.correspondent or "fehlt",
+                        "document_type": result.document_type or "fehlt",
+                        "tags": ", ".join(result.tags) if result.tags else "keine",
+                        "storage_path_id": result.storage_path_id or "null",
+                        "storage_path_reason": result.storage_path_reason or "fehlt",
+                        "created_date": result.created_date or "fehlt",
+                        "storage_paths": paths_text,
+                    },
                 )
 
                 if self._use_strict_schemas:
