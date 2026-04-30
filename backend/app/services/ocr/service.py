@@ -71,6 +71,29 @@ class OcrService:
         self.state: OcrState = state or OcrState()
         self.llm_service = llm_service
         self.session_factory = session_factory
+        self._prompts_registered = False
+
+    async def _register_prompts(self, db: Any) -> None:
+        """Register all OCR prompts with settings_service. Called once on first use."""
+        from app.services.ocr.prompts import PROMPTS
+        from app.services.settings_service import register_prompt
+        for key, prompt_template in PROMPTS.items():
+            await register_prompt(key, prompt_template, db)
+        self._prompts_registered = True
+
+    async def _get_prompt(self, key: str) -> str:
+        """Get a prompt template by key."""
+        from app.services.ocr.prompts import PROMPTS
+        from app.services.settings_service import get_prompt
+        if self.session_factory is None:
+            return PROMPTS.get(key, "")
+        async with self.session_factory() as db:
+            if not self._prompts_registered:
+                await self._register_prompts(db)
+            prompt_template = await get_prompt(key, db)
+            if prompt_template:
+                return prompt_template
+            return PROMPTS.get(key, "")
 
     async def _get_provider(self) -> str:
         assert self.llm_service is not None
@@ -1062,7 +1085,8 @@ class OcrService:
 
         models_text = "\n\n".join(model_sections)
 
-        prompt = OCR_EVALUATION_PROMPT.format(
+        evaluation_prompt = await self._get_prompt("ocr_evaluation")
+        prompt = evaluation_prompt.format(
             document_title=document_title,
             version_count=len(results),
             models_text=models_text,

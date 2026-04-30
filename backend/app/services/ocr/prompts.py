@@ -72,7 +72,7 @@ PRAXISTAUGLICHKEIT:
 - Kann der Text automatisiert weiterverarbeitet werden?
 - Wie viel manuelle Nacharbeit wäre nötig?
 
-Antworte NUR mit validem JSON (kein Text davor/danach, keine Markdown-Codeblöcke):
+Anworte NUR mit validem JSON (kein Text davor/danach, keine Markdown-Codeblöcke):
 {{
   "ranking": [
     {{
@@ -118,3 +118,7 @@ WICHTIG:
 - Sei STRENG aber FAIR. Ein falsches Datum ist schlimmer als 5 Tippfehler.
 - Wenn du nicht sicher bist ob ein Wert richtig ist, vergleiche die Versionen untereinander.
 """
+
+PROMPTS = {
+    "ocr_evaluation": OCR_EVALUATION_PROMPT,
+}
