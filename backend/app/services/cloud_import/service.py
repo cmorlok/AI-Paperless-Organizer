@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import anyio
 import asyncio
 import json
 import logging
 import os
+import pathlib
 import tempfile
 import xml.etree.ElementTree as ET
 from datetime import datetime
@@ -133,7 +135,8 @@ class CloudImportService:
         os.makedirs(conf_dir, exist_ok=True)
         path = f"{conf_dir}/source_{source.id}.conf"
         if source.rclone_config:
-            with open(path, "w") as f:
+            fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
+            with os.fdopen(fd, "w") as f:
                 f.write(source.rclone_config)
         return path
 
@@ -186,8 +189,10 @@ class CloudImportService:
             _, stderr = await asyncio.wait_for(proc.communicate(), timeout=120.0)
             if proc.returncode != 0:
                 raise RuntimeError(f"rclone copyto failed: {stderr.decode()}")
-            with open(tmp_path, "rb") as f:
-                return f.read()
+            def _read_tmp(p: str) -> bytes:
+                with open(p, "rb") as f:
+                    return f.read()
+            return await anyio.to_thread.run_sync(lambda: _read_tmp(tmp_path))
         finally:
             if os.path.exists(tmp_path):
                 os.unlink(tmp_path)
@@ -302,12 +307,16 @@ class CloudImportService:
         from app.services.cloud_import.state import _VALID_EXTENSIONS
 
         path = source.local_path
-        if not path or not os.path.isdir(path):
+        base = pathlib.Path(path).resolve()
+        if not base.is_dir():
             raise FileNotFoundError(f"Lokaler Pfad nicht gefunden: {path}")
         files = []
         for entry in os.scandir(path):
             if not entry.is_file():
                 continue
+            entry_path = pathlib.Path(entry.path).resolve()
+            if not entry_path.is_relative_to(base):
+                continue  # Skip entries outside base directory
             ext = entry.name.lower().rsplit(".", 1)[-1] if "." in entry.name else ""
             if ext not in _VALID_EXTENSIONS:
                 continue
@@ -373,8 +382,15 @@ class CloudImportService:
                 elif source.source_type == "rclone":
                     file_bytes = await self.download_file_rclone(source, file_name)
                 else:
-                    with open(file_path, "rb") as f:
-                        file_bytes = f.read()
+                    # Validate path is within expected bounds for local files
+                    base = pathlib.Path(source.local_path).resolve()
+                    target = pathlib.Path(file_path).resolve()
+                    if not target.is_relative_to(base):
+                        raise ValueError("Path outside allowed directory")
+                    def _read_local_file(p: str) -> bytes:
+                        with open(p, "rb") as f:
+                            return f.read()
+                    file_bytes = await anyio.to_thread.run_sync(lambda: _read_local_file(file_path))
             except Exception as e:
                 logger.error(f"Cloud import: Download fehlgeschlagen für {file_name}: {e}")
                 await self._log(db, source, file_path, file_name, None, "error", str(e))
@@ -650,7 +666,7 @@ class CloudImportService:
             "webdav_path": s.webdav_path,
             "rclone_remote": s.rclone_remote,
             "rclone_path": s.rclone_path,
-            "rclone_config": s.rclone_config,
+            "rclone_config": "***" if s.rclone_config else "",
             "local_path": s.local_path,
             "filename_prefix": s.filename_prefix,
             "paperless_tag_ids": s.paperless_tag_ids,
