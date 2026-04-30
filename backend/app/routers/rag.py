@@ -9,21 +9,19 @@ from dishka.integrations.fastapi import inject
 from dishka import FromDishka
 
 from app.services.rag import RAGService
+from app.services.api_keys import ApiKeysService
+from app.routers.api_keys import extract_api_token
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
-async def _check_api_auth(request: Request) -> bool:
-    auth = request.headers.get("Authorization", "")
-    api_key_param = request.query_params.get("api_key", "")
-    if not auth and not api_key_param:
+async def _check_api_auth(request: Request, api_keys_service: ApiKeysService) -> bool:
+    token = extract_api_token(request)
+    if not token:
         return True
-    from app.database import async_session
-    from app.routers.api_keys import validate_api_key
-    async with async_session() as db:
-        key = await validate_api_key(request, db)
-        return key is not None
+    key = await api_keys_service.validate_key(token)
+    return key is not None
 
 
 # --- Request / Response Models ---
@@ -75,9 +73,15 @@ class ConfigUpdate(BaseModel):
 
 @router.post("/chat")
 @inject
-async def chat(body: ChatRequest, request: Request, service: FromDishka[RAGService] = None):
+async def chat(
+    body: ChatRequest,
+    request: Request,
+    service: FromDishka[RAGService] = None,
+    api_keys_service: FromDishka[ApiKeysService] = None,
+):
     assert service is not None
-    if not await _check_api_auth(request):
+    assert api_keys_service is not None
+    if not await _check_api_auth(request, api_keys_service):
         raise HTTPException(status_code=401, detail="Ungültiger API-Key")
     filters = body.filters.model_dump(exclude_none=True) if body.filters else None
 
@@ -101,9 +105,15 @@ async def chat(body: ChatRequest, request: Request, service: FromDishka[RAGServi
 
 @router.post("/search")
 @inject
-async def search(body: SearchRequest, request: Request, service: FromDishka[RAGService] = None):
+async def search(
+    body: SearchRequest,
+    request: Request,
+    service: FromDishka[RAGService] = None,
+    api_keys_service: FromDishka[ApiKeysService] = None,
+):
     assert service is not None
-    if not await _check_api_auth(request):
+    assert api_keys_service is not None
+    if not await _check_api_auth(request, api_keys_service):
         raise HTTPException(status_code=401, detail="Ungültiger API-Key")
     filters = body.filters.model_dump(exclude_none=True) if body.filters else None
 

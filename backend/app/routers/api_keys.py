@@ -5,7 +5,6 @@ from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
-from sqlalchemy.ext.asyncio import AsyncSession
 
 from dishka.integrations.fastapi import inject
 from dishka import FromDishka
@@ -69,23 +68,11 @@ async def toggle_api_key(key_id: int, service: FromDishka[ApiKeysService] = None
         raise HTTPException(status_code=404, detail=str(e))
 
 
-async def validate_api_key(request: Request, db: AsyncSession) -> Optional[dict]:
-    """Validate API key from request headers/query params."""
-    from app.services.api_keys.service import ApiKeysServiceImpl
-
+def extract_api_token(request: Request) -> Optional[str]:
+    """Extract API key token from request headers/query params. Pure parsing, no DB."""
     auth_header = request.headers.get("Authorization", "")
     if auth_header.startswith("Bearer "):
-        token = auth_header[7:]
-    elif auth_header.startswith("Api-Key "):
-        token = auth_header[8:]
-    else:
-        api_key_param = request.query_params.get("api_key", "")
-        token = api_key_param
-
-    if not token:
-        return None
-
-    # Create a temporary service instance for validation
-    from app.database import async_session
-    service = ApiKeysServiceImpl(session_factory=async_session)
-    return await service.validate_key(token)
+        return auth_header[7:]
+    if auth_header.startswith("Api-Key "):
+        return auth_header[8:]
+    return request.query_params.get("api_key", "") or None
