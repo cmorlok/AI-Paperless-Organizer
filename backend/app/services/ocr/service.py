@@ -1838,3 +1838,290 @@ WICHTIG:
         self.state.processor.running = False
         logger.info("Processor stopped")
         logger.info("Processor stopped")
+
+    # ── Extracted router business logic ─────────────────────────────────────
+
+    def get_ocr_settings_with_state(self) -> dict:
+        """Get OCR settings defaults merged with processor state."""
+        settings = {
+            "model": DEFAULT_OCR_MODEL,
+            "max_image_size": 1344,
+            "smart_skip_enabled": True,
+        }
+        settings["processor_enabled"] = self.state.processor.enabled
+        settings["processor_interval"] = self.state.processor.interval_minutes
+        return settings
+
+    async def save_ocr_settings(
+        self, model: str, max_image_size: int, smart_skip_enabled: bool, config_svc: Any,
+    ) -> dict:
+        """Save OCR settings to KV store."""
+        await config_svc.set("ocr_model", model, "str")
+        await config_svc.set("max_image_size", str(max_image_size), "int")
+        await config_svc.set("smart_skip_enabled", str(smart_skip_enabled).lower(), "bool")
+        return {
+            "success": True,
+            "model": model,
+            "max_image_size": max_image_size,
+            "smart_skip_enabled": smart_skip_enabled,
+        }
+
+    async def persist_processor_enabled(self, enabled: bool, config_svc: Any) -> None:
+        """Persist processor enabled flag to AppSettings."""
+        await config_svc.set(
+            "ocr_processor_enabled",
+            "true" if enabled else "false",
+            "bool",
+        )
+
+    async def configure_processor(
+        self, enabled: bool, interval_minutes: int, config_svc: Any, client: Any,
+    ) -> dict:
+        """Configure processor: set interval, persist, start/stop loop."""
+        self.state.processor.interval_minutes = max(1, interval_minutes)
+        try:
+            await self.persist_processor_enabled(enabled, config_svc)
+        except Exception as e:
+            logger.warning(f"Could not persist ocr_processor_enabled to KV: {e}")
+
+        if enabled and not self.state.processor.enabled:
+            self.state.processor.enabled = True
+            loop = asyncio.get_running_loop()
+            self.state.processor.task = loop.create_task(self.processor_loop(client))
+        elif not enabled and self.state.processor.enabled:
+            self.state.processor.enabled = False
+
+        return self.get_processor_status_dict()
+
+    def get_processor_status_dict(self) -> dict:
+        """Return processor status as dict."""
+        return {
+            "enabled": self.state.processor.enabled,
+            "running": self.state.processor.running,
+            "interval_minutes": self.state.processor.interval_minutes,
+            "last_run": self.state.processor.last_run,
+        }
+
+    def pause_batch(self) -> dict:
+        """Pause the running batch OCR job."""
+        if not self.state.batch.running:
+            return {"success": False, "message": "Kein Batch-Job aktiv"}
+        self.state.batch.paused = True
+        return {"success": True, "message": "Batch-Job pausiert", "paused": True}
+
+    def resume_batch(self) -> dict:
+        """Resume the paused batch OCR job."""
+        if not self.state.batch.running:
+            return {"success": False, "message": "Kein Batch-Job aktiv"}
+        self.state.batch.paused = False
+        return {"success": True, "message": "Batch-Job fortgesetzt", "paused": False}
+
+    def stop_batch(self) -> dict:
+        """Stop the running batch OCR job."""
+        if not self.state.batch.running:
+            return {"stopped": False, "message": "Kein Batch-Job aktiv"}
+        self.state.batch.should_stop = True
+        return {"stopped": True, "message": "Batch-Job wird gestoppt..."}
+
+    async def ocr_single_document_safe(
+        self, client: Any, document_id: int, force: bool, db_session: Any,
+    ) -> dict:
+        """OCR a single document with lock management and error wrapping."""
+        try:
+            await self.state.acquire_lock("single")
+            return await self.ocr_document(client, document_id, force=force, db_session=db_session)
+        finally:
+            self.state.release_lock()
+            self.state.page_progress.pop(document_id, None)
+
+    def get_progress_dict(self, document_id: int) -> dict:
+        """Get live page-level progress for an ongoing OCR job."""
+        progress = self.state.page_progress.get(document_id)
+        if not progress:
+            return {"active": False, "document_id": document_id}
+        elapsed = time.time() - (progress.get("started_at") or time.time())
+        return {
+            "active": True,
+            "document_id": document_id,
+            "status": progress.get("status", "unknown"),
+            "total_pages": progress.get("total_pages", 0),
+            "done": progress.get("done", 0),
+            "errors": progress.get("errors", 0),
+            "current_page": progress.get("current_page", 0),
+            "elapsed_seconds": round(elapsed, 1),
+            "pages": progress.get("pages", []),
+        }
+
+    async def apply_ocr_result_background(
+        self, client: Any, document_id: int, content: str, set_finish_tag: bool,
+    ) -> None:
+        """Apply OCR result in background (fire-and-forget)."""
+        try:
+            await self.apply_ocr_result(client, document_id, content, set_finish_tag)
+            logger.info("OCR result applied successfully", extra={"document_id": document_id})
+        except Exception as e:
+            logger.error("OCR result apply failed", extra={"document_id": document_id, "error": str(e)})
+            logger.error(f"Background apply error: {e}")
+
+    def check_batch_not_running(self) -> None:
+        """Raise if batch is already running."""
+        if self.state.batch.running:
+            raise ValueError("already_running")
+
+    def get_batch_status_dict(self, llm_service: Any = None) -> dict:
+        """Get current batch status including page-level progress."""
+        current_doc = self.state.batch.current_document
+        current_doc_id = current_doc.get("id") if isinstance(current_doc, dict) else None
+
+        page_progress = None
+        if current_doc_id and current_doc_id in self.state.page_progress:
+            pp = self.state.page_progress[current_doc_id]
+            page_progress = {
+                "document_id": current_doc_id,
+                "total_pages": pp.get("total_pages", 0),
+                "done": pp.get("done", 0),
+                "errors": pp.get("errors", 0),
+                "current_page": pp.get("current_page", 0),
+                "status": pp.get("status", "unknown"),
+                "pages": pp.get("pages", []),
+            }
+
+        lock_status = llm_service.get_lock_status() if llm_service else {}
+        waiting = next(
+            (p for p, s in lock_status.items() if s["locked"]), None,
+        ) if not self.state.batch.running else None
+
+        return {
+            "running": self.state.batch.running,
+            "total": self.state.batch.total,
+            "processed": self.state.batch.processed,
+            "current_document": current_doc,
+            "current_page_progress": page_progress,
+            "errors_count": len(self.state.batch.errors),
+            "log": self.state.batch.log[-50:],
+            "mode": self.state.batch.mode,
+            "paused": self.state.batch.paused,
+            "waiting_for": waiting,
+        }
+
+    def dismiss_review_item_from_queue(self, document_id: int) -> dict:
+        """Dismiss a review queue item."""
+        queue = load_review_queue()
+        new_queue = [q for q in queue if q["document_id"] != document_id]
+        if len(new_queue) == len(queue):
+            raise ValueError("Dokument nicht in Review Queue")
+        save_review_queue(new_queue)
+        return {"dismissed": True, "document_id": document_id}
+
+    def ignore_review_item_permanently(self, document_id: int) -> dict:
+        """Ignore document permanently: remove from review queue and add to OCR ignore list."""
+        queue = load_review_queue()
+        item = next((q for q in queue if q["document_id"] == document_id), None)
+        title = item["title"] if item else f"Dokument {document_id}"
+        new_queue = [q for q in queue if q["document_id"] != document_id]
+        save_review_queue(new_queue)
+
+        ignore_list = load_ocr_ignore_list()
+        if not any(entry["document_id"] == document_id for entry in ignore_list):
+            ignore_list.append({
+                "document_id": document_id,
+                "title": title,
+                "reason": "Original besser als OCR",
+                "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"),
+            })
+            save_ocr_ignore_list(ignore_list)
+
+        return {"ignored": True, "document_id": document_id, "title": title}
+
+    def get_error_list_with_counts(self) -> dict:
+        """Get error list with pending error counts."""
+        error_list = load_ocr_error_list()
+        error_counts = load_ocr_error_counts()
+        return {"items": error_list, "count": len(error_list), "pending_errors": error_counts}
+
+    def clear_all_errors(self) -> dict:
+        """Clear the entire error list and error counts."""
+        save_ocr_error_list([])
+        save_ocr_error_counts({})
+        return {"cleared": True}
+
+    def remove_from_ocr_ignore_list(self, document_id: int) -> None:
+        """Remove a document from the OCR ignore list. Raises if not found."""
+        ignore_list = load_ocr_ignore_list()
+        new_list = [entry for entry in ignore_list if entry["document_id"] != document_id]
+        if len(new_list) == len(ignore_list):
+            raise ValueError("Dokument nicht in der Ignore-Liste")
+        save_ocr_ignore_list(new_list)
+
+    async def get_preview_response(self, client: Any, document_id: int):
+        """Get document preview with auto-detected media type."""
+        from fastapi.responses import Response
+        file_bytes = await client.get_document_preview_image(document_id)
+
+        if file_bytes[:4] == b'%PDF':
+            media_type = "application/pdf"
+        elif file_bytes[:4] == b'\x89PNG':
+            media_type = "image/png"
+        elif file_bytes[:2] == b'\xff\xd8':
+            media_type = "image/jpeg"
+        elif file_bytes[:4] == b'RIFF':
+            media_type = "image/webp"
+        else:
+            media_type = "application/pdf"
+        return Response(
+            content=file_bytes,
+            media_type=media_type,
+            headers={"Content-Disposition": "inline", "X-Content-Type-Options": "nosniff"},
+        )
+
+    async def get_thumbnail_response(self, client: Any, document_id: int):
+        """Get document thumbnail with auto-detected media type."""
+        from fastapi.responses import Response
+        image_bytes = await client.get_document_thumbnail_bytes(document_id)
+        if image_bytes[:4] == b'\x89PNG':
+            return Response(content=image_bytes, media_type="image/png")
+        return Response(content=image_bytes, media_type="image/webp")
+
+    async def validate_and_start_compare(
+        self, client: Any, document_id: int, slots: list, page: int, compare_state: Any,
+    ) -> dict:
+        """Validate compare request and start background job."""
+        if compare_state.running:
+            raise ValueError("already_running")
+
+        if not slots or len(slots) == 0:
+            raise ValueError("Mindestens ein Modell auswählen")
+        if len(slots) > 5:
+            raise ValueError("Maximal 5 Modelle gleichzeitig")
+
+        compare_state.reset()
+        compare_state.running = True
+        compare_state.document_id = document_id
+        compare_state.models = [s.model for s in slots]
+        compare_state.total_models = len(slots)
+        compare_state.phase = "starting"
+
+        asyncio.create_task(
+            self.run_compare_job(client, document_id, slots, page, compare_state)
+        )
+        return {"started": True, "models": len(slots)}
+
+    def get_compare_status_dict(self, compare_state: Any) -> dict:
+        """Get compare status as dict."""
+        return {
+            "running": compare_state.running,
+            "phase": compare_state.phase,
+            "current_model": compare_state.current_model,
+            "current_model_index": compare_state.current_model_index,
+            "total_models": compare_state.total_models,
+            "current_page": compare_state.current_page,
+            "total_pages": compare_state.total_pages,
+            "models": compare_state.models,
+            "document_id": compare_state.document_id,
+            "title": compare_state.title,
+            "old_content": compare_state.old_content,
+            "compared_page": compare_state.compared_page,
+            "results": compare_state.results,
+            "error": compare_state.error,
+            "elapsed_seconds": compare_state.elapsed_seconds,
+        }

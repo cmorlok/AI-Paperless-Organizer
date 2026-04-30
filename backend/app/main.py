@@ -18,7 +18,7 @@ init_logging()
 logger = get_logger("app.main")
 
 from app.routers import paperless, correspondents, tags, document_types, settings, llm, debug, statistics, ignored_items, ocr, cleanup, classifier, rag, api_keys, cloud_import, duplicates, auth  # noqa: E402
-from app.routers.ocr import load_ocr_settings  # noqa: E402
+from app.services.ocr.state import DEFAULT_OCR_MODEL  # noqa: E402
 from app.services.ocr import OcrState, OcrService  # noqa: E402
 from app.services.classifier import AutoClassifyState, auto_classify_loop  # noqa: E402
 from app.services.paperless import PaperlessClient  # noqa: E402
@@ -74,7 +74,7 @@ async def lifespan(app: FastAPI):
 
     # Auto-start processor if it was enabled before shutdown
     kv_processor_enabled = await _read_kv_setting("ocr_processor_enabled")
-    startup_settings = load_ocr_settings()
+    startup_settings = {"processor_enabled": False, "processor_interval": 5}
     start_processor = kv_processor_enabled if kv_processor_enabled is not None else startup_settings.get("processor_enabled")
 
     if start_processor:

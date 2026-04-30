@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json as _json
 import logging
 import re
@@ -1911,3 +1912,69 @@ class DocumentClassifierService:
 
         logger.info(f"Assigned existing tag '{tag_name}' to doc {entry.document_id}")
         return {"status": "assigned", "tag_name": tag_name, "document_id": entry.document_id}
+
+    # ── Extracted router business logic (Plan 10-02) ───────────────────────
+
+    async def refresh_paperless_cache(self, client: PaperlessClient) -> dict:
+        """Clear cache and reload all Paperless metadata."""
+        from app.services.cache import get_cache
+        await get_cache().clear("paperless:")
+        tags, correspondents, doc_types, paths = await asyncio.gather(
+            client.get_tags(use_cache=False),
+            client.get_correspondents(use_cache=False),
+            client.get_document_types(use_cache=False),
+            client.get_storage_paths(use_cache=False),
+        )
+        return {
+            "refreshed": True,
+            "tags": len(tags),
+            "correspondents": len(correspondents),
+            "document_types": len(doc_types),
+            "storage_paths": len(paths),
+        }
+
+    async def start_auto_classify_task(self, config_svc: Any, di_container: Any) -> dict:
+        """Start auto-classify background task."""
+        if self.state and self.state.enabled:
+            return {"status": "already_running"}
+        if self.state:
+            self.state.enabled, self.state.processed, self.state.errors, self.state.reviewed = True, 0, 0, 0
+            from app.services.classifier.state import auto_classify_loop
+            self.state._task = asyncio.create_task(auto_classify_loop(di_container))
+        try:
+            await config_svc.set("auto_classify_enabled", "true", "bool")
+        except Exception:
+            pass
+        return {"status": "started"}
+
+    async def stop_auto_classify_task(self, config_svc: Any) -> dict:
+        """Stop auto-classify background task."""
+        if self.state:
+            self.state.enabled = False
+            if self.state._task and not self.state._task.done():
+                self.state._task.cancel()
+            self.state.running, self.state.current_doc = False, None
+        try:
+            await config_svc.set("auto_classify_enabled", "false", "bool")
+        except Exception:
+            pass
+        return {"status": "stopped"}
+
+    def get_auto_classify_status_dict(self, llm_service: Any = None) -> dict:
+        """Get auto-classify status including lock info."""
+        if not self.state:
+            return {"enabled": False, "running": False, "processed": 0, "errors": 0, "reviewed": 0, "current_doc": None, "last_run": None, "waiting_for": None}
+        lock = llm_service.get_lock_status() if llm_service else {}
+        waiting = next(
+            (p for p, s in lock.items() if s["locked"] and p != "classifier"), None,
+        ) if self.state.enabled else None
+        return {
+            "enabled": self.state.enabled,
+            "running": self.state.running,
+            "processed": self.state.processed,
+            "errors": self.state.errors,
+            "reviewed": self.state.reviewed,
+            "current_doc": self.state.current_doc,
+            "last_run": self.state.last_run,
+            "waiting_for": waiting,
+        }
