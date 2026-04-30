@@ -20,6 +20,7 @@ async def scan_invoices(
     session_factory,
     scan_state,
     llm_service: LLMService,
+    invoice_extraction_prompt: Optional[str] = None,
 ) -> List[Dict]:
     """Find duplicate invoices by extracting invoice number + amount via LLM.
 
@@ -67,6 +68,9 @@ async def scan_invoices(
                 "amount": row.amount,
             }
 
+    # Determine effective prompt to use
+    effective_prompt = invoice_extraction_prompt or INVOICE_EXTRACTION_PROMPT
+
     # Extract invoice data
     extractions: Dict[int, Dict] = {}  # doc_id -> {invoice_number, amount}
 
@@ -91,7 +95,9 @@ async def scan_invoices(
         # Truncate content to avoid huge prompts
         content_trimmed = content[:3000]
 
-        extraction = await _extract_invoice_data(content_trimmed, chat_model, chat_provider, llm_service)
+        extraction = await _extract_invoice_data(
+            content_trimmed, chat_model, chat_provider, llm_service, effective_prompt
+        )
         if extraction:
             extractions[doc_id] = extraction
             # Cache result
@@ -153,9 +159,15 @@ async def _get_chat_provider_and_model(session_factory) -> tuple[str, str]:
     return provider, model
 
 
-async def _extract_invoice_data(content: str, model: str, provider: str, llm_service: LLMService) -> Optional[Dict]:
+async def _extract_invoice_data(
+    content: str,
+    model: str,
+    provider: str,
+    llm_service: LLMService,
+    prompt_template: Optional[str] = None,
+) -> Optional[Dict]:
     """Extract invoice number and amount from document content via LiteLLM."""
-    prompt = INVOICE_EXTRACTION_PROMPT.format(content=content)
+    prompt = (prompt_template or INVOICE_EXTRACTION_PROMPT).format(content=content)
 
     try:
         result = await llm_service.complete(

@@ -7,3 +7,7 @@ INVOICE_EXTRACTION_PROMPT = (
     "Wenn du keinen Betrag findest, sette den Wert auf einen leeren String.\n\n"
     "Dokumenttext:\n{content}"
 )
+
+PROMPTS = {
+    "invoice_extraction": INVOICE_EXTRACTION_PROMPT,
+}
