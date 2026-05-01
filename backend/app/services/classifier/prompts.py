@@ -325,6 +325,20 @@ Beispiel alles ok: {}
 Antworte NUR mit dem JSON."""
 
 
+SYSTEM_PROMPT_OLLAMA_GENERATE_WRAPPER = """Du bist ein JSON-Extraktor. Antworte AUSSCHLIESSLICH mit validem JSON.
+KEIN Denkprozess, KEINE Erklaerung, KEIN Markdown -- NUR das JSON-Objekt.
+
+AUFGABE:
+{{ SYSTEM_PROMPT }}
+
+{% if USER_MESSAGE %}
+INPUT:
+{{ USER_MESSAGE }}
+{% endif %}
+
+JSON-ANTWORT:"""
+
+
 PROMPTS = {
     "classifier_rules_title": RULES_TITLE,
     "classifier_rules_tags": RULES_TAGS,
@@ -348,6 +362,7 @@ PROMPTS = {
     "classifier_ollama_storage_path": SYSTEM_PROMPT_OLLAMA_STORAGE_PATH,
     "classifier_ollama_custom_fields": SYSTEM_PROMPT_OLLAMA_CUSTOM_FIELDS,
     "classifier_ollama_verify": SYSTEM_PROMPT_OLLAMA_VERIFY,
+    "classifier_ollama_generate_wrapper": SYSTEM_PROMPT_OLLAMA_GENERATE_WRAPPER,
     "classifier_openai": SYSTEM_PROMPT_OPENAI,
 }
 

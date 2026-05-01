@@ -629,17 +629,10 @@ class OllamaLlmProvider(BaseClassifierProvider):
         json_schema: Optional[Dict[str, Any]] = None,
     ) -> str:
         assert self.llm_service is not None
-        prompt_parts = [
-            "Du bist ein JSON-Extraktor. Antworte AUSSCHLIESSLICH mit validem JSON.",
-            "KEIN Denkprozess, KEINE Erklaerung, KEIN Markdown -- NUR das JSON-Objekt.",
-            "",
-            "AUFGABE:",
-            system_prompt,
-        ]
-        if user_message:
-            prompt_parts.extend(["", "INPUT:", user_message])
-        prompt_parts.extend(["", "JSON-ANTWORT:"])
-        raw_prompt = "\n".join(prompt_parts)
+        raw_prompt = await self._get_prompt(
+            "classifier_ollama_generate_wrapper",
+            variables={"SYSTEM_PROMPT": system_prompt, "USER_MESSAGE": user_message},
+        )
 
         messages = [{"role": "user", "content": raw_prompt}]
 
