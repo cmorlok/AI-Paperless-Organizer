@@ -313,6 +313,7 @@ class Indexer:
         self, doc: dict, chunk_text: str, config: RagConfig
     ) -> str:
         assert self.llm_service is not None
+        assert self._get_prompt is not None
         """Generate a short LLM context header for a chunk (Anthropic Contextual Retrieval).
 
         Prepends 1-2 sentences explaining what this chunk is about within its document.

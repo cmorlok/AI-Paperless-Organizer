@@ -37,6 +37,7 @@ class SimilarityService:
 
     async def _get_prompt(self, entity_type: str, variables: Optional[Dict[str, Any]] = None) -> str:
         """Get the prompt template for an entity type, optionally rendered with variables."""
+        assert self.session_factory is not None
         async with self.session_factory() as db:
             if not self._prompts_registered:
                 await self._register_prompts(db)

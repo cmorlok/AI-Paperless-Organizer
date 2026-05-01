@@ -14,9 +14,6 @@ from app.services.rag.indexer import Indexer
 from app.services.rag.rerank_service import RerankService
 from app.services.llm import LLMService, LLMLockTimeoutError
 from app.services.rag.prompts import (
-    CHAT_SYSTEM_PROMPT,
-    CHAT_USER_CONTEXT_TEMPLATE,
-    QUERY_REWRITE_PROMPT,
     PROMPTS,
 )
 from app.services.settings_service import register_prompt, get_prompt

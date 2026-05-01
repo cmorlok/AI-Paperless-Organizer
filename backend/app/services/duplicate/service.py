@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import List, Optional, Any
+from typing import List, Optional, Any, Dict
 
 from app.database import async_session
 from app.services.llm import LLMService
