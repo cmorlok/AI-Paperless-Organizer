@@ -15,7 +15,7 @@ from app.services.classifier.tool_definitions import (
 from app.services.classifier.tool_executor import ToolExecutor
 from app.services.classifier.prompts import (
     SYSTEM_PROMPT_OPENAI, RULES_TITLE, RULES_TAGS, RULES_CORRESPONDENT,
-    RULES_DOCTYPE, RULES_DATE, RULES_CUSTOM_FIELDS, get_correspondent_rules, PROMPTS,
+    RULES_DOCTYPE, RULES_DATE, RULES_CUSTOM_FIELDS, PROMPTS,
 )
 from app.services.classifier.llm_schemas import _MAX_TOOL_ROUNDS
 
@@ -115,24 +115,17 @@ class ToolCallingLlmProvider(BaseClassifierProvider):
 
         trim_prompt = config.get("correspondent_trim_prompt", False)
 
-        rules_title = await self._get_prompt("classifier_rules_title")
-        rules_tags = await self._get_prompt("classifier_rules_tags")
-        rules_correspondent = await self._get_prompt(
-            "classifier_rules_correspondent_short" if trim_prompt else "classifier_rules_correspondent"
-        )
-        rules_doctype = await self._get_prompt("classifier_rules_doctype")
-        rules_date = await self._get_prompt("classifier_rules_date")
-        rules_custom_fields = await self._get_prompt("classifier_rules_custom_fields")
-
         system_prompt = await self._get_prompt(
             "classifier_openai",
             variables={
-                "RULES_TITLE": rules_title,
-                "RULES_TAGS": rules_tags,
-                "RULES_CORRESPONDENT": rules_correspondent,
-                "RULES_DOCTYPE": rules_doctype,
-                "RULES_DATE": rules_date,
-                "RULES_CUSTOM_FIELDS": rules_custom_fields,
+                "RULES_TITLE": await self._get_prompt("classifier_rules_title"),
+                "RULES_TAGS": await self._get_prompt("classifier_rules_tags"),
+                "RULES_CORRESPONDENT": await self._get_prompt(
+                    "classifier_rules_correspondent", variables={"TRIM_PROMPT": trim_prompt}
+                ),
+                "RULES_DOCTYPE": await self._get_prompt("classifier_rules_doctype"),
+                "RULES_DATE": await self._get_prompt("classifier_rules_date"),
+                "RULES_CUSTOM_FIELDS": await self._get_prompt("classifier_rules_custom_fields"),
             },
         )
 

@@ -152,18 +152,14 @@ class OllamaLlmProvider(BaseClassifierProvider):
 
             trim_prompt = config.get("correspondent_trim_prompt", False)
 
-            rules_title = await self._get_prompt("classifier_rules_title")
-            rules_correspondent = await self._get_prompt(
-                "classifier_rules_correspondent_short" if trim_prompt else "classifier_rules_correspondent"
-            )
-            rules_date = await self._get_prompt("classifier_rules_date")
-
             analyze_prompt = await self._get_prompt(
                 "classifier_ollama_analyze",
                 variables={
-                    "RULES_TITLE": rules_title,
-                    "RULES_CORRESPONDENT": rules_correspondent,
-                    "RULES_DATE": rules_date,
+                    "RULES_TITLE": await self._get_prompt("classifier_rules_title"),
+                    "RULES_CORRESPONDENT": await self._get_prompt(
+                        "classifier_rules_correspondent", variables={"TRIM_PROMPT": trim_prompt}
+                    ),
+                    "RULES_DATE": await self._get_prompt("classifier_rules_date"),
                 },
             )
 

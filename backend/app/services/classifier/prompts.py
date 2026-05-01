@@ -37,26 +37,19 @@ INHALT JE DOKUMENTTYP:
 RULES_CORRESPONDENT = """KORRESPONDENT-REGELN:
 - Der Absender/Aussteller/die Firma die das Dokument erstellt hat
 - NUR ein einziger Korrespondent
-- Den Namen so uebernehmen wie er im lesbaren Text steht (Absenderzeile, Fusszeile, Unterschrift)
-- WICHTIG: Nur angeben wenn du dir SICHER bist! Das OCR eines Logos oder Briefkopfs kann unleserlich sein.
-- Bei Unsicherheit: null zurueckgeben -- NIEMALS raten oder erfinden!
-- Den Korrespondenten NUR aus dem tatsaechlich lesbaren Text ableiten, nicht aus Logos oder Bildern
-- Wenn kein Name eindeutig lesbar ist: null"""
-
-# Variant used when "correspondent_trim_prompt" is enabled:
-# instructs the LLM to return only the short brand/core name without legal forms
-RULES_CORRESPONDENT_SHORT = """KORRESPONDENT-REGELN:
-- Der Absender/Aussteller/die Firma die das Dokument erstellt hat
-- NUR ein einziger Korrespondent
+{% if TRIM_PROMPT %}
 - KURZNAME: Verwende NUR den Kernmarkennamen ohne Rechtsform-Zusaetze!
   Beispiele: "Telekom" statt "Deutsche Telekom AG", "IKEA" statt "IKEA Deutschland GmbH & Co. KG",
              "Sparkasse" statt "Stadtsparkasse Muenchen", "AOK" statt "AOK Bayern GmbH",
              "Allianz" statt "Allianz Versicherungs-AG"
 - KEINE Rechtsformen im Namen (GmbH, AG, KG, GmbH & Co. KG, UG, OHG, Ltd., Inc., SE, eV, ...)
 - KEIN Laender-Praefix wenn der Kurzname allgemein bekannt ist (z.B. nicht "Deutsche X" sondern "X")
+{% else %}
+- Den Namen so uebernehmen wie er im lesbaren Text steht (Absenderzeile, Fusszeile, Unterschrift)
+{% endif %}
 - WICHTIG: Nur angeben wenn du dir SICHER bist! Das OCR eines Logos oder Briefkopfs kann unleserlich sein.
 - Bei Unsicherheit: null zurueckgeben -- NIEMALS raten oder erfinden!
-- Den Korrespondenten NUR aus dem tatsaechlich lesbaren Text ableiten
+- Den Korrespondenten NUR aus dem tatsaechlich lesbaren Text ableiten, nicht aus Logos oder Bildern
 - Wenn kein Name eindeutig lesbar ist: null"""
 
 RULES_DATE = """ERSTELLDATUM-REGELN:
@@ -151,11 +144,6 @@ FIELD_DEFAULTS = {
 }
 
 
-def get_correspondent_rules(trim_prompt: bool = False) -> str:
-    """Return the appropriate correspondent rules based on trim_prompt config."""
-    return RULES_CORRESPONDENT_SHORT if trim_prompt else RULES_CORRESPONDENT
-
-
 # --- Ollama Prompts (with SAME rules as OpenAI) ---
 
 SYSTEM_PROMPT_OLLAMA_ANALYZE = """Du bist ein Dokumenten-Klassifizierer. Extrahiere Informationen als JSON.
@@ -168,13 +156,13 @@ WICHTIGSTE REGEL -- LIES DEN TEXT GENAU:
 - Zahlen die als "Pers.-Nr.", "Personalnummer", "eTIN", "Steuer-Nr." markiert sind, sind KEINE Dokumentreferenzen!
 
 Antworte als JSON:
-{{ "{" }}
+{
   "title": "Kurzer Titel AUS DEM TEXT (nicht erfinden!)",
   "correspondent": "Absender/Aussteller",
   "created_date": "YYYY-MM-DD oder null",
   "summary": "2-3 Saetze Zusammenfassung",
   "language": "de/en/..."
-{{ "}" }}
+}
 
 {{ RULES_TITLE }}
 
@@ -277,10 +265,10 @@ PRUEF-REGELN:
 4. Speicherpfad muss zur Person/zum Kontext passen
 
 Antworte als JSON mit NUR den Feldern die du AENDERN willst.
-Wenn alles korrekt ist, antworte mit leerem JSON: {{{{}}}}
+Wenn alles korrekt ist, antworte mit leerem JSON: {}
 
-Beispiel Korrektur: {{{{"storage_path_id": 11, "storage_path_reason": "Privat Christian"}}}}
-Beispiel alles ok: {{{{}}}}
+Beispiel Korrektur: {"storage_path_id": 11, "storage_path_reason": "Privat Christian"}
+Beispiel alles ok: {}
 
 Antworte NUR mit dem JSON."""
 
@@ -289,7 +277,6 @@ PROMPTS = {
     "classifier_rules_title": RULES_TITLE,
     "classifier_rules_tags": RULES_TAGS,
     "classifier_rules_correspondent": RULES_CORRESPONDENT,
-    "classifier_rules_correspondent_short": RULES_CORRESPONDENT_SHORT,
     "classifier_rules_doctype": RULES_DOCTYPE,
     "classifier_rules_date": RULES_DATE,
     "classifier_rules_custom_fields": RULES_CUSTOM_FIELDS,
