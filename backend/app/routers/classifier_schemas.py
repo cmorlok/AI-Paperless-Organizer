@@ -16,12 +16,6 @@ class ClassifierConfigUpdate(BaseModel):
     correspondent_behavior: Optional[str] = None
     review_mode: Optional[str] = None
     batch_size: Optional[int] = None
-    prompt_title: Optional[str] = None
-    prompt_tags: Optional[str] = None
-    prompt_correspondent: Optional[str] = None
-    prompt_document_type: Optional[str] = None
-    prompt_date: Optional[str] = None
-    system_prompt: Optional[str] = None
     tags_min: Optional[int] = None
     tags_max: Optional[int] = None
     tags_keep_existing: Optional[bool] = None
@@ -63,9 +57,7 @@ class CustomFieldMappingUpdate(BaseModel):
     paperless_field_name: str = ""
     paperless_field_type: str = "string"
     enabled: bool = False
-    extraction_prompt: str = ""
     example_values: str = ""
-    validation_regex: str = ""
     ignore_values: str = ""
 
 

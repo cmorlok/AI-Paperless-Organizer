@@ -48,6 +48,7 @@ class CustomPrompt(Base):
     entity_type: Mapped[str] = mapped_column(String(50), nullable=False)  # correspondents, tags, document_types
     prompt_template: Mapped[str] = mapped_column(Text, nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    modified: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())
 

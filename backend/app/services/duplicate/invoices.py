@@ -90,7 +90,9 @@ async def scan_invoices(
         # Truncate content to avoid huge prompts
         content_trimmed = content[:3000]
 
-        extraction = await _extract_invoice_data(content_trimmed, chat_model, chat_provider, llm_service)
+        extraction = await _extract_invoice_data(
+            content_trimmed, chat_model, chat_provider, llm_service, session_factory
+        )
         if extraction:
             extractions[doc_id] = extraction
             # Cache result
@@ -152,16 +154,17 @@ async def _get_chat_provider_and_model(session_factory) -> tuple[str, str]:
     return provider, model
 
 
-async def _extract_invoice_data(content: str, model: str, provider: str, llm_service: LLMService) -> Optional[Dict]:
+async def _extract_invoice_data(
+    content: str,
+    model: str,
+    provider: str,
+    llm_service: LLMService,
+    session_factory,
+) -> Optional[Dict]:
     """Extract invoice number and amount from document content via LiteLLM."""
-    prompt = (
-        "Extrahiere aus dem folgenden Dokumenttext die Rechnungsnummer und den Gesamtbetrag.\n"
-        "Antworte NUR mit einem JSON-Objekt im Format:\n"
-        '{"invoice_number": "...", "amount": "..."}\n'
-        "Wenn du keine Rechnungsnummer findest, sette den Wert auf einen leeren String.\n"
-        "Wenn du keinen Betrag findest, sette den Wert auf einen leeren String.\n\n"
-        f"Dokumenttext:\n{content}"
-    )
+    async with session_factory() as db:
+        from app.services.settings_service import get_prompt
+        prompt = await get_prompt("duplicate_invoice_extraction", db, variables={"CONTENT": content})
 
     try:
         result = await llm_service.complete(

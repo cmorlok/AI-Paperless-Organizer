@@ -26,11 +26,12 @@ _CONTEXTUAL_RETRIEVAL_MAX_CONTENT_LEN = 999_999
 class Indexer:
     """Manages document indexing: fetches from Paperless, chunks, embeds, stores."""
 
-    def __init__(self, search_engine, paperless_client, llm_service: LLMService):
+    def __init__(self, search_engine, paperless_client, llm_service: LLMService, get_prompt=None):
         self.search_engine = search_engine
         self.paperless_client = paperless_client
         self.llm_service = llm_service
         self._indexing_task: Optional[asyncio.Task] = None
+        self._get_prompt = get_prompt
 
     async def _get_config(self, db: AsyncSession) -> Optional[RagConfig]:
         result = await db.execute(sa_select(RagConfig).where(RagConfig.id == 1))
@@ -312,6 +313,7 @@ class Indexer:
         self, doc: dict, chunk_text: str, config: RagConfig
     ) -> str:
         assert self.llm_service is not None
+        assert self._get_prompt is not None
         """Generate a short LLM context header for a chunk (Anthropic Contextual Retrieval).
 
         Prepends 1-2 sentences explaining what this chunk is about within its document.
@@ -326,14 +328,9 @@ class Indexer:
             + (f", Korrespondent: {doc.get('correspondent_name', '')}" if doc.get('correspondent_name') else "")
             + (f", Datum: {(doc.get('created') or '')[:10]}" if doc.get('created') else "")
         )
-        prompt = (
-            f"{doc_info}\n\n"
-            f"Textabschnitt:\n{chunk_text[:500]}\n\n"
-            "Schreibe 1-2 Sätze Kontext der erklärt:\n"
-            "- Zu welchem Dokument/Person dieser Abschnitt gehört\n"
-            "- Welche konkreten Fakten er enthält (Namen, Daten, Beträge, Kennzeichen)\n"
-            "- Für welche Suchanfragen er relevant ist\n"
-            "Nur der Kontext, keine Erklärungen, keine Einleitung wie 'Dieser Abschnitt...'."
+        prompt = await self._get_prompt(
+            "rag_chunk_context",
+            variables={"DOC_INFO": doc_info, "CHUNK_TEXT": chunk_text[:500]},
         )
         try:
             import re as _re

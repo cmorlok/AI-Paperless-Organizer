@@ -56,7 +56,7 @@ class TestRAGServiceDIGaps:
         """Verify RAGService forwards paperless_client to Indexer."""
         from app.services.rag.service import RAGService
         src = inspect.getsource(RAGService)
-        assert "Indexer(self.search_engine, paperless_client=paperless_client, llm_service=llm_service)" in src
+        assert "paperless_client=paperless_client" in src, "RAGService should pass paperless_client to Indexer"
 
 
 class TestContainerDIGaps:

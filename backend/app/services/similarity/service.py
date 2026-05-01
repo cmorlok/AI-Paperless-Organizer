@@ -7,12 +7,12 @@ import re
 import fnmatch
 from typing import Dict, List, Optional, Any
 from sqlalchemy import select
-from app.models import CustomPrompt, IgnoredTag
+from app.models import IgnoredTag
 from app.models.settings_model import LLM_KEY_CLASSIFIER_PROVIDER, LLM_KEY_CLASSIFIER_MODEL
 from app.services.paperless import PaperlessClient
 from app.services.llm import LLMService
-from app.prompts.default_prompts import DEFAULT_PROMPTS
-from app.services.settings_service import get_setting as gs
+from app.services.similarity.prompts import PROMPTS
+from app.services.settings_service import get_setting as gs, get_prompt, register_prompt
 
 
 class SimilarityService:
@@ -27,24 +27,21 @@ class SimilarityService:
         self.paperless = paperless_client
         self.llm = llm_service
         self.session_factory = session_factory
+        self._prompts_registered = False
 
-    async def _get_prompt(self, entity_type: str) -> str:
-        """Get the prompt template for an entity type."""
-        if self.session_factory is None:
-            return DEFAULT_PROMPTS.get(entity_type, "")
+    async def _register_prompts(self, db: Any) -> None:
+        """Register all similarity prompts with settings_service. Called once on first use."""
+        for key, prompt_template in PROMPTS.items():
+            await register_prompt(key, prompt_template, db)
+        self._prompts_registered = True
+
+    async def _get_prompt(self, entity_type: str, variables: Optional[Dict[str, Any]] = None) -> str:
+        """Get the prompt template for an entity type, optionally rendered with variables."""
+        assert self.session_factory is not None
         async with self.session_factory() as db:
-            result = await db.execute(
-                select(CustomPrompt).where(
-                    CustomPrompt.entity_type == entity_type,
-                    CustomPrompt.is_active
-                )
-            )
-            prompt = result.scalar_one_or_none()
-
-            if prompt:
-                return prompt.prompt_template
-
-            return DEFAULT_PROMPTS.get(entity_type, "")
+            if not self._prompts_registered:
+                await self._register_prompts(db)
+            return await get_prompt(entity_type, db, variables) or ""
 
     async def _get_ignored_patterns(self) -> List[Dict]:
         """Get all ignored tag patterns."""
@@ -211,18 +208,17 @@ class SimilarityService:
                 "error": f"JSON-Fehler: {str(e)}. Kontext: ...{error_context}...",
             }
 
-    async def _call_llm_for_similarity(self, provider: str, model: str, prompt_template: str, items: list) -> dict:
+    async def _call_llm_for_similarity(self, provider: str, model: str, entity_type: str, items: list) -> dict:
         assert self.llm is not None
         """Call LLM for similarity analysis and parse the response.
-        
-        Builds prompt by injecting items JSON into {items} placeholder,
-        calls LLM via self.llm.complete(), and parses result.
+
+        Calls LLM via self.llm.complete(), and parses result.
         """
         if not items:
             return {"groups": [], "stats": {"items_count": 0, "estimated_tokens": 0}}
 
         items_str = json.dumps([item["name"] for item in items], ensure_ascii=False, indent=2)
-        prompt = prompt_template.replace("{items}", items_str)
+        prompt = await self._get_prompt(entity_type, variables={"ITEMS": items_str})
         estimated_input_tokens = self.llm.estimate_tokens(prompt)
 
         import logging
@@ -297,31 +293,31 @@ class SimilarityService:
         
         return filtered, ignored_count
     
-    async def _analyze_batch(self, items: List[Dict], prompt_template: str) -> Dict:
+    async def _analyze_batch(self, items: List[Dict], entity_type: str) -> Dict:
         assert self.llm is not None
         """Analyze a single batch of items."""
         provider, model = await self._get_llm_config()
-        return await self._call_llm_for_similarity(provider, model, prompt_template, items)
+        return await self._call_llm_for_similarity(provider, model, entity_type, items)
     
-    async def _analyze_with_batching(self, all_items: List[Dict], prompt_template: str, batch_size: int = 200) -> Dict:
+    async def _analyze_with_batching(self, all_items: List[Dict], entity_type: str, batch_size: int = 200) -> Dict:
         assert self.llm is not None
         """Analyze items - batch only if token limit exceeded."""
-        
+
         # Get token limit from LLM provider
         provider, model = await self._get_llm_config()
         token_limit = await self.llm.get_token_limit(provider, model)
-        
+
         # Estimate tokens for all items
         items_str = json.dumps([item["name"] for item in all_items], ensure_ascii=False)
-        full_prompt = prompt_template.replace("{items}", items_str)
+        full_prompt = await self._get_prompt(entity_type, variables={"ITEMS": items_str})
         estimated_tokens = self.llm.estimate_tokens(full_prompt)
-        
+
         # Leave 20% buffer for output
         safe_limit = int(token_limit * 0.8)
-        
+
         # If tokens fit, process ALL items in one go (no batching!)
         if estimated_tokens <= safe_limit:
-            result = await self._analyze_batch(all_items, prompt_template)
+            result = await self._analyze_batch(all_items, entity_type)
             # Filter out groups with less than 2 members
             groups = result.get("groups", [])
             valid_groups = [g for g in groups if len(g.get("members", [])) >= 2]
@@ -366,7 +362,7 @@ class SimilarityService:
         for i, batch in enumerate(batches):
             try:
                 logger.info(f"[Batch {i+1}/{len(batches)}] Analyzing {len(batch)} items...")
-                result = await self._analyze_batch(batch, prompt_template)
+                result = await self._analyze_batch(batch, entity_type)
                 
                 # Collect groups
                 groups = result.get("groups", [])
@@ -453,38 +449,13 @@ class SimilarityService:
             ungrouped_names = [item.get("name", "") for item in ungrouped_items[:100]]  # Limit to 100
         
         # Ask LLM to find similar group names AND check ungrouped items
-        cross_batch_prompt = f"""Du hast mehrere Gruppen aus verschiedenen Batches analysiert.
-        
-1. Prüfe ob einige dieser GRUPPEN zusammengehören und zur gleichen Entität gehören.
-2. Prüfe ob UNGRUPPIERTE EINTRÄGE zu einer existierenden Gruppe gehören sollten.
-
-GRUPPEN (mit Beispiel-Mitgliedern):
-{json.dumps(group_info, ensure_ascii=False, indent=2)}
-
-UNGRUPPIERTE EINTRÄGE (gehören evtl. zu einer Gruppe):
-{json.dumps(ungrouped_names[:50], ensure_ascii=False, indent=2) if ungrouped_names else "[]"}
-
-Antworte NUR mit validem JSON:
-{{
-  "group_merges": [
-    {{
-      "target_name": "Bester Name für die zusammengeführte Gruppe",
-      "source_names": ["gruppenname1", "gruppenname2"],
-      "reasoning": "Kurze Begründung"
-    }}
-  ],
-  "add_to_groups": [
-    {{
-      "group_name": "Name der existierenden Gruppe",
-      "items_to_add": ["ungruppierter_name1", "ungruppierter_name2"],
-      "reasoning": "Kurze Begründung"
-    }}
-  ]
-}}
-
-Beispiel: Wenn "1&1" in einer Gruppe ist und "1und1 Internet" ungruppiert, sollte "1und1 Internet" zu der "1&1" Gruppe hinzugefügt werden.
-
-Wenn nichts zusammengehört: {{"group_merges": [], "add_to_groups": []}}"""
+        cross_batch_prompt = await self._get_prompt(
+            "similarity_cross_batch_merge",
+            variables={
+                "GROUP_INFO": json.dumps(group_info, ensure_ascii=False, indent=2),
+                "UNGROUPED_ITEMS": json.dumps(ungrouped_names[:50], ensure_ascii=False, indent=2) if ungrouped_names else "[]",
+            },
+        )
 
         try:
             provider, model = await self._get_llm_config()
@@ -584,8 +555,7 @@ Wenn nichts zusammengehört: {{"group_merges": [], "add_to_groups": []}}"""
             for c in correspondents
         ]
         
-        prompt_template = await self._get_prompt("correspondents")
-        return await self._analyze_with_batching(items, prompt_template, batch_size)
+        return await self._analyze_with_batching(items, "similarity_correspondents", batch_size)
     
     async def find_similar_tags(self, batch_size: int = 200) -> Dict:
         assert self.llm is not None
@@ -601,8 +571,7 @@ Wenn nichts zusammengehört: {{"group_merges": [], "add_to_groups": []}}"""
             for t in tags
         ]
         
-        prompt_template = await self._get_prompt("tags")
-        return await self._analyze_with_batching(items, prompt_template, batch_size)
+        return await self._analyze_with_batching(items, "similarity_tags", batch_size)
     
     async def find_similar_document_types(self, batch_size: int = 200) -> Dict:
         assert self.llm is not None
@@ -618,8 +587,7 @@ Wenn nichts zusammengehört: {{"group_merges": [], "add_to_groups": []}}"""
             for dt in doc_types
         ]
         
-        prompt_template = await self._get_prompt("document_types")
-        return await self._analyze_with_batching(items, prompt_template, batch_size)
+        return await self._analyze_with_batching(items, "similarity_document_types", batch_size)
     
     async def find_nonsense_tags(self, batch_size: int = 300) -> Dict:
         assert self.llm is not None
@@ -646,14 +614,16 @@ Wenn nichts zusammengehört: {{"group_merges": [], "add_to_groups": []}}"""
             for t in filtered_tags
         ])
         
-        # Add ignore list info to prompt
+        # Build ignore list info
         ignore_info = ""
         if ignored_patterns:
-            ignore_info = "\n\nFolgende Tags sind GESCHÜTZT und dürfen NICHT als unsinnig markiert werden:\n"
+            ignore_info = "Folgende Tags sind GESCHÜTZT und dürfen NICHT als unsinnig markiert werden:\n"
             ignore_info += "\n".join([f"- {p['pattern']} ({p['reason']})" for p in ignored_patterns])
-        
-        prompt_template = await self._get_prompt("tags_nonsense")
-        prompt = prompt_template.replace("{items}", items_text) + ignore_info
+
+        prompt = await self._get_prompt(
+            "similarity_tags_nonsense",
+            variables={"ITEMS": items_text, "IGNORE_INFO": ignore_info},
+        )
         
         # Token estimation
         estimated_input_tokens = self.llm.estimate_tokens(prompt)
@@ -750,10 +720,12 @@ Wenn nichts zusammengehört: {{"group_merges": [], "add_to_groups": []}}"""
         # Format items
         tags_text = "\n".join([f"- {t['name']}" for t in tags])
         corr_text = "\n".join([f"- {c['name']}" for c in correspondents])
-        
-        prompt_template = await self._get_prompt("tags_are_correspondents")
-        prompt = prompt_template.replace("{items}", tags_text).replace("{correspondents}", corr_text)
-        
+
+        prompt = await self._get_prompt(
+            "similarity_tags_are_correspondents",
+            variables={"ITEMS": tags_text, "CORRESPONDENTS": corr_text},
+        )
+
         # Token estimation
         estimated_input_tokens = self.llm.estimate_tokens(prompt)
         provider, model = await self._get_llm_config()
@@ -852,10 +824,12 @@ Wenn nichts zusammengehört: {{"group_merges": [], "add_to_groups": []}}"""
         # Format items
         tags_text = "\n".join([f"- {t['name']}" for t in tags])
         dt_text = "\n".join([f"- {dt['name']}" for dt in doc_types])
-        
-        prompt_template = await self._get_prompt("tags_are_document_types")
-        prompt = prompt_template.replace("{items}", tags_text).replace("{document_types}", dt_text)
-        
+
+        prompt = await self._get_prompt(
+            "similarity_tags_are_document_types",
+            variables={"ITEMS": tags_text, "DOCUMENT_TYPES": dt_text},
+        )
+
         # Token estimation
         estimated_input_tokens = self.llm.estimate_tokens(prompt)
         provider, model = await self._get_llm_config()

@@ -13,6 +13,10 @@ from app.services.rag.search_engine import SearchEngine, SearchResult
 from app.services.rag.indexer import Indexer
 from app.services.rag.rerank_service import RerankService
 from app.services.llm import LLMService, LLMLockTimeoutError
+from app.services.rag.prompts import (
+    PROMPTS,
+)
+from app.services.settings_service import register_prompt, get_prompt
 
 logger = logging.getLogger(__name__)
 
@@ -22,16 +26,32 @@ class RAGService:
 
     def __init__(self, session_factory, paperless_client, llm_service: LLMService):
         self.search_engine = SearchEngine()
-        self.indexer = Indexer(self.search_engine, paperless_client=paperless_client, llm_service=llm_service)
+        self.indexer = Indexer(self.search_engine, paperless_client=paperless_client, llm_service=llm_service, get_prompt=self._get_prompt)
         self._initialized = False
+        self._prompts_registered = False
         self.session_factory = session_factory or async_session
         self.paperless_client = paperless_client
         self.llm_service = llm_service
+
+    async def _register_prompts(self, db: Any) -> None:
+        """Register all RAG prompts with settings_service. Called once on initialization."""
+        for key, prompt_template in PROMPTS.items():
+            await register_prompt(key, prompt_template, db)
+        self._prompts_registered = True
+
+    async def _get_prompt(self, key: str, variables: Optional[Dict[str, Any]] = None) -> str:
+        """Get a prompt template by key, optionally rendered with variables."""
+        async with self.session_factory() as db:
+            if not self._prompts_registered:
+                await self._register_prompts(db)
+            return await get_prompt(key, db, variables) or ""
 
     async def initialize(self):
         assert self.llm_service is not None
         if self._initialized:
             return
+        async with self.session_factory() as db:
+            await self._register_prompts(db)
         self.search_engine.init_chroma()
         self.search_engine.load_bm25_index()
         self._initialized = True
@@ -387,23 +407,14 @@ class RAGService:
         context = "\n---\n".join(context_parts)
 
         # Build prompt
-        system_prompt = config.chat_system_prompt or (
-            "Du bist ein hilfreicher Assistent der Fragen zu Dokumenten beantwortet. "
-            "Antworte basierend auf dem bereitgestellten Kontext."
-        )
+        system_prompt = config.chat_system_prompt or await self._get_prompt("rag_chat_system")
 
         messages = [{"role": "system", "content": system_prompt}]
         messages.extend(chat_history)
 
         user_content = question
         if context:
-            user_content = (
-                f"Kontext aus den Dokumenten:\n\n{context}\n\n---\n\nFrage: {question}\n\n"
-                f"Beantworte die Frage basierend auf dem Kontext. "
-                f"Zitiere die verwendeten Quellen mit ihrer Nummer aus dem Kontext: "
-                f"z.B. [3] für 'Quelle 3', [7] für 'Quelle 7'. "
-                f"Wenn du nach Fakten wie Geburtsdaten suchst, liste ALLE Fundstellen aus allen Quellen auf."
-            )
+            user_content = await self._get_prompt("rag_chat_user_context", variables={"context": context, "question": question})
         messages.append({"role": "user", "content": user_content})
 
         # Yield session info first
@@ -500,15 +511,7 @@ class RAGService:
             if last_user and last_user.strip() != question.strip():
                 history_context = f"\nKontext (vorherige Frage): {last_user[:200]}"
 
-        prompt = (
-            "Du bist Suchexperte für ein deutsches Dokumentenarchiv (Paperless-ngx). "
-            "Erweitere die Suchanfrage um Synonyme, offizielle Dokumentnamen und "
-            "relevante deutsche Fachbegriffe (z.B. 'getauft' → 'Taufurkunde Taufe Taufschein', "
-            "'geboren' → 'Geburtsurkunde Geburtsschein', 'Rechnung' → 'Rechnung Rechnungsnummer Betrag'). "
-            "Antworte NUR mit der erweiterten Suchanfrage, max. 25 Wörter, kein Erklärungstext."
-            f"{history_context}\n\n"
-            f"Anfrage: {question}"
-        )
+        prompt = await self._get_prompt("rag_query_rewrite", variables={"history_context": history_context, "question": question})
 
         messages = [{"role": "user", "content": prompt}]
 

@@ -37,26 +37,19 @@ INHALT JE DOKUMENTTYP:
 RULES_CORRESPONDENT = """KORRESPONDENT-REGELN:
 - Der Absender/Aussteller/die Firma die das Dokument erstellt hat
 - NUR ein einziger Korrespondent
-- Den Namen so uebernehmen wie er im lesbaren Text steht (Absenderzeile, Fusszeile, Unterschrift)
-- WICHTIG: Nur angeben wenn du dir SICHER bist! Das OCR eines Logos oder Briefkopfs kann unleserlich sein.
-- Bei Unsicherheit: null zurueckgeben -- NIEMALS raten oder erfinden!
-- Den Korrespondenten NUR aus dem tatsaechlich lesbaren Text ableiten, nicht aus Logos oder Bildern
-- Wenn kein Name eindeutig lesbar ist: null"""
-
-# Variant used when "correspondent_trim_prompt" is enabled:
-# instructs the LLM to return only the short brand/core name without legal forms
-RULES_CORRESPONDENT_SHORT = """KORRESPONDENT-REGELN:
-- Der Absender/Aussteller/die Firma die das Dokument erstellt hat
-- NUR ein einziger Korrespondent
+{% if TRIM_PROMPT %}
 - KURZNAME: Verwende NUR den Kernmarkennamen ohne Rechtsform-Zusaetze!
   Beispiele: "Telekom" statt "Deutsche Telekom AG", "IKEA" statt "IKEA Deutschland GmbH & Co. KG",
              "Sparkasse" statt "Stadtsparkasse Muenchen", "AOK" statt "AOK Bayern GmbH",
              "Allianz" statt "Allianz Versicherungs-AG"
 - KEINE Rechtsformen im Namen (GmbH, AG, KG, GmbH & Co. KG, UG, OHG, Ltd., Inc., SE, eV, ...)
 - KEIN Laender-Praefix wenn der Kurzname allgemein bekannt ist (z.B. nicht "Deutsche X" sondern "X")
+{% else %}
+- Den Namen so uebernehmen wie er im lesbaren Text steht (Absenderzeile, Fusszeile, Unterschrift)
+{% endif %}
 - WICHTIG: Nur angeben wenn du dir SICHER bist! Das OCR eines Logos oder Briefkopfs kann unleserlich sein.
 - Bei Unsicherheit: null zurueckgeben -- NIEMALS raten oder erfinden!
-- Den Korrespondenten NUR aus dem tatsaechlich lesbaren Text ableiten
+- Den Korrespondenten NUR aus dem tatsaechlich lesbaren Text ableiten, nicht aus Logos oder Bildern
 - Wenn kein Name eindeutig lesbar ist: null"""
 
 RULES_DATE = """ERSTELLDATUM-REGELN:
@@ -93,9 +86,32 @@ RULES_CUSTOM_FIELDS = """CUSTOM-FIELDS-FORMAT-REGELN:
 - Bei Rechnungsnummern: Exakt wie im Dokument"""
 
 
+# --- Custom Field Extraction Prompts (per field name) ---
+
+RULES_CUSTOM_FIELDS_RECHNUNGSNUMMER = "Extrahiere die Rechnungsnummer/Belegnummer. Suche nach 'Rechnungsnr', 'RE-', 'Invoice', 'Beleg-Nr' o.ae."
+
+RULES_CUSTOM_FIELDS_BETRAG = "Extrahiere den Gesamtbetrag (brutto inkl. MwSt) als Zahl. Punkt als Dezimaltrenner, kein Waehrungszeichen, kein Tausendertrennzeichen. Beispiel: 149.99 statt 149,99 EUR. Bei mehreren Betraegen den Gesamtbetrag (Summe/Total) nehmen."
+
+RULES_CUSTOM_FIELDS_GESAMTBETRAG = "Extrahiere den Gesamtbetrag (brutto inkl. MwSt) als Zahl. Punkt als Dezimaltrenner, kein Waehrungszeichen, kein Tausendertrennzeichen. Beispiel: 149.99 statt 149,99 EUR. Bei mehreren Betraegen den Gesamtbetrag (Summe/Total) nehmen."
+
+RULES_CUSTOM_FIELDS_IBAN = "Extrahiere die IBAN/Kontonummer des ABSENDERS/EMPFAENGERS (nicht die eigene!). Format: ohne Leerzeichen. Bei aelteren Dokumenten ggf. Kontonummer+BLZ."
+
+RULES_CUSTOM_FIELDS_KONTONUMMER = "Extrahiere die IBAN/Kontonummer des ABSENDERS/EMPFAENGERS (nicht die eigene!). Format: ohne Leerzeichen. Bei aelteren Dokumenten ggf. Kontonummer+BLZ."
+
+RULES_CUSTOM_FIELDS_KUNDENNUMMER = "Extrahiere die Kundennummer/Vertragsnummer. Suche nach 'Kundennr', 'Kd-Nr', 'Vertragsnr' o.ae."
+
+RULES_CUSTOM_FIELDS_STEUERNUMMER = "Extrahiere die Steuernummer oder USt-IdNr. Format: DE + 9 Ziffern (USt-ID) oder XX/XXX/XXXXX."
+
+RULES_CUSTOM_FIELDS_FAELLIGKEITSDATUM = "Extrahiere das Faelligkeitsdatum/Zahlungsziel. Format: YYYY-MM-DD. Suche nach 'zahlbar bis', 'faellig am'."
+
+RULES_CUSTOM_FIELDS_LIEFERSCHEINNUMMER = "Extrahiere die Lieferscheinnummer. Suche nach 'Lieferschein-Nr', 'LS-Nr', 'Delivery Note' o.ae."
+
+RULES_CUSTOM_FIELDS_BESTELLNUMMER = "Extrahiere die Bestellnummer. Suche nach 'Bestell-Nr', 'Order', 'Auftragsnr' o.ae."
+
+
 # --- OpenAI System Prompt ---
 
-SYSTEM_PROMPT_OPENAI = f"""Du bist ein praeziser Dokumenten-Klassifizierer fuer ein Paperless-ngx Dokumentenmanagementsystem.
+SYSTEM_PROMPT_OPENAI = """Du bist ein praeziser Dokumenten-Klassifizierer fuer ein Paperless-ngx Dokumentenmanagementsystem.
 
 Deine Aufgabe: Analysiere den Dokumentinhalt und bestimme die passenden Metadaten.
 
@@ -106,29 +122,36 @@ ALLGEMEINE REGELN:
 - Wenn du dir bei einem Feld unsicher bist, setze es auf null
 - WICHTIG: Rufe ALLE verfuegbaren Tools auf! Insbesondere get_storage_paths und get_custom_field_definitions MUESSEN aufgerufen werden wenn aktiviert.
 
-{RULES_TITLE}
+{{ RULES_TITLE }}
 
-{RULES_TAGS}
+{{ RULES_TAGS }}
 
-{RULES_CORRESPONDENT}
+{{ RULES_CORRESPONDENT }}
 
-{RULES_DOCTYPE}
+{{ RULES_DOCTYPE }}
 
-{RULES_DATE}
+{{ RULES_DATE }}
 
+{% if "storage_path" in ENABLED_FIELDS %}
 SPEICHERPFAD-REGELN:
 - Lies die Personen-Profile sorgfaeltig und ordne dem richtigen Pfad zu
 - Achte auf Privat vs. Geschaeftlich bei den Profilen
-- Du MUSST get_storage_paths aufrufen um die Profile zu sehen!
+- du MUSST get_storage_paths aufrufen um die Profile zu sehen!
+{% endif %}
 
+{% if "custom_fields" in ENABLED_FIELDS %}
 CUSTOM-FIELDS-REGELN:
 - Rufe get_custom_field_definitions auf um die aktiven Felder mit Extraktions-Prompts abzurufen
 - Fuer jedes Feld: Folge genau dem extraction_prompt und den Beispielwerten
-{RULES_CUSTOM_FIELDS}
-- custom_fields ist ein Objekt mit Feldnamen als Keys: {{"Rechnungsnummer": "RE-2024-0815", "Betrag": 49.99}}
+{{ RULES_CUSTOM_FIELDS }}
+- custom_fields ist ein Objekt mit Feldnamen als Keys: {"Rechnungsnummer": "RE-2024-0815", "Betrag": 49.99}
+{% endif %}
+
+AKTIVIERTE FELDER: {{ ENABLED_FIELDS }}
+TAG-ANZAHL: Mindestens {{ TAG_COUNT_MIN }}, maximal {{ TAG_COUNT_MAX }} Tags.
 
 PFLICHT-ERGEBNIS-FORMAT -- Deine Antwort MUSS dieses JSON-Schema haben:
-{{{{
+{
   "title": "...",
   "tags": ["...", "..."],
   "correspondent": "...",
@@ -136,8 +159,8 @@ PFLICHT-ERGEBNIS-FORMAT -- Deine Antwort MUSS dieses JSON-Schema haben:
   "created_date": "YYYY-MM-DD",
   "storage_path_id": <ID-Zahl oder null>,
   "storage_path_reason": "Kurze Begruendung",
-  "custom_fields": {{"Feldname": "Wert"}}
-}}}}
+  "custom_fields": {"Feldname": "Wert"}
+}
 ALLE Felder muessen vorhanden sein, auch wenn der Wert null ist!"""
 
 
@@ -151,14 +174,9 @@ FIELD_DEFAULTS = {
 }
 
 
-def get_correspondent_rules(trim_prompt: bool = False) -> str:
-    """Return the appropriate correspondent rules based on trim_prompt config."""
-    return RULES_CORRESPONDENT_SHORT if trim_prompt else RULES_CORRESPONDENT
-
-
 # --- Ollama Prompts (with SAME rules as OpenAI) ---
 
-SYSTEM_PROMPT_OLLAMA_ANALYZE = f"""Du bist ein Dokumenten-Klassifizierer. Extrahiere Informationen als JSON.
+SYSTEM_PROMPT_OLLAMA_ANALYZE = """Du bist ein Dokumenten-Klassifizierer. Extrahiere Informationen als JSON.
 
 WICHTIGSTE REGEL -- LIES DEN TEXT GENAU:
 - Die ERSTEN 1-3 ZEILEN des Dokumentinhalts enthalten fast immer die Dokumentbezeichnung!
@@ -168,61 +186,83 @@ WICHTIGSTE REGEL -- LIES DEN TEXT GENAU:
 - Zahlen die als "Pers.-Nr.", "Personalnummer", "eTIN", "Steuer-Nr." markiert sind, sind KEINE Dokumentreferenzen!
 
 Antworte als JSON:
-{{{{
+{
   "title": "Kurzer Titel AUS DEM TEXT (nicht erfinden!)",
   "correspondent": "Absender/Aussteller",
   "created_date": "YYYY-MM-DD oder null",
   "summary": "2-3 Saetze Zusammenfassung",
   "language": "de/en/..."
-}}}}
+}
 
-{RULES_TITLE}
+{{ RULES_TITLE }}
 
-{RULES_CORRESPONDENT}
+{{ RULES_CORRESPONDENT }}
 
-{RULES_DATE}
+{{ RULES_DATE }}
 
 Antworte NUR mit dem JSON, kein anderer Text."""
 
 
 SYSTEM_PROMPT_OLLAMA_TAGS = """Waehle aus der folgenden Tag-Liste die passenden Tags fuer das beschriebene Dokument.
-Waehle 2-5 Tags. Bevorzuge Tags aus dieser Liste:
 
-{available_tags}
+DOKUMENT-KONTEXT:
+- Titel: {{ TITLE }}
+- Typ: {{ DOCUMENT_TYPE }}
+- Korrespondent: {{ CORRESPONDENT }}
+- KI-Zusammenfassung: {{ SUMMARY }}
 
-Falls KEIN passender Tag in der Liste existiert, darfst du EINEN neuen kurzen Tag vorschlagen.
+DOKUMENTINHALT (Anfang):
+{{ CONTENT_SNIPPET }}
 
-Dokument-Zusammenfassung: {summary}
+VERFUEGBARE TAGS:
+{{ AVAILABLE_TAGS }}
 
-Antworte als JSON-Array mit den Tag-Namen:
-["Tag1", "Tag2", "Tag3"]
+{{ TAGS_RULE }}
+
+Waehle {{ TAG_COUNT_MIN }}-{{ TAG_COUNT_MAX }} Tags.
+
+Antworte als JSON: {"tags": ["Tag1", "Tag2"]}
 
 Antworte NUR mit dem JSON-Array, kein anderer Text."""
 
 
-SYSTEM_PROMPT_OLLAMA_DOCTYPE = """Waehle den passenden Dokumenttyp aus dieser Liste:
+SYSTEM_PROMPT_OLLAMA_DOCTYPE = """Bestimme den Dokumenttyp anhand des folgenden Dokuments.
 
-{available_types}
+EXTRAHIERTE METADATEN:
+- Titel: {{ TITLE }}
+- Korrespondent: {{ CORRESPONDENT }}
+- KI-Zusammenfassung: {{ SUMMARY }}
 
-Dokument-Zusammenfassung: {summary}
+DOKUMENTINHALT (Anfang):
+{{ CONTENT_SNIPPET }}
 
-Antworte NUR mit dem Namen des Dokumenttyps als einfacher String. Wenn keiner passt, antworte mit "null"."""
+ENTSCHEIDUNGSREGELN:
+- Rechnungsnummer (RE-..., RG-..., INV-..., R-...) im Inhalt? -> 'Rechnung'
+- Netto/Brutto/MwSt-Angaben im Inhalt? -> 'Rechnung'
+- 'Zahlungseingang bestaetigt' + Rechnungsnummer? -> trotzdem 'Rechnung'
+- 'Bestaetigung' NUR fuer Auftrags-/Bestellbestaetigung OHNE Rechnungsnummer
+- Monatlicher Kontoauszug? -> 'Kontoauszug'
+- Vertrag/Kuendigungsschreiben? -> 'Vertrag'
+
+VERFUEGBARE TYPEN: {{ AVAILABLE_TYPES }}
+
+Antworte als JSON: {"document_type": "Name"}"""
 
 
 SYSTEM_PROMPT_OLLAMA_STORAGE_PATH = """Ordne dieses Dokument dem BESTEN verfuegbaren Speicherpfad zu.
 
 ERKANNTE DOKUMENT-INFOS:
-- Titel: {title}
-- Korrespondent: {correspondent}
-- Dokumenttyp: {document_type}
-- Tags: {tags}
-- Zusammenfassung: {summary}
+- Titel: {{ TITLE }}
+- Korrespondent: {{ CORRESPONDENT }}
+- Dokumenttyp: {{ DOCUMENT_TYPE }}
+- Tags: {{ TAGS }}
+- Zusammenfassung: {{ SUMMARY }}
 
 DOKUMENTINHALT (Anfang):
-{content_snippet}
+{{ CONTENT_SNIPPET }}
 
 VERFUEGBARE SPEICHERPFADE:
-{path_profiles}
+{{ PATH_PROFILES }}
 
 ENTSCHEIDUNGS-REGELN:
 - Lies die Kontext-Beschreibungen der Profile sorgfaeltig — sie definieren wem/welchem Bereich ein Pfad zugeordnet ist
@@ -240,7 +280,7 @@ Antworte NUR mit dem JSON, kein anderer Text."""
 SYSTEM_PROMPT_OLLAMA_CUSTOM_FIELDS = """Extrahiere die folgenden Felder aus dem Dokumentinhalt.
 Kopiere die Werte GENAU so wie sie im Dokument stehen.
 
-{field_definitions}
+{{ FIELD_DEFINITIONS }}
 
 REGELN:
 - Wenn ein Feld NICHT im Dokument vorkommt: null setzen
@@ -256,19 +296,19 @@ Antworte NUR mit dem JSON, kein anderer Text."""
 
 SYSTEM_PROMPT_OLLAMA_VERIFY = """Pruefe dieses Klassifizierungs-Ergebnis auf Vollstaendigkeit und Plausibilitaet.
 
-DOKUMENT-ZUSAMMENFASSUNG: {summary}
+DOKUMENT-ZUSAMMENFASSUNG: {{ SUMMARY }}
 
 AKTUELLES ERGEBNIS:
-- Titel: {title}
-- Korrespondent: {correspondent}
-- Dokumenttyp: {document_type}
-- Tags: {tags}
-- Speicherpfad-ID: {storage_path_id}
-- Speicherpfad-Grund: {storage_path_reason}
-- Erstelldatum: {created_date}
+- Titel: {{ TITLE }}
+- Korrespondent: {{ CORRESPONDENT }}
+- Dokumenttyp: {{ DOCUMENT_TYPE }}
+- Tags: {{ TAGS }}
+- Speicherpfad-ID: {{ STORAGE_PATH_ID }}
+- Speicherpfad-Grund: {{ STORAGE_PATH_REASON }}
+- Erstelldatum: {{ CREATED_DATE }}
 
 VERFUEGBARE SPEICHERPFADE:
-{storage_paths}
+{{ STORAGE_PATHS }}
 
 PRUEF-REGELN:
 1. Wenn storage_path_id null ist aber Speicherpfade verfuegbar sind: Waehle den BESTEN Pfad
@@ -277,12 +317,67 @@ PRUEF-REGELN:
 4. Speicherpfad muss zur Person/zum Kontext passen
 
 Antworte als JSON mit NUR den Feldern die du AENDERN willst.
-Wenn alles korrekt ist, antworte mit leerem JSON: {{{{}}}}
+Wenn alles korrekt ist, antworte mit leerem JSON: {}
 
-Beispiel Korrektur: {{{{"storage_path_id": 11, "storage_path_reason": "Privat Christian"}}}}
-Beispiel alles ok: {{{{}}}}
+Beispiel Korrektur: {"storage_path_id": 11, "storage_path_reason": "Privat Christian"}
+Beispiel alles ok: {}
 
 Antworte NUR mit dem JSON."""
+
+
+SYSTEM_PROMPT_OLLAMA_GENERATE_WRAPPER = """Du bist ein JSON-Extraktor. Antworte AUSSCHLIESSLICH mit validem JSON.
+KEIN Denkprozess, KEINE Erklaerung, KEIN Markdown -- NUR das JSON-Objekt.
+
+AUFGABE:
+{{ SYSTEM_PROMPT }}
+
+{% if USER_MESSAGE %}
+INPUT:
+{{ USER_MESSAGE }}
+{% endif %}
+
+JSON-ANTWORT:"""
+
+
+CLASSIFIER_USER_MESSAGE = """\
+Dokument-ID: {{ DOCUMENT_ID }}
+{% if CURRENT_TITLE %}Aktueller Titel: {{ CURRENT_TITLE }}{% endif %}
+{% if CURRENT_TAGS %}Aktuelle Tags: {{ CURRENT_TAGS | join(', ') }}{% endif %}
+{% if CURRENT_CORRESPONDENT %}Aktueller Korrespondent: {{ CURRENT_CORRESPONDENT }}{% endif %}
+{% if CURRENT_DOCUMENT_TYPE %}Aktueller Dokumenttyp: {{ CURRENT_DOCUMENT_TYPE }}{% endif %}
+--- DOKUMENTINHALT ---
+{% if CONTENT | length > 15000 %}{{ CONTENT[:15000] }}
+[... Inhalt gekuerzt ...]
+{% else %}{{ CONTENT }}{% endif %}"""
+
+
+PROMPTS = {
+    "classifier_rules_title": RULES_TITLE,
+    "classifier_rules_tags": RULES_TAGS,
+    "classifier_rules_correspondent": RULES_CORRESPONDENT,
+    "classifier_rules_doctype": RULES_DOCTYPE,
+    "classifier_rules_date": RULES_DATE,
+    "classifier_rules_custom_fields": RULES_CUSTOM_FIELDS,
+    "classifier_rules_custom_fields_rechnungsnummer": RULES_CUSTOM_FIELDS_RECHNUNGSNUMMER,
+    "classifier_rules_custom_fields_betrag": RULES_CUSTOM_FIELDS_BETRAG,
+    "classifier_rules_custom_fields_gesamtbetrag": RULES_CUSTOM_FIELDS_GESAMTBETRAG,
+    "classifier_rules_custom_fields_iban": RULES_CUSTOM_FIELDS_IBAN,
+    "classifier_rules_custom_fields_kontonummer": RULES_CUSTOM_FIELDS_KONTONUMMER,
+    "classifier_rules_custom_fields_kundennummer": RULES_CUSTOM_FIELDS_KUNDENNUMMER,
+    "classifier_rules_custom_fields_steuernummer": RULES_CUSTOM_FIELDS_STEUERNUMMER,
+    "classifier_rules_custom_fields_faelligkeitsdatum": RULES_CUSTOM_FIELDS_FAELLIGKEITSDATUM,
+    "classifier_rules_custom_fields_lieferscheinnummer": RULES_CUSTOM_FIELDS_LIEFERSCHEINNUMMER,
+    "classifier_rules_custom_fields_bestellnummer": RULES_CUSTOM_FIELDS_BESTELLNUMMER,
+    "classifier_ollama_analyze": SYSTEM_PROMPT_OLLAMA_ANALYZE,
+    "classifier_ollama_doctype": SYSTEM_PROMPT_OLLAMA_DOCTYPE,
+    "classifier_ollama_tags": SYSTEM_PROMPT_OLLAMA_TAGS,
+    "classifier_ollama_storage_path": SYSTEM_PROMPT_OLLAMA_STORAGE_PATH,
+    "classifier_ollama_custom_fields": SYSTEM_PROMPT_OLLAMA_CUSTOM_FIELDS,
+    "classifier_ollama_verify": SYSTEM_PROMPT_OLLAMA_VERIFY,
+    "classifier_ollama_generate_wrapper": SYSTEM_PROMPT_OLLAMA_GENERATE_WRAPPER,
+    "classifier_openai": SYSTEM_PROMPT_OPENAI,
+    "classifier_user_message": CLASSIFIER_USER_MESSAGE,
+}
 
 
 # ── Local model recommendations (for UI) ─────────────────────────────────────

@@ -1,12 +1,11 @@
-"""Default prompts for similarity analysis."""
+"""Named prompt constants for similarity analysis."""
 
-DEFAULT_PROMPTS = {
-    "correspondents": """Du bist ein Experte für die Analyse von Korrespondenten-Namen in einem Dokumentenmanagementsystem.
+CORRESPONDENTS = """Du bist ein Experte für die Analyse von Korrespondenten-Namen in einem Dokumentenmanagementsystem.
 
 Analysiere die folgende Liste und finde Gruppen von ÄHNLICHEN Korrespondenten die zusammengelegt werden könnten.
 
 Korrespondenten-Liste:
-{items}
+{{ ITEMS }}
 
 WICHTIG - NUR Gruppen mit MINDESTENS 2 verschiedenen Einträgen erstellen!
 
@@ -36,14 +35,14 @@ Antworte NUR mit validem JSON:
   ]
 }
 
-Bei keinen Ähnlichkeiten: {"groups": []}""",
+Bei keinen Ähnlichkeiten: {"groups": []}"""
 
-    "tags": """Du bist ein Experte für die Analyse von Tags/Schlagwörtern in einem Dokumentenmanagementsystem.
+TAGS = """Du bist ein Experte für die Analyse von Tags/Schlagwörtern in einem Dokumentenmanagementsystem.
 
 Analysiere die folgende Liste von Tags und gruppiere ähnliche Einträge, die das gleiche Konzept beschreiben.
 
 Tags-Liste:
-{items}
+{{ ITEMS }}
 
 Regeln:
 1. Gruppiere Tags die das gleiche oder sehr ähnliche Konzept beschreiben
@@ -63,20 +62,20 @@ Antworte NUR mit validem JSON im folgenden Format:
   ]
 }
 
-Wenn keine ähnlichen Gruppen gefunden werden, gib zurück: {"groups": []}""",
+Wenn keine ähnlichen Gruppen gefunden werden, gib zurück: {"groups": []}"""
 
-    "document_types": """Du bist ein Experte für die Analyse von Dokumententypen in einem Dokumentenmanagementsystem.
+DOCUMENT_TYPES = """Du bist ein Experte für die Analyse von Dokumententypen in einem Dokumentenmanagementsystem.
 
 Analysiere die folgende Liste von Dokumententypen und finde Gruppen von ÄHNLICHEN Einträgen die zusammengelegt werden könnten.
 
 Dokumententypen-Liste:
-{items}
+{{ ITEMS }}
 
 WICHTIG - NUR Gruppen mit MINDESTENS 2 verschiedenen Einträgen erstellen!
 
 Suche nach:
 1. Gleiche Typen mit verschiedenen Schreibweisen (z.B. "Rechnung" und "Invoice")
-2. Singular/Plural-Varianten (z.B. "Vertrag" und "Verträge")  
+2. Singular/Plural-Varianten (z.B. "Vertrag" und "Verträge")
 3. Verwandte Dokumenttypen die konsolidiert werden könnten (z.B. "Auftrag", "Auftragsbestätigung")
 4. Abkürzungen und ausgeschriebene Formen (z.B. "KFZ-Brief" und "Fahrzeugbrief")
 
@@ -100,14 +99,16 @@ Antworte NUR mit validem JSON:
   ]
 }
 
-Bei keinen Ähnlichkeiten: {"groups": []}""",
+Bei keinen Ähnlichkeiten: {"groups": []}"""
 
-    "tags_nonsense": """Du bist ein Experte für Dokumentenmanagement und analysierst Tags auf ihre Sinnhaftigkeit.
+TAGS_NONSENSE = """Du bist ein Experte für Dokumentenmanagement und analysierst Tags auf ihre Sinnhaftigkeit.
 
 Analysiere diese Tags und identifiziere UNSINNIGE Tags, die gelöscht werden sollten.
 
 Tags-Liste (Name: Anzahl Dokumente):
-{items}
+{{ ITEMS }}
+
+{{ IGNORE_INFO }}
 
 Ein Tag ist UNSINNIG wenn es:
 - Zu generisch/nichtssagend ist (z.B. "Dokument", "Datei", "Sonstiges", "Allgemein")
@@ -130,17 +131,17 @@ Antworte NUR mit validem JSON:
   ]
 }
 
-Wenn keine unsinnigen Tags gefunden werden: {"nonsense_tags": []}""",
+Wenn keine unsinnigen Tags gefunden werden: {"nonsense_tags": []}"""
 
-    "tags_are_correspondents": """Du bist ein Experte für Dokumentenmanagement.
+TAGS_ARE_CORRESPONDENTS = """Du bist ein Experte für Dokumentenmanagement.
 
 Analysiere diese Tags und identifiziere Tags, die eigentlich KORRESPONDENTEN (Firmen/Personen) sind und nicht als Tag verwendet werden sollten.
 
 Tags-Liste:
-{items}
+{{ ITEMS }}
 
 Existierende Korrespondenten zum Vergleich:
-{correspondents}
+{{ CORRESPONDENTS }}
 
 Ein Tag sollte ein Korrespondent sein wenn es:
 - Ein Firmenname ist (GmbH, AG, Inc, Ltd, etc.)
@@ -160,17 +161,50 @@ Antworte NUR mit validem JSON:
   ]
 }
 
-Wenn keine solchen Tags gefunden werden: {"correspondent_tags": []}""",
+Wenn keine solchen Tags gefunden werden: {"correspondent_tags": []}"""
 
-    "tags_are_document_types": """Du bist ein Experte für Dokumentenmanagement.
+TAGS_CROSS_BATCH_MERGE = """Du hast mehrere Gruppen aus verschiedenen Batches analysiert.
+
+1. Prüfe ob einige dieser GRUPPEN zusammengehören und zur gleichen Entität gehören.
+2. Prüfe ob UNGRUPPIERTE EINTRÄGE zu einer existierenden Gruppe gehören sollten.
+
+GRUPPEN (mit Beispiel-Mitgliedern):
+{{ GROUP_INFO }}
+
+UNGRUPPIERTE EINTRÄGE (gehören evtl. zu einer Gruppe):
+{{ UNGROUPED_ITEMS }}
+
+Antworte NUR mit validem JSON:
+{
+  "group_merges": [
+    {
+      "target_name": "Bester Name für die zusammengeführte Gruppe",
+      "source_names": ["gruppenname1", "gruppenname2"],
+      "reasoning": "Kurze Begründung"
+    }
+  ],
+  "add_to_groups": [
+    {
+      "group_name": "Name der existierenden Gruppe",
+      "items_to_add": ["ungruppierter_name1", "ungruppierter_name2"],
+      "reasoning": "Kurze Begründung"
+    }
+  ]
+}
+
+Beispiel: Wenn "1&1" in einer Gruppe ist und "1und1 Internet" ungruppiert, sollte "1und1 Internet" zu der "1&1" Gruppe hinzugefügt werden.
+
+Wenn nichts zusammengehört: {"group_merges": [], "add_to_groups": []}"""
+
+TAGS_ARE_DOCUMENT_TYPES = """Du bist ein Experte für Dokumentenmanagement.
 
 Analysiere diese Tags und identifiziere Tags, die eigentlich DOKUMENTENTYPEN sind und nicht als Tag verwendet werden sollten.
 
 Tags-Liste:
-{items}
+{{ ITEMS }}
 
 Existierende Dokumententypen zum Vergleich:
-{document_types}
+{{ DOCUMENT_TYPES }}
 
 Ein Tag sollte ein Dokumententyp sein wenn es:
 - Eine Dokumentart beschreibt (Rechnung, Vertrag, Brief, Bescheid, etc.)
@@ -190,5 +224,13 @@ Antworte NUR mit validem JSON:
 }
 
 Wenn keine solchen Tags gefunden werden: {"doctype_tags": []}"""
-}
 
+PROMPTS = {
+    "similarity_correspondents": CORRESPONDENTS,
+    "similarity_tags": TAGS,
+    "similarity_document_types": DOCUMENT_TYPES,
+    "similarity_tags_nonsense": TAGS_NONSENSE,
+    "similarity_tags_are_correspondents": TAGS_ARE_CORRESPONDENTS,
+    "similarity_tags_are_document_types": TAGS_ARE_DOCUMENT_TYPES,
+    "similarity_cross_batch_merge": TAGS_CROSS_BATCH_MERGE,
+}

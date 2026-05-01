@@ -4,7 +4,7 @@ Houses key-value helpers, app settings aggregation/update, and prompt loading
 with default insertion.  The router stays thin: validate → call service → return.
 """
 
-from typing import Optional
+from typing import Optional, Dict, Any
 
 from sqlalchemy import select, delete as sa_delete
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -21,7 +21,6 @@ from app.models.settings_model import (
     LLM_KEY_CLASSIFIER_PROVIDER,
     LLM_KEY_OCR_MODEL,
 )
-from app.prompts.default_prompts import DEFAULT_PROMPTS
 
 
 # ── Key-Value Setting Helpers (LLM-08) ─────────────────────────────────────────
@@ -141,26 +140,9 @@ async def update_app_settings(
 # ── Prompts ─────────────────────────────────────────────────────────────────────
 
 async def get_prompts(db: AsyncSession) -> list[dict]:
-    """Load all prompts, inserting missing defaults from DEFAULT_PROMPTS."""
+    """Load all prompts from database. Services register their prompts on startup."""
     result = await db.execute(select(CustomPrompt).order_by(CustomPrompt.entity_type))
     prompts = result.scalars().all()
-
-    existing_types = {p.entity_type for p in prompts}
-
-    # Seed missing defaults
-    for entity_type, template in DEFAULT_PROMPTS.items():
-        if entity_type not in existing_types:
-            prompt = CustomPrompt(
-                entity_type=entity_type,
-                prompt_template=template,
-                is_active=True,
-            )
-            db.add(prompt)
-
-    if len(existing_types) < len(DEFAULT_PROMPTS):
-        await db.commit()
-        result = await db.execute(select(CustomPrompt).order_by(CustomPrompt.entity_type))
-        prompts = result.scalars().all()
 
     return [
         {
@@ -327,20 +309,84 @@ async def update_prompt(prompt_id: int, prompt_template: str, is_active: bool, d
         raise ValueError("Prompt not found")
     prompt.prompt_template = prompt_template
     prompt.is_active = is_active
+    prompt.modified = True
+    await db.commit()
+    return {"success": True}
+
+
+async def save_prompt_by_key(entity_type: str, prompt_template: str, db: AsyncSession) -> dict:
+    """Insert or update a custom prompt by entity_type key."""
+    result = await db.execute(select(CustomPrompt).where(CustomPrompt.entity_type == entity_type))
+    prompt = result.scalar_one_or_none()
+    if prompt is None:
+        new_prompt = CustomPrompt(
+            entity_type=entity_type,
+            prompt_template=prompt_template,
+            is_active=True,
+            modified=True,
+        )
+        db.add(new_prompt)
+    else:
+        prompt.prompt_template = prompt_template
+        prompt.is_active = True
+        prompt.modified = True
     await db.commit()
     return {"success": True}
 
 
 async def reset_prompt(entity_type: str, db: AsyncSession) -> dict:
-    """Reset a prompt to its default."""
-    if entity_type not in DEFAULT_PROMPTS:
-        raise ValueError("Invalid entity type")
+    """Reset a prompt to its default by setting modified=False.
+
+    On next registration (service startup), the prompt will be updated from
+    the service's current source value.
+    """
     result = await db.execute(select(CustomPrompt).where(CustomPrompt.entity_type == entity_type))
     prompt = result.scalar_one_or_none()
     if prompt:
-        prompt.prompt_template = DEFAULT_PROMPTS[entity_type]
+        prompt.modified = False
         await db.commit()
-    return {"success": True, "prompt_template": DEFAULT_PROMPTS[entity_type]}
+    return {"success": True}
+
+
+async def get_prompt(key: str, db: AsyncSession, variables: Optional[Dict[str, Any]] = None) -> Optional[str]:
+    """Get a prompt template by entity type. Returns None if not found or not active.
+
+    If variables is provided and not empty, the template is rendered with Jinja2
+    before being returned.
+    """
+    from jinja2 import Template
+    result = await db.execute(
+        select(CustomPrompt).where(
+            CustomPrompt.entity_type == key,
+            CustomPrompt.is_active
+        )
+    )
+    prompt = result.scalar_one_or_none()
+    if not prompt:
+        return None
+    template_str = prompt.prompt_template
+    if variables:
+        return Template(template_str, autoescape=False).render(**variables)
+    return template_str
+
+
+async def register_prompt(key: str, prompt: str, db: AsyncSession) -> None:
+    """Register a prompt: insert if not exists, update if exists and not modified by user."""
+    result = await db.execute(select(CustomPrompt).where(CustomPrompt.entity_type == key))
+    existing = result.scalar_one_or_none()
+
+    if existing is None:
+        new_prompt = CustomPrompt(
+            entity_type=key,
+            prompt_template=prompt,
+            is_active=True,
+            modified=False,
+        )
+        db.add(new_prompt)
+        await db.commit()
+    elif not existing.modified:
+        existing.prompt_template = prompt
+        await db.commit()
 
 
 # ── Ignored Tags ─────────────────────────────────────────────────────────────

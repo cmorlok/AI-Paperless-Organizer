@@ -26,11 +26,11 @@ class TestPhase1Smoke:
         p = Path(__file__).parent.parent / "app" / "services" / "classifier" / "openai_provider.py"
         assert not p.exists(), f"openai_provider.py still exists at {p}"
 
-    def test_ollama_provider_deleted(self):
-        """LLM-06: ollama_provider.py must not exist in classifier."""
+    def test_litellm_provider_renamed(self):
+        """LLM-06: litellm_provider.py must not exist in classifier (renamed to per-provider files)."""
         from pathlib import Path
-        p = Path(__file__).parent.parent / "app" / "services" / "classifier" / "ollama_provider.py"
-        assert not p.exists(), f"ollama_provider.py still exists at {p}"
+        p = Path(__file__).parent.parent / "app" / "services" / "classifier" / "litellm_provider.py"
+        assert not p.exists(), f"litellm_provider.py still exists at {p}"
 
     def test_llm_service_importable(self):
         """LLM-01: llm service must be importable with core methods."""
@@ -89,7 +89,7 @@ class TestPhase1Smoke:
         print("PASS: All 5 routers importable")
 
     def test_classifier_service_importable(self):
-        """Classifier service must import without error (uses litellm_provider)."""
+        """Classifier service must import without error (uses tool_calling_provider, ollama_provider)."""
         from app.services.classifier.service import DocumentClassifierService
         assert DocumentClassifierService is not None
         print("PASS: DocumentClassifierService importable")

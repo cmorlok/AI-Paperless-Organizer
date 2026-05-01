@@ -20,15 +20,13 @@ from app.models.settings_model import (
     LLM_KEY_CLASSIFIER_PROVIDER,
     LLM_KEY_CLASSIFIER_MODEL,
 )
-from app.services.settings_service import get_setting
+from app.services.settings_service import get_setting, get_prompt, save_prompt_by_key
 from app.services.paperless import PaperlessClient
 from app.services.classifier.base_provider import (
     BaseClassifierProvider, ClassificationResult, DocumentContext,
 )
-from app.services.classifier.litellm_provider import (
-    LitellmToolCallingProvider,
-    LitellmOllamaProvider,
-)
+from app.services.classifier.tool_calling_provider import ToolCallingLlmProvider
+from app.services.classifier.ollama_provider import OllamaLlmProvider
 from app.services.classifier.tool_executor import ToolExecutor
 from app.services.classifier.state import AutoClassifyState
 from app.services.llm import LLMService
@@ -114,28 +112,6 @@ def _clean_title(title: str, created_date: str | None = None) -> str:
     return cleaned
 
 
-# ── Custom field type prompts & validation ─────────────────────────────────────
-FIELD_TYPE_PROMPTS = {
-    "rechnungsnummer": "Extrahiere die Rechnungsnummer/Belegnummer. Suche nach 'Rechnungsnr', 'RE-', 'Invoice', 'Beleg-Nr' o.ae.",
-    "betrag": "Extrahiere den Gesamtbetrag (brutto inkl. MwSt) als Zahl. Punkt als Dezimaltrenner, kein Waehrungszeichen, kein Tausendertrennzeichen. Beispiel: 149.99 statt 149,99 EUR. Bei mehreren Betraegen den Gesamtbetrag (Summe/Total) nehmen.",
-    "gesamtbetrag": "Extrahiere den Gesamtbetrag (brutto inkl. MwSt) als Zahl. Punkt als Dezimaltrenner, kein Waehrungszeichen, kein Tausendertrennzeichen. Beispiel: 149.99 statt 149,99 EUR. Bei mehreren Betraegen den Gesamtbetrag (Summe/Total) nehmen.",
-    "iban": "Extrahiere die IBAN/Kontonummer des ABSENDERS/EMPFAENGERS (nicht die eigene!). Format: ohne Leerzeichen. Bei aelteren Dokumenten ggf. Kontonummer+BLZ.",
-    "kontonummer": "Extrahiere die IBAN/Kontonummer des ABSENDERS/EMPFAENGERS (nicht die eigene!). Format: ohne Leerzeichen. Bei aelteren Dokumenten ggf. Kontonummer+BLZ.",
-    "kundennummer": "Extrahiere die Kundennummer/Vertragsnummer. Suche nach 'Kundennr', 'Kd-Nr', 'Vertragsnr' o.ae.",
-    "steuernummer": "Extrahiere die Steuernummer oder USt-IdNr. Format: DE + 9 Ziffern (USt-ID) oder XX/XXX/XXXXX.",
-    "faelligkeitsdatum": "Extrahiere das Faelligkeitsdatum/Zahlungsziel. Format: YYYY-MM-DD. Suche nach 'zahlbar bis', 'faellig am'.",
-    "lieferscheinnummer": "Extrahiere die Lieferscheinnummer. Suche nach 'Lieferschein-Nr', 'LS-Nr', 'Delivery Note' o.ae.",
-    "bestellnummer": "Extrahiere die Bestellnummer. Suche nach 'Bestell-Nr', 'Order', 'Auftragsnr' o.ae.",
-}
-
-FIELD_TYPE_VALIDATION = {
-    "iban": r"^[A-Z]{2}\d{2}[A-Z0-9]{4}\d{7}([A-Z0-9]?){0,16}$",
-    "betrag": r"^\d+(\.\d{1,2})?$",
-    "gesamtbetrag": r"^\d+(\.\d{1,2})?$",
-    "faelligkeitsdatum": r"^\d{4}-\d{2}-\d{2}$",
-}
-
-
 class DocumentClassifierService:
     """Orchestrates document classification using the configured provider."""
 
@@ -209,12 +185,6 @@ class DocumentClassifierService:
             "correspondent_behavior": cfg.correspondent_behavior,
             "review_mode": cfg.review_mode,
             "batch_size": cfg.batch_size,
-            "prompt_title": cfg.prompt_title or "",
-            "prompt_tags": cfg.prompt_tags or "",
-            "prompt_correspondent": cfg.prompt_correspondent or "",
-            "prompt_document_type": cfg.prompt_document_type or "",
-            "prompt_date": cfg.prompt_date or "",
-            "system_prompt": cfg.system_prompt,
             "excluded_tag_ids": cfg.excluded_tag_ids or [],
             "excluded_correspondent_ids": cfg.excluded_correspondent_ids or [],
             "excluded_document_type_ids": cfg.excluded_document_type_ids or [],
@@ -276,6 +246,8 @@ class DocumentClassifierService:
         assert self.llm_service is not None
         if self.session_factory is None:
             raise RuntimeError("No session_factory configured")
+        extraction_prompt = data.pop("extraction_prompt", None)
+        paperless_field_name = data.get("paperless_field_name", "")
         async with self.session_factory() as db:
             field_id = data.get("paperless_field_id")
             result = await db.execute(
@@ -294,6 +266,12 @@ class DocumentClassifierService:
 
             await db.commit()
             await db.refresh(mapping)
+
+            if extraction_prompt is not None:
+                slugified_name = re.sub(r"[^a-z0-9]+", "", paperless_field_name.lower())
+                prompt_key = f"classifier_rules_custom_fields_{slugified_name}"
+                await save_prompt_by_key(prompt_key, extraction_prompt, db)
+
             return mapping
 
     def _build_tool_executor(
@@ -309,6 +287,7 @@ class DocumentClassifierService:
             excluded_correspondent_ids=config.excluded_correspondent_ids or [],
             excluded_document_type_ids=config.excluded_document_type_ids or [],
             tags_ignore=config.tags_ignore or [],
+            session_factory=self.session_factory,
         )
 
     async def _get_llm_provider(self, provider_name: str) -> 'LLMProvider':
@@ -333,7 +312,6 @@ class DocumentClassifierService:
         if self.session_factory is None:
             raise ValueError("classifier_provider is not configured")
         # Try key-value store first
-        from app.services.settings_service import get_setting
         async with self.session_factory() as db:
             kv_provider = await get_setting(LLM_KEY_CLASSIFIER_PROVIDER, db)
             if kv_provider:
@@ -371,11 +349,11 @@ class DocumentClassifierService:
             model = model_override or ""
 
         if provider_name == "ollama":
-            return LitellmOllamaProvider(model=model, provider=provider_name, tool_executor=tool_executor, llm_service=self.llm_service)
+            return OllamaLlmProvider(model=model, provider=provider_name, tool_executor=tool_executor, llm_service=self.llm_service, session_factory=self.session_factory)
 
         from app.services.llm import PROVIDER_DISPLAY_NAMES
         label = PROVIDER_DISPLAY_NAMES.get(provider_name, provider_name.replace("_", " ").title())
-        return LitellmToolCallingProvider(model=model, provider=provider_name, tool_executor=tool_executor, provider_label=label, llm_service=self.llm_service)
+        return ToolCallingLlmProvider(model=model, provider=provider_name, tool_executor=tool_executor, provider_label=label, llm_service=self.llm_service, session_factory=self.session_factory)
 
     async def _get_active_classifier_provider_name(self) -> str:
         assert self.paperless is not None
@@ -395,12 +373,6 @@ class DocumentClassifierService:
             "tags_min": config.tags_min or 1,
             "tags_max": config.tags_max or 5,
             "correspondent_behavior": config.correspondent_behavior,
-            "prompt_title": config.prompt_title or "",
-            "prompt_tags": config.prompt_tags or "",
-            "prompt_correspondent": config.prompt_correspondent or "",
-            "prompt_document_type": config.prompt_document_type or "",
-            "prompt_date": config.prompt_date or "",
-            "system_prompt": config.system_prompt,
             "tags_ignore": config.tags_ignore or [],
             "storage_path_behavior": getattr(config, "storage_path_behavior", "always") or "always",
             "storage_path_override_names": getattr(config, "storage_path_override_names", ["Zuweisen"]) or ["Zuweisen"],
@@ -1423,33 +1395,38 @@ class DocumentClassifierService:
             })
         return result
 
-    async def get_custom_field_mappings_merged(
+    async def get_custom_field_settings(
         self, client: PaperlessClient,
     ) -> List[Dict[str, Any]]:
-        """Get all Paperless custom fields merged with saved mappings."""
+        """Get all Paperless custom fields merged with saved settings."""
+        if self.session_factory is None:
+            return []
         all_fields = await client.get_custom_fields(use_cache=True)
         saved_mappings = await self.get_custom_field_mappings()
         saved_by_id = {m.paperless_field_id: m for m in saved_mappings}
 
-        result = []
-        for field in all_fields:
-            fid = field.get("id")
-            mapping = saved_by_id.get(int(fid)) if fid is not None else None
-            field_type = field.get("data_type", "string")
-            auto_prompt = FIELD_TYPE_PROMPTS.get(field.get("name", "").lower(), "")
+        async with self.session_factory() as db:
+            result = []
+            for field in all_fields:
+                fid = field.get("id")
+                mapping = saved_by_id.get(int(fid)) if fid is not None else None
+                field_type = field.get("data_type", "string")
+                field_name = field.get("name", "")
+                slugified_name = re.sub(r"[^a-z0-9]+", "", field_name.lower())
+                prompt_key = f"classifier_rules_custom_fields_{slugified_name}"
+                extraction_prompt = await get_prompt(prompt_key, db)
 
-            result.append({
-                "id": mapping.id if mapping else None,
-                "paperless_field_id": fid,
-                "paperless_field_name": field.get("name", ""),
-                "paperless_field_type": field_type,
-                "enabled": mapping.enabled if mapping else False,
-                "extraction_prompt": mapping.extraction_prompt if mapping and mapping.extraction_prompt else auto_prompt,
-                "example_values": mapping.example_values if mapping else "",
-                "validation_regex": mapping.validation_regex if mapping else FIELD_TYPE_VALIDATION.get(field.get("name", "").lower(), ""),
-                "ignore_values": mapping.ignore_values if mapping else "",
-            })
-        return result
+                result.append({
+                    "id": mapping.id if mapping else None,
+                    "paperless_field_id": fid,
+                    "paperless_field_name": field_name,
+                    "paperless_field_type": field_type,
+                    "enabled": mapping.enabled if mapping else False,
+                    "extraction_prompt": extraction_prompt or "",
+                    "example_values": mapping.example_values if mapping else "",
+                    "ignore_values": mapping.ignore_values if mapping else "",
+                })
+            return result
 
     async def get_history(self, limit: int = 50) -> List[Dict[str, Any]]:
         """Get classification history including stored result_json for review."""

@@ -61,6 +61,24 @@ class OcrService:
         self.state: OcrState = state or OcrState()
         self.llm_service = llm_service
         self.session_factory = session_factory
+        self._prompts_registered = False
+
+    async def _register_prompts(self, db: Any) -> None:
+        """Register all OCR prompts with settings_service. Called once on first use."""
+        from app.services.ocr.prompts import PROMPTS
+        from app.services.settings_service import register_prompt
+        for key, prompt_template in PROMPTS.items():
+            await register_prompt(key, prompt_template, db)
+        self._prompts_registered = True
+
+    async def _get_prompt(self, key: str, variables: Optional[Dict[str, Any]] = None) -> str:
+        """Get a prompt template by key, optionally rendered with variables."""
+        from app.services.settings_service import get_prompt
+        assert self.session_factory is not None
+        async with self.session_factory() as db:
+            if not self._prompts_registered:
+                await self._register_prompts(db)
+            return await get_prompt(key, db, variables) or ""
 
     async def _get_provider(self) -> str:
         assert self.llm_service is not None
@@ -237,57 +255,21 @@ class OcrService:
                     return before
         return text
 
-    def _build_ocr_prompt(self, model: str, page_num: int = 0, total_pages: int = 0) -> str:
-        """Build model-specific OCR prompt.
-
-        Based on paperless-gpt's proven universal prompt as baseline.
-        Model-specific adjustments only where absolutely needed:
-        - deepseek-ocr: Minimal prompt (echoes anything longer)
-        - glm-ocr: Keyword format per official docs
-        - gemma3: Shorter version (echoes/repeats long prompts)
-        - minicpm-v / qwen (default): Full paperless-gpt style prompt
-        """
+    async def _build_ocr_prompt(self, model: str, page_num: int = 0, total_pages: int = 0) -> str:
+        """Build OCR prompt using unified template with model-specific conditionals."""
         name = (model or "").lower()
+        page_info = f" This is page {page_num} of {total_pages}." if page_num > 0 and total_pages > 0 else ""
 
-        # deepseek-ocr: ultra-minimal, NO <|grounding|> (that's for bounding boxes!)
         if "deepseek-ocr" in name:
-            return "OCR this document."
+            model_key = "deepseek"
+        elif "glm-ocr" in name or "glm_ocr" in name:
+            model_key = "glm"
+        elif "gemma3" in name or "gemma-3" in name:
+            model_key = "gemma3"
+        else:
+            model_key = "default"
 
-        # glm-ocr: keyword-based per official Ollama docs
-        if "glm-ocr" in name or "glm_ocr" in name:
-            return "Text Recognition:"
-
-        # gemma3: shorter prompt (echoes/repeats long prompts verbatim)
-        if "gemma3" in name or "gemma-3" in name:
-            prompt = (
-                "Just transcribe the text in this image. Preserve the formatting and layout. "
-                "Be thorough, continue until the bottom of the page. "
-                "Use markdown format but without a code block."
-            )
-            if page_num > 0 and total_pages > 0:
-                prompt += f" This is page {page_num} of {total_pages}."
-            return prompt
-
-        # Default: paperless-gpt proven prompt + German hints
-        parts = [
-            "Transcribe ALL text in this image EXACTLY as it appears – high quality OCR.",
-            "CRITICAL: Do NOT summarize, skip, or abbreviate any content. Continue until the very bottom of the page.",
-            "CRITICAL: Every single number, amount, percentage, account number, and code MUST be transcribed exactly.",
-            "For tables: transcribe each row completely, including all columns and values.",
-            "For checkboxes/tick boxes: write [ ] for unchecked and [X] for checked, followed by the label text.",
-            "For form fields: write the label followed by the filled-in value or a blank line if empty.",
-            "For structured forms (tax notices, invoices, bank statements): preserve every field label and its value.",
-            "Use markdown format without code blocks. Preserve the original layout as closely as possible.",
-        ]
-        if page_num > 0 and total_pages > 0:
-            parts.append(f"This is page {page_num} of {total_pages}.")
-        parts.append(
-            "The document is in German. "
-            "Pay special attention to: names, dates (DD.MM.YYYY), IBANs, BIC codes, "
-            "tax IDs (Steuernummer), amounts in EUR, account numbers, reference numbers, "
-            "and addresses. Transcribe every value exactly as printed – no rounding, no omitting."
-        )
-        return "\n".join(parts)
+        return await self._get_prompt("ocr_prompt", variables={"MODEL": model_key, "PAGE_INFO": page_info})
 
     @staticmethod
     def _clean_repetitions(text: str) -> str:
@@ -362,7 +344,7 @@ class OcrService:
         If a repetition loop is detected, retries with anti-loop parameters.
         """
         image_b64 = base64.b64encode(image_bytes).decode("utf-8")
-        prompt_text = self._build_ocr_prompt(model, page_num, total_pages)
+        prompt_text = await self._build_ocr_prompt(model, page_num, total_pages)
         model_params = self.get_model_params(model)
 
         # First attempt with standard parameters
@@ -382,12 +364,7 @@ class OcrService:
             retry_params = {**model_params}
             retry_params["num_predict"] = min(model_params["num_predict"], 4096)
 
-            anti_table_prompt = (
-                "Transcribe ALL text in this image completely from top to bottom. "
-                "Do NOT use table formatting, pipes |, or dashes ---. "
-                "Write each piece of information on its own line, using colons for labels. "
-                "Include every single line of text: headers, items, prices, totals, footer, company details, IBAN."
-            )
+            anti_table_prompt = await self._get_prompt("ocr_anti_table")
 
             retry_text = await self._run_vision_ocr(
                 image_b64, model, provider, anti_table_prompt, retry_params, timeout
@@ -424,13 +401,7 @@ class OcrService:
         logger.debug(f"Model: {model}, repeat_pen={model_params['repeat_penalty']}, predict={model_params['num_predict']}")
 
         try:
-            system_msg = (
-                "You are a precise OCR module. Output ONLY the verbatim transcribed text from the image – nothing else. "
-                "No summaries, no descriptions, no commentary, no 'Let me...', no 'Here is...'. "
-                "Every number, every EUR amount, every date, every code must appear EXACTLY as printed. "
-                "For tables: every row, every column, every cell value. "
-                "Missing a single number is a critical OCR failure. Raw verbatim transcription only."
-            )
+            system_msg = await self._get_prompt("ocr_system_message")
 
             # LiteLLM multimodal format (OpenAI-compatible, works with Ollama vision)
             user_content = [
@@ -1082,85 +1053,14 @@ class OcrService:
 
         models_text = "\n\n".join(model_sections)
 
-        prompt = f"""Du bist ein erfahrener OCR-Qualitätsprüfer und Dokumentenanalyst. Du bewertest OCR-Ergebnisse für ein deutsches Dokumentenmanagementsystem (Paperless-ngx).
-
-DOKUMENT: "{document_title}"
-ANZAHL VERSIONEN: {len(results)}
-
-Folgende OCR-Versionen desselben Dokuments wurden von verschiedenen lokalen Vision-Modellen (Ollama) erstellt. Vergleiche sie gründlich.
-
-{models_text}
-
-BEWERTUNGSANLEITUNG:
-Du musst jede Version sorgfältig auf folgende Kriterien prüfen. Vergleiche die Versionen untereinander -- wenn mehrere Versionen den gleichen Wert haben, ist er wahrscheinlich korrekt. Abweichungen deuten auf Fehler hin.
-
-KRITISCHE FELDER (Fehler hier = sofortiger Punktabzug):
-- Namen (Vor-/Nachname): Auch ein einziger falscher Buchstabe ist ein Fehler
-- Datumsangaben: Falsches Jahr/Monat = KO-Kriterium (schlimmer als Tippfehler!)
-- IBAN/Kontonummern: Ziffern müssen exakt stimmen, Leerzeichen-Gruppierung egal
-- Geldbeträge: Müssen exakt stimmen
-
-WICHTIGE FELDER:
-- Adressen, Zählernummern, Referenznummern
-- Checkbox-Zustände (angekreuzt vs. leer)
-- Formularlogik (Felder richtig zugeordnet?)
-
-ALLGEMEINE QUALITÄT:
-- Vollständigkeit (fehlen Textblöcke/Absätze?)
-- Halluzinationen (hat das Modell Text erfunden der nicht im Original steht?)
-- Wiederholungen (Textblöcke die sich wiederholen)
-- Formatierung und Lesbarkeit
-
-PRAXISTAUGLICHKEIT:
-- Kann der Text automatisiert weiterverarbeitet werden?
-- Wie viel manuelle Nacharbeit wäre nötig?
-
-Antworte NUR mit validem JSON (kein Text davor/danach, keine Markdown-Codeblöcke):
-{{
-  "ranking": [
-    {{
-      "rank": 1,
-      "model": "<modellname>",
-      "overall_score": <0-100>,
-      "category_scores": {{
-        "names_persons": <0-10>,
-        "dates_periods": <0-10>,
-        "iban_banking": <0-10>,
-        "amounts_numbers": <0-10>,
-        "addresses": <0-10>,
-        "form_logic": <0-10>,
-        "completeness": <0-10>,
-        "formatting": <0-10>,
-        "no_hallucinations": <0-10>,
-        "automatizability": <0-10>
-      }},
-      "speed_seconds": <dauer>,
-      "strengths": ["Stärke 1", "Stärke 2"],
-      "weaknesses": ["Schwäche 1"],
-      "specific_errors": [
-        {{"field": "Name", "expected": "korrekt", "got": "was das Modell geschrieben hat", "severity": "critical"}},
-        {{"field": "IBAN", "expected": "DE12 3456...", "got": "DE12 3546...", "severity": "high"}}
-      ],
-      "verdict": "<1-2 Sätze Praxisurteil auf Deutsch>"
-    }}
-  ],
-  "best_quality": "<modellname mit bester Qualität>",
-  "best_speed": "<schnellstes Modell>",
-  "best_value": "<bestes Preis-Leistungs-Verhältnis (Qualität vs. Geschwindigkeit)>",
-  "recommendation": "<3-4 Sätze Empfehlung auf Deutsch: welches Modell für Produktion, welches Backup, welches nicht verwenden>",
-  "critical_finding": "<wichtigste Erkenntnis, z.B. 'Datumsfehler bei Modell X sind ein KO-Kriterium'>",
-  "cross_comparison": {{
-    "agreement": ["Felder wo alle Versionen übereinstimmen"],
-    "disagreement": ["Felder wo die Versionen sich widersprechen -- hier liegt wahrscheinlich mindestens ein Fehler"]
-  }}
-}}
-
-WICHTIG:
-- Severity-Stufen: "critical" (Daten, Namen, IBAN falsch), "high" (wichtige Felder), "medium" (Formatierung), "low" (kosmetisch)
-- Score 0-100: unter 50 = nicht verwendbar, 50-70 = bedingt brauchbar, 70-85 = gut, 85+ = sehr gut
-- Sei STRENG aber FAIR. Ein falsches Datum ist schlimmer als 5 Tippfehler.
-- Wenn du nicht sicher bist ob ein Wert richtig ist, vergleiche die Versionen untereinander.
-"""
+        prompt = await self._get_prompt(
+            "ocr_evaluation",
+            variables={
+                "document_title": document_title,
+                "version_count": len(results),
+                "models_text": models_text,
+            }
+        )
 
         used_model = eval_model or "gpt-4o"
         logger.info("Evaluating OCR results", extra={"count": len(results), "provider": eval_provider, "model": used_model})

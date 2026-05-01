@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import List, Optional
+from typing import List, Optional, Any, Dict
 
 from app.database import async_session
 from app.services.llm import LLMService
+from app.services.settings_service import register_prompt, get_prompt
 
 logger = logging.getLogger(__name__)
 
@@ -18,6 +19,21 @@ class DuplicateService:
         self.paperless_client = paperless_client
         self.state = state
         self.llm_service = llm_service
+        self._prompts_registered = False
+
+    async def _register_prompts(self, db: Any) -> None:
+        """Register all duplicate prompts with settings_service. Called once on first use."""
+        from app.services.duplicate.prompts import PROMPTS
+        for key, prompt_template in PROMPTS.items():
+            await register_prompt(key, prompt_template, db)
+        self._prompts_registered = True
+
+    async def _get_prompt(self, key: str, variables: Optional[Dict[str, Any]] = None) -> str:
+        """Get a prompt template by key, optionally rendered with variables."""
+        async with self.session_factory() as db:
+            if not self._prompts_registered:
+                await self._register_prompts(db)
+            return await get_prompt(key, db, variables) or ""
 
     async def scan_all(self, modes: List[str], similarity_threshold: float = 0.92):
         assert self.llm_service is not None
@@ -61,7 +77,7 @@ class DuplicateService:
             if "invoices" in modes and not scan_state.is_cancelled():
                 scan_state.update_progress("invoices", 0, 0)
                 scan_state.results["invoices"] = await invoices.scan_invoices(
-                    pl_client, self.session_factory, scan_state, self.llm_service
+                    pl_client, self.session_factory, scan_state, self.llm_service,
                 )
 
             scan_state.phase = "cancelled" if scan_state.is_cancelled() else "done"
