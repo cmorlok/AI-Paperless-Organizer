@@ -1092,7 +1092,6 @@ class OcrService:
 
         models_text = "\n\n".join(model_sections)
 
-        evaluation_prompt = await self._get_prompt("ocr_evaluation")
         prompt = await self._get_prompt(
             "ocr_evaluation",
             variables={

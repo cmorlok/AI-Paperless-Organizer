@@ -10,7 +10,6 @@ from sqlalchemy import select as sa_select, text
 
 from app.models.duplicates import DuplicateInvoiceCache
 from app.services.llm import LLMService
-from app.services.duplicate.prompts import INVOICE_EXTRACTION_PROMPT
 
 logger = logging.getLogger(__name__)
 
@@ -20,7 +19,6 @@ async def scan_invoices(
     session_factory,
     scan_state,
     llm_service: LLMService,
-    invoice_extraction_prompt: Optional[str] = None,
 ) -> List[Dict]:
     """Find duplicate invoices by extracting invoice number + amount via LLM.
 
@@ -68,9 +66,6 @@ async def scan_invoices(
                 "amount": row.amount,
             }
 
-    # Determine effective prompt to use
-    effective_prompt = invoice_extraction_prompt or INVOICE_EXTRACTION_PROMPT
-
     # Extract invoice data
     extractions: Dict[int, Dict] = {}  # doc_id -> {invoice_number, amount}
 
@@ -96,7 +91,7 @@ async def scan_invoices(
         content_trimmed = content[:3000]
 
         extraction = await _extract_invoice_data(
-            content_trimmed, chat_model, chat_provider, llm_service, effective_prompt
+            content_trimmed, chat_model, chat_provider, llm_service, session_factory
         )
         if extraction:
             extractions[doc_id] = extraction
@@ -164,12 +159,12 @@ async def _extract_invoice_data(
     model: str,
     provider: str,
     llm_service: LLMService,
-    prompt_template: Optional[str] = None,
+    session_factory,
 ) -> Optional[Dict]:
     """Extract invoice number and amount from document content via LiteLLM."""
-    from jinja2 import Template
-    template_str = prompt_template or INVOICE_EXTRACTION_PROMPT
-    prompt = Template(template_str, autoescape=False).render(content=content)
+    async with session_factory() as db:
+        from app.services.settings_service import get_prompt
+        prompt = await get_prompt("duplicate_invoice_extraction", db, variables={"CONTENT": content})
 
     try:
         result = await llm_service.complete(

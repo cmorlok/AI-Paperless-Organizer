@@ -89,10 +89,8 @@ class DuplicateService:
 
             if "invoices" in modes and not scan_state.is_cancelled():
                 scan_state.update_progress("invoices", 0, 0)
-                invoice_prompt = await self._get_prompt("duplicate_invoice_extraction")
                 scan_state.results["invoices"] = await invoices.scan_invoices(
                     pl_client, self.session_factory, scan_state, self.llm_service,
-                    invoice_prompt
                 )
 
             scan_state.phase = "cancelled" if scan_state.is_cancelled() else "done"

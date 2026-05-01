@@ -219,19 +219,17 @@ class SimilarityService:
                 "error": f"JSON-Fehler: {str(e)}. Kontext: ...{error_context}...",
             }
 
-    async def _call_llm_for_similarity(self, provider: str, model: str, prompt_template: str, items: list) -> dict:
+    async def _call_llm_for_similarity(self, provider: str, model: str, entity_type: str, items: list) -> dict:
         assert self.llm is not None
         """Call LLM for similarity analysis and parse the response.
-        
-        Builds prompt by injecting items JSON into {items} placeholder,
-        calls LLM via self.llm.complete(), and parses result.
+
+        Calls LLM via self.llm.complete(), and parses result.
         """
         if not items:
             return {"groups": [], "stats": {"items_count": 0, "estimated_tokens": 0}}
 
         items_str = json.dumps([item["name"] for item in items], ensure_ascii=False, indent=2)
-        from jinja2 import Template
-        prompt = Template(prompt_template, autoescape=False).render(items=items_str)
+        prompt = await self._get_prompt(entity_type, variables={"ITEMS": items_str})
         estimated_input_tokens = self.llm.estimate_tokens(prompt)
 
         import logging
@@ -306,32 +304,31 @@ class SimilarityService:
         
         return filtered, ignored_count
     
-    async def _analyze_batch(self, items: List[Dict], prompt_template: str) -> Dict:
+    async def _analyze_batch(self, items: List[Dict], entity_type: str) -> Dict:
         assert self.llm is not None
         """Analyze a single batch of items."""
         provider, model = await self._get_llm_config()
-        return await self._call_llm_for_similarity(provider, model, prompt_template, items)
+        return await self._call_llm_for_similarity(provider, model, entity_type, items)
     
-    async def _analyze_with_batching(self, all_items: List[Dict], prompt_template: str, batch_size: int = 200) -> Dict:
+    async def _analyze_with_batching(self, all_items: List[Dict], entity_type: str, batch_size: int = 200) -> Dict:
         assert self.llm is not None
         """Analyze items - batch only if token limit exceeded."""
-        
+
         # Get token limit from LLM provider
         provider, model = await self._get_llm_config()
         token_limit = await self.llm.get_token_limit(provider, model)
-        
+
         # Estimate tokens for all items
         items_str = json.dumps([item["name"] for item in all_items], ensure_ascii=False)
-        from jinja2 import Template
-        full_prompt = Template(prompt_template, autoescape=False).render(items=items_str)
+        full_prompt = await self._get_prompt(entity_type, variables={"ITEMS": items_str})
         estimated_tokens = self.llm.estimate_tokens(full_prompt)
-        
+
         # Leave 20% buffer for output
         safe_limit = int(token_limit * 0.8)
-        
+
         # If tokens fit, process ALL items in one go (no batching!)
         if estimated_tokens <= safe_limit:
-            result = await self._analyze_batch(all_items, prompt_template)
+            result = await self._analyze_batch(all_items, entity_type)
             # Filter out groups with less than 2 members
             groups = result.get("groups", [])
             valid_groups = [g for g in groups if len(g.get("members", [])) >= 2]
@@ -376,7 +373,7 @@ class SimilarityService:
         for i, batch in enumerate(batches):
             try:
                 logger.info(f"[Batch {i+1}/{len(batches)}] Analyzing {len(batch)} items...")
-                result = await self._analyze_batch(batch, prompt_template)
+                result = await self._analyze_batch(batch, entity_type)
                 
                 # Collect groups
                 groups = result.get("groups", [])
@@ -594,8 +591,7 @@ Wenn nichts zusammengehört: {{"group_merges": [], "add_to_groups": []}}"""
             for c in correspondents
         ]
         
-        prompt_template = await self._get_prompt("similarity_correspondents")
-        return await self._analyze_with_batching(items, prompt_template, batch_size)
+        return await self._analyze_with_batching(items, "similarity_correspondents", batch_size)
     
     async def find_similar_tags(self, batch_size: int = 200) -> Dict:
         assert self.llm is not None
@@ -611,8 +607,7 @@ Wenn nichts zusammengehört: {{"group_merges": [], "add_to_groups": []}}"""
             for t in tags
         ]
         
-        prompt_template = await self._get_prompt("similarity_tags")
-        return await self._analyze_with_batching(items, prompt_template, batch_size)
+        return await self._analyze_with_batching(items, "similarity_tags", batch_size)
     
     async def find_similar_document_types(self, batch_size: int = 200) -> Dict:
         assert self.llm is not None
@@ -628,8 +623,7 @@ Wenn nichts zusammengehört: {{"group_merges": [], "add_to_groups": []}}"""
             for dt in doc_types
         ]
         
-        prompt_template = await self._get_prompt("similarity_document_types")
-        return await self._analyze_with_batching(items, prompt_template, batch_size)
+        return await self._analyze_with_batching(items, "similarity_document_types", batch_size)
     
     async def find_nonsense_tags(self, batch_size: int = 300) -> Dict:
         assert self.llm is not None
