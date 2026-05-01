@@ -1,3 +1,26 @@
+OCR_DEEPSEEK_PROMPT = "OCR this document."
+
+OCR_GLM_PROMPT = "Text Recognition:"
+
+OCR_GEMMA3_PROMPT = """Just transcribe the text in this image. Preserve the formatting and layout. Be thorough, continue until the bottom of the page. Use markdown format but without a code block.
+
+{{ PAGE_INFO }}"""
+
+OCR_DEFAULT_PROMPT = """Transcribe ALL text in this image EXACTLY as it appears – high quality OCR.
+CRITICAL: Do NOT summarize, skip, or abbreviate any content. Continue until the very bottom of the page.
+CRITICAL: Every single number, amount, percentage, account number, and code MUST be transcribed exactly.
+For tables: transcribe each row completely, including all columns and values.
+For checkboxes/tick boxes: write [ ] for unchecked and [X] for checked, followed by the label text.
+For form fields: write the label followed by the filled-in value or a blank line if empty.
+For structured forms (tax notices, invoices, bank statements): preserve every field label and its value.
+Use markdown format without code blocks. Preserve the original layout as closely as possible.
+
+The document is in German. Pay special attention to: names, dates (DD.MM.YYYY), IBANs, BIC codes, tax IDs (Steuernummer), amounts in EUR, account numbers, reference numbers, and addresses. Transcribe every value exactly as printed – no rounding, no omitting.
+
+{{ PAGE_INFO }}"""
+
+OCR_ANTI_TABLE_PROMPT = """Transcribe ALL text in this image completely from top to bottom. Do NOT use table formatting, pipes |, or dashes ---. Write each piece of information on its own line, using colons for labels. Include every single line of text: headers, items, prices, totals, footer, company details, IBAN."""
+
 OCR_SYSTEM_MESSAGE = (
     "You are a precise OCR module. Output ONLY the verbatim transcribed text from the image – nothing else. "
     "No summaries, no descriptions, no commentary, no 'Let me...', no 'Here is...'. "
@@ -6,39 +29,6 @@ OCR_SYSTEM_MESSAGE = (
     "Missing a single number is a critical OCR failure. Raw verbatim transcription only."
 )
 
-OCR_ANTI_TABLE_PROMPT = (
-    "Transcribe ALL text in this image completely from top to bottom. "
-    "Do NOT use table formatting, pipes |, or dashes ---. "
-    "Write each piece of information on its own line, using colons for labels. "
-    "Include every single line of text: headers, items, prices, totals, footer, company details, IBAN."
-)
-
-OCR_DEEPSEEK_PROMPT = "OCR this document."
-OCR_GLM_PROMPT = "Text Recognition:"
-OCR_GEMMA3_PROMPT = (
-    "Just transcribe the text in this image. Preserve the formatting and layout. "
-    "Be thorough, continue until the bottom of the page. "
-    "Use markdown format but without a code block."
-)
-OCR_DEFAULT_PARTS = [
-    "Transcribe ALL text in this image EXACTLY as it appears – high quality OCR.",
-    "CRITICAL: Do NOT summarize, skip, or abbreviate any content. Continue until the very bottom of the page.",
-    "CRITICAL: Every single number, amount, percentage, account number, and code MUST be transcribed exactly.",
-    "For tables: transcribe each row completely, including all columns and values.",
-    "For checkboxes/tick boxes: write [ ] for unchecked and [X] for checked, followed by the label text.",
-    "For form fields: write the label followed by the filled-in value or a blank line if empty.",
-    "For structured forms (tax notices, invoices, bank statements): preserve every field label and its value.",
-    "Use markdown format without code blocks. Preserve the original layout as closely as possible.",
-]
-OCR_DEFAULT_GERMAN_HINT = (
-    "The document is in German. "
-    "Pay special attention to: names, dates (DD.MM.YYYY), IBANs, BIC codes, "
-    "tax IDs (Steuernummer), amounts in EUR, account numbers, reference numbers, "
-    "and addresses. Transcribe every value exactly as printed – no rounding, no omitting."
-)
-
-
-# Placeholders: {{ DOCUMENT_TITLE }}, {{ VERSION_COUNT }}, {{ MODELS_TEXT }}
 OCR_EVALUATION_PROMPT = """Du bist ein erfahrener OCR-Qualitätsprüfer und Dokumentenanalyst. Du bewertest OCR-Ergebnisse für ein deutsches Dokumentenmanagementsystem (Paperless-ngx).
 
 DOKUMENT: "{{ DOCUMENT_TITLE }}"
@@ -120,5 +110,11 @@ WICHTIG:
 """
 
 PROMPTS = {
+    "ocr_system_message": OCR_SYSTEM_MESSAGE,
+    "ocr_deepseek": OCR_DEEPSEEK_PROMPT,
+    "ocr_glm": OCR_GLM_PROMPT,
+    "ocr_gemma3": OCR_GEMMA3_PROMPT,
+    "ocr_default": OCR_DEFAULT_PROMPT,
+    "ocr_anti_table": OCR_ANTI_TABLE_PROMPT,
     "ocr_evaluation": OCR_EVALUATION_PROMPT,
 }

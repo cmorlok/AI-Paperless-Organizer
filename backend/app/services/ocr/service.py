@@ -15,16 +15,6 @@ from PIL import Image
 from pdf2image import convert_from_bytes
 
 from app.services.llm import LLMService
-from app.services.ocr.prompts import (
-    OCR_SYSTEM_MESSAGE,
-    OCR_ANTI_TABLE_PROMPT,
-    OCR_EVALUATION_PROMPT,
-    OCR_DEEPSEEK_PROMPT,
-    OCR_GLM_PROMPT,
-    OCR_GEMMA3_PROMPT,
-    OCR_DEFAULT_PARTS,
-    OCR_DEFAULT_GERMAN_HINT,
-)
 
 from .state import (
     DEFAULT_OCR_MODEL,
@@ -277,7 +267,7 @@ class OcrService:
                     return before
         return text
 
-    def _build_ocr_prompt(self, model: str, page_num: int = 0, total_pages: int = 0) -> str:
+    async def _build_ocr_prompt(self, model: str, page_num: int = 0, total_pages: int = 0) -> str:
         """Select the appropriate OCR prompt for the given model.
 
         Model-specific adjustments only where absolutely needed:
@@ -287,28 +277,18 @@ class OcrService:
         - minicpm-v / qwen (default): Full paperless-gpt style prompt
         """
         name = (model or "").lower()
+        page_info = f" This is page {page_num} of {total_pages}." if page_num > 0 and total_pages > 0 else ""
 
-        # deepseek-ocr: ultra-minimal, NO <|grounding|> (that's for bounding boxes!)
         if "deepseek-ocr" in name:
-            return OCR_DEEPSEEK_PROMPT
+            return await self._get_prompt("ocr_deepseek")
 
-        # glm-ocr: keyword-based per official Ollama docs
         if "glm-ocr" in name or "glm_ocr" in name:
-            return OCR_GLM_PROMPT
+            return await self._get_prompt("ocr_glm")
 
-        # gemma3: shorter prompt (echoes/repeats long prompts verbatim)
         if "gemma3" in name or "gemma-3" in name:
-            prompt = OCR_GEMMA3_PROMPT
-            if page_num > 0 and total_pages > 0:
-                prompt += f" This is page {page_num} of {total_pages}."
-            return prompt
+            return await self._get_prompt("ocr_gemma3", variables={"PAGE_INFO": page_info})
 
-        # Default: paperless-gpt proven prompt + German hints
-        parts = list(OCR_DEFAULT_PARTS)
-        if page_num > 0 and total_pages > 0:
-            parts.append(f"This is page {page_num} of {total_pages}.")
-        parts.append(OCR_DEFAULT_GERMAN_HINT)
-        return "\n".join(parts)
+        return await self._get_prompt("ocr_default", variables={"PAGE_INFO": page_info})
 
     @staticmethod
     def _clean_repetitions(text: str) -> str:
@@ -383,7 +363,7 @@ class OcrService:
         If a repetition loop is detected, retries with anti-loop parameters.
         """
         image_b64 = base64.b64encode(image_bytes).decode("utf-8")
-        prompt_text = self._build_ocr_prompt(model, page_num, total_pages)
+        prompt_text = await self._build_ocr_prompt(model, page_num, total_pages)
         model_params = self.get_model_params(model)
 
         # First attempt with standard parameters
@@ -403,7 +383,7 @@ class OcrService:
             retry_params = {**model_params}
             retry_params["num_predict"] = min(model_params["num_predict"], 4096)
 
-            anti_table_prompt = OCR_ANTI_TABLE_PROMPT
+            anti_table_prompt = await self._get_prompt("ocr_anti_table")
 
             retry_text = await self._run_vision_ocr(
                 image_b64, model, provider, anti_table_prompt, retry_params, timeout
@@ -440,7 +420,7 @@ class OcrService:
         logger.debug(f"Model: {model}, repeat_pen={model_params['repeat_penalty']}, predict={model_params['num_predict']}")
 
         try:
-            system_msg = OCR_SYSTEM_MESSAGE
+            system_msg = await self._get_prompt("ocr_system_message")
 
             # LiteLLM multimodal format (OpenAI-compatible, works with Ollama vision)
             user_content = [
