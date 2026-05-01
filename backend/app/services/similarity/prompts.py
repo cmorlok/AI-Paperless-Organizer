@@ -108,6 +108,8 @@ Analysiere diese Tags und identifiziere UNSINNIGE Tags, die gelöscht werden sol
 Tags-Liste (Name: Anzahl Dokumente):
 {{ ITEMS }}
 
+{{ IGNORE_INFO }}
+
 Ein Tag ist UNSINNIG wenn es:
 - Zu generisch/nichtssagend ist (z.B. "Dokument", "Datei", "Sonstiges", "Allgemein")
 - Ein offensichtlicher Tippfehler oder Fragment ist

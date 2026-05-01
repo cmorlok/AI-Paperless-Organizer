@@ -656,15 +656,16 @@ Wenn nichts zusammengehört: {{"group_merges": [], "add_to_groups": []}}"""
             for t in filtered_tags
         ])
         
-        # Add ignore list info to prompt
+        # Build ignore list info
         ignore_info = ""
         if ignored_patterns:
-            ignore_info = "\n\nFolgende Tags sind GESCHÜTZT und dürfen NICHT als unsinnig markiert werden:\n"
+            ignore_info = "Folgende Tags sind GESCHÜTZT und dürfen NICHT als unsinnig markiert werden:\n"
             ignore_info += "\n".join([f"- {p['pattern']} ({p['reason']})" for p in ignored_patterns])
-        
-        prompt_template = await self._get_prompt("similarity_tags_nonsense")
-        from jinja2 import Template
-        prompt = Template(prompt_template, autoescape=False).render(items=items_text) + ignore_info
+
+        prompt = await self._get_prompt(
+            "similarity_tags_nonsense",
+            variables={"ITEMS": items_text, "IGNORE_INFO": ignore_info},
+        )
         
         # Token estimation
         estimated_input_tokens = self.llm.estimate_tokens(prompt)
