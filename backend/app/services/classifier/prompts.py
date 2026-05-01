@@ -109,16 +109,23 @@ ALLGEMEINE REGELN:
 
 {{ RULES_DATE }}
 
+{% if "storage_path" in ENABLED_FIELDS %}
 SPEICHERPFAD-REGELN:
 - Lies die Personen-Profile sorgfaeltig und ordne dem richtigen Pfad zu
 - Achte auf Privat vs. Geschaeftlich bei den Profilen
 - du MUSST get_storage_paths aufrufen um die Profile zu sehen!
+{% endif %}
 
+{% if "custom_fields" in ENABLED_FIELDS %}
 CUSTOM-FIELDS-REGELN:
 - Rufe get_custom_field_definitions auf um die aktiven Felder mit Extraktions-Prompts abzurufen
 - Fuer jedes Feld: Folge genau dem extraction_prompt und den Beispielwerten
 {{ RULES_CUSTOM_FIELDS }}
 - custom_fields ist ein Objekt mit Feldnamen als Keys: {"Rechnungsnummer": "RE-2024-0815", "Betrag": 49.99}
+{% endif %}
+
+AKTIVIERTE FELDER: {{ ENABLED_FIELDS }}
+TAG-ANZAHL: Mindestens {{ TAG_COUNT_MIN }}, maximal {{ TAG_COUNT_MAX }} Tags.
 
 PFLICHT-ERGEBNIS-FORMAT -- Deine Antwort MUSS dieses JSON-Schema haben:
 {

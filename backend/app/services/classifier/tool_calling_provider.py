@@ -112,7 +112,8 @@ class ToolCallingLlmProvider(BaseClassifierProvider):
         total_tool_calls = 0
 
         enabled_fields = self._get_enabled_fields(config)
-
+        tags_min = config.get("tags_min", 1)
+        tags_max = config.get("tags_max", 5)
         trim_prompt = config.get("correspondent_trim_prompt", False)
 
         system_prompt = await self._get_prompt(
@@ -126,21 +127,11 @@ class ToolCallingLlmProvider(BaseClassifierProvider):
                 "RULES_DOCTYPE": await self._get_prompt("classifier_rules_doctype"),
                 "RULES_DATE": await self._get_prompt("classifier_rules_date"),
                 "RULES_CUSTOM_FIELDS": await self._get_prompt("classifier_rules_custom_fields"),
+                "ENABLED_FIELDS": ", ".join(enabled_fields),
+                "TAG_COUNT_MIN": tags_min,
+                "TAG_COUNT_MAX": tags_max,
             },
         )
-
-        system_prompt += f"\n\nAktivierte Felder: {', '.join(enabled_fields)}"
-        tags_min = config.get("tags_min", 1)
-        tags_max = config.get("tags_max", 5)
-        system_prompt += f"\nTag-Anzahl: Mindestens {tags_min}, maximal {tags_max} Tags."
-        if "custom_fields" in enabled_fields:
-            system_prompt += "\nDu MUSST get_custom_field_definitions aufrufen und die Felder extrahieren!"
-        else:
-            system_prompt += "\nCustom Fields sind deaktiviert, ignoriere get_custom_field_definitions."
-        if "storage_path" in enabled_fields:
-            system_prompt += "\nDu MUSST get_storage_paths aufrufen und einen Pfad zuordnen! storage_path_id und storage_path_reason MUESSEN im Ergebnis stehen!"
-        else:
-            system_prompt += "\nSpeicherpfad ist deaktiviert, ignoriere get_storage_paths."
 
         user_content = self._build_user_message(document)
         logger.info(f"LiteLLM tool-calling user message length: {len(user_content)} chars")
