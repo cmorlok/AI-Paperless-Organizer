@@ -12,6 +12,7 @@ from typing import Dict, Any, List, Set, Optional
 
 from app.services.paperless import PaperlessClient
 from app.models.classifier import StoragePathProfile, CustomFieldMapping
+from app.services.settings_service import get_prompt
 
 logger = logging.getLogger(__name__)
 
@@ -28,10 +29,12 @@ class ToolExecutor:
         excluded_correspondent_ids: Optional[List[int]] = None,
         excluded_document_type_ids: Optional[List[int]] = None,
         tags_ignore: Optional[List[str]] = None,
+        session_factory=None,
     ):
         self.paperless = paperless
         self.storage_profiles = storage_profiles
         self.custom_field_mappings = custom_field_mappings
+        self.session_factory = session_factory
         self._excluded_tag_ids: Set[int] = set(excluded_tag_ids or [])
         self._excluded_corr_ids: Set[int] = set(excluded_correspondent_ids or [])
         self._excluded_dtype_ids: Set[int] = set(excluded_document_type_ids or [])
@@ -150,11 +153,19 @@ class ToolExecutor:
         for cfm in self.custom_field_mappings:
             if not cfm.enabled:
                 continue
+            slugified_name = re.sub(r"[^a-z0-9]+", "", cfm.paperless_field_name.lower())
+            prompt_key = f"classifier_rules_custom_fields_{slugified_name}"
+            extraction_prompt = None
+            if self.session_factory:
+                async with self.session_factory() as db:
+                    extraction_prompt = await get_prompt(prompt_key, db)
+            if extraction_prompt is None:
+                continue
             entry: Dict[str, Any] = {
                 "field_id": cfm.paperless_field_id,
                 "field_name": cfm.paperless_field_name,
                 "field_type": cfm.paperless_field_type,
-                "extraction_prompt": cfm.extraction_prompt,
+                "extraction_prompt": extraction_prompt,
                 "example_values": cfm.example_values,
             }
             if cfm.ignore_values:

@@ -151,6 +151,11 @@ async def update_prompt(prompt_id: int, data: CustomPromptSchema, db: AsyncSessi
         raise HTTPException(status_code=404, detail=str(e))
 
 
+@router.post("/prompts")
+async def create_prompt(data: CustomPromptSchema, db: AsyncSession = Depends(get_db)):
+    return await svc.save_prompt_by_key(data.entity_type, data.prompt_template, db)
+
+
 @router.post("/prompts/reset/{entity_type}")
 async def reset_prompt(entity_type: str, db: AsyncSession = Depends(get_db)):
     try:

@@ -86,6 +86,29 @@ RULES_CUSTOM_FIELDS = """CUSTOM-FIELDS-FORMAT-REGELN:
 - Bei Rechnungsnummern: Exakt wie im Dokument"""
 
 
+# --- Custom Field Extraction Prompts (per field name) ---
+
+RULES_CUSTOM_FIELDS_RECHNUNGSNUMMER = "Extrahiere die Rechnungsnummer/Belegnummer. Suche nach 'Rechnungsnr', 'RE-', 'Invoice', 'Beleg-Nr' o.ae."
+
+RULES_CUSTOM_FIELDS_BETRAG = "Extrahiere den Gesamtbetrag (brutto inkl. MwSt) als Zahl. Punkt als Dezimaltrenner, kein Waehrungszeichen, kein Tausendertrennzeichen. Beispiel: 149.99 statt 149,99 EUR. Bei mehreren Betraegen den Gesamtbetrag (Summe/Total) nehmen."
+
+RULES_CUSTOM_FIELDS_GESAMTBETRAG = "Extrahiere den Gesamtbetrag (brutto inkl. MwSt) als Zahl. Punkt als Dezimaltrenner, kein Waehrungszeichen, kein Tausendertrennzeichen. Beispiel: 149.99 statt 149,99 EUR. Bei mehreren Betraegen den Gesamtbetrag (Summe/Total) nehmen."
+
+RULES_CUSTOM_FIELDS_IBAN = "Extrahiere die IBAN/Kontonummer des ABSENDERS/EMPFAENGERS (nicht die eigene!). Format: ohne Leerzeichen. Bei aelteren Dokumenten ggf. Kontonummer+BLZ."
+
+RULES_CUSTOM_FIELDS_KONTONUMMER = "Extrahiere die IBAN/Kontonummer des ABSENDERS/EMPFAENGERS (nicht die eigene!). Format: ohne Leerzeichen. Bei aelteren Dokumenten ggf. Kontonummer+BLZ."
+
+RULES_CUSTOM_FIELDS_KUNDENNUMMER = "Extrahiere die Kundennummer/Vertragsnummer. Suche nach 'Kundennr', 'Kd-Nr', 'Vertragsnr' o.ae."
+
+RULES_CUSTOM_FIELDS_STEUERNUMMER = "Extrahiere die Steuernummer oder USt-IdNr. Format: DE + 9 Ziffern (USt-ID) oder XX/XXX/XXXXX."
+
+RULES_CUSTOM_FIELDS_FAELLIGKEITSDATUM = "Extrahiere das Faelligkeitsdatum/Zahlungsziel. Format: YYYY-MM-DD. Suche nach 'zahlbar bis', 'faellig am'."
+
+RULES_CUSTOM_FIELDS_LIEFERSCHEINNUMMER = "Extrahiere die Lieferscheinnummer. Suche nach 'Lieferschein-Nr', 'LS-Nr', 'Delivery Note' o.ae."
+
+RULES_CUSTOM_FIELDS_BESTELLNUMMER = "Extrahiere die Bestellnummer. Suche nach 'Bestell-Nr', 'Order', 'Auftragsnr' o.ae."
+
+
 # --- OpenAI System Prompt ---
 
 SYSTEM_PROMPT_OPENAI = """Du bist ein praeziser Dokumenten-Klassifizierer fuer ein Paperless-ngx Dokumentenmanagementsystem.
@@ -309,6 +332,16 @@ PROMPTS = {
     "classifier_rules_doctype": RULES_DOCTYPE,
     "classifier_rules_date": RULES_DATE,
     "classifier_rules_custom_fields": RULES_CUSTOM_FIELDS,
+    "classifier_rules_custom_fields_rechnungsnummer": RULES_CUSTOM_FIELDS_RECHNUNGSNUMMER,
+    "classifier_rules_custom_fields_betrag": RULES_CUSTOM_FIELDS_BETRAG,
+    "classifier_rules_custom_fields_gesamtbetrag": RULES_CUSTOM_FIELDS_GESAMTBETRAG,
+    "classifier_rules_custom_fields_iban": RULES_CUSTOM_FIELDS_IBAN,
+    "classifier_rules_custom_fields_kontonummer": RULES_CUSTOM_FIELDS_KONTONUMMER,
+    "classifier_rules_custom_fields_kundennummer": RULES_CUSTOM_FIELDS_KUNDENNUMMER,
+    "classifier_rules_custom_fields_steuernummer": RULES_CUSTOM_FIELDS_STEUERNUMMER,
+    "classifier_rules_custom_fields_faelligkeitsdatum": RULES_CUSTOM_FIELDS_FAELLIGKEITSDATUM,
+    "classifier_rules_custom_fields_lieferscheinnummer": RULES_CUSTOM_FIELDS_LIEFERSCHEINNUMMER,
+    "classifier_rules_custom_fields_bestellnummer": RULES_CUSTOM_FIELDS_BESTELLNUMMER,
     "classifier_ollama_analyze": SYSTEM_PROMPT_OLLAMA_ANALYZE,
     "classifier_ollama_doctype": SYSTEM_PROMPT_OLLAMA_DOCTYPE,
     "classifier_ollama_tags": SYSTEM_PROMPT_OLLAMA_TAGS,

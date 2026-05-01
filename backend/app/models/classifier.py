@@ -133,9 +133,7 @@ class CustomFieldMapping(Base):
     paperless_field_type: Mapped[str] = mapped_column(String(100), default="string")
 
     enabled: Mapped[bool] = mapped_column(Boolean, default=False)
-    extraction_prompt: Mapped[str] = mapped_column(Text, default="")
     example_values: Mapped[str] = mapped_column(Text, default="")
-    validation_regex: Mapped[str] = mapped_column(String(500), default="")
     ignore_values: Mapped[str] = mapped_column(Text, default="")
 
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())

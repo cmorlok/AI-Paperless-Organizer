@@ -57,9 +57,7 @@ class CustomFieldMappingUpdate(BaseModel):
     paperless_field_name: str = ""
     paperless_field_type: str = "string"
     enabled: bool = False
-    extraction_prompt: str = ""
     example_values: str = ""
-    validation_regex: str = ""
     ignore_values: str = ""
 
 

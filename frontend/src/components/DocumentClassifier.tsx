@@ -2252,7 +2252,6 @@ export default function DocumentClassifier() {
                               <p className="text-sm text-surface-200 font-medium">{mapping.paperless_field_name}</p>
                               <p className="text-xs text-surface-500">
                                 Typ: {mapping.paperless_field_type}
-                                {mapping.validation_regex && <span className="ml-2 text-primary-400">Validierung aktiv</span>}
                               </p>
                             </div>
                           </div>
@@ -2296,17 +2295,6 @@ export default function DocumentClassifier() {
                                   placeholder="z.B. RE-2024-001, INV-123"
                                 />
                                 <p className="text-xs text-surface-600 mt-0.5">Kommagetrennte Beispiele</p>
-                              </div>
-                              <div>
-                                <label className="text-xs text-surface-500">Validierung (Regex)</label>
-                                <input
-                                  type="text"
-                                  value={mapping.validation_regex}
-                                  onChange={(e) => updateCustomFieldMapping(mapping.paperless_field_id, 'validation_regex', e.target.value)}
-                                  className="input mt-0.5 text-sm font-mono"
-                                  placeholder="z.B. ^RE-\d{4}-\d+$"
-                                />
-                                <p className="text-xs text-surface-600 mt-0.5">Leerlassen = keine Pruefung</p>
                               </div>
                             </div>
                             <div>

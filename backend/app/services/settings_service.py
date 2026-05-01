@@ -314,6 +314,26 @@ async def update_prompt(prompt_id: int, prompt_template: str, is_active: bool, d
     return {"success": True}
 
 
+async def save_prompt_by_key(entity_type: str, prompt_template: str, db: AsyncSession) -> dict:
+    """Insert or update a custom prompt by entity_type key."""
+    result = await db.execute(select(CustomPrompt).where(CustomPrompt.entity_type == entity_type))
+    prompt = result.scalar_one_or_none()
+    if prompt is None:
+        new_prompt = CustomPrompt(
+            entity_type=entity_type,
+            prompt_template=prompt_template,
+            is_active=True,
+            modified=True,
+        )
+        db.add(new_prompt)
+    else:
+        prompt.prompt_template = prompt_template
+        prompt.is_active = True
+        prompt.modified = True
+    await db.commit()
+    return {"success": True}
+
+
 async def reset_prompt(entity_type: str, db: AsyncSession) -> dict:
     """Reset a prompt to its default by setting modified=False.
 

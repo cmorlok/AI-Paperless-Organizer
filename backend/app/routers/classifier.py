@@ -149,7 +149,7 @@ async def get_custom_field_mappings(
 ):
     assert service is not None
     assert client is not None
-    return await service.get_custom_field_mappings_merged(client)
+    return await service.get_custom_field_settings(client)
 
 
 @router.put("/custom-field-mappings")
