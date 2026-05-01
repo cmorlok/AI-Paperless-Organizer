@@ -188,13 +188,27 @@ Antworte als JSON-Array mit den Tag-Namen:
 Antworte NUR mit dem JSON-Array, kein anderer Text."""
 
 
-SYSTEM_PROMPT_OLLAMA_DOCTYPE = """Waehle den passenden Dokumenttyp aus dieser Liste:
+SYSTEM_PROMPT_OLLAMA_DOCTYPE = """Bestimme den Dokumenttyp anhand des folgenden Dokuments.
 
-{{ AVAILABLE_TYPES }}
+EXTRAHIERTE METADATEN:
+- Titel: {{ TITLE }}
+- Korrespondent: {{ CORRESPONDENT }}
+- KI-Zusammenfassung: {{ SUMMARY }}
 
-Dokument-Zusammenfassung: {{ SUMMARY }}
+DOKUMENTINHALT (Anfang):
+{{ CONTENT_SNIPPET }}
 
-Antworte NUR mit dem Namen des Dokumenttyps als einfacher String. Wenn keiner passt, antworte mit "null"."""
+ENTSCHEIDUNGSREGELN:
+- Rechnungsnummer (RE-..., RG-..., INV-..., R-...) im Inhalt? -> 'Rechnung'
+- Netto/Brutto/MwSt-Angaben im Inhalt? -> 'Rechnung'
+- 'Zahlungseingang bestaetigt' + Rechnungsnummer? -> trotzdem 'Rechnung'
+- 'Bestaetigung' NUR fuer Auftrags-/Bestellbestaetigung OHNE Rechnungsnummer
+- Monatlicher Kontoauszug? -> 'Kontoauszug'
+- Vertrag/Kuendigungsschreiben? -> 'Vertrag'
+
+VERFUEGBARE TYPEN: {{ AVAILABLE_TYPES }}
+
+Antworte als JSON: {"document_type": "Name"}"""
 
 
 SYSTEM_PROMPT_OLLAMA_STORAGE_PATH = """Ordne dieses Dokument dem BESTEN verfuegbaren Speicherpfad zu.
@@ -281,6 +295,7 @@ PROMPTS = {
     "classifier_rules_date": RULES_DATE,
     "classifier_rules_custom_fields": RULES_CUSTOM_FIELDS,
     "classifier_ollama_analyze": SYSTEM_PROMPT_OLLAMA_ANALYZE,
+    "classifier_ollama_doctype": SYSTEM_PROMPT_OLLAMA_DOCTYPE,
     "classifier_ollama_storage_path": SYSTEM_PROMPT_OLLAMA_STORAGE_PATH,
     "classifier_ollama_custom_fields": SYSTEM_PROMPT_OLLAMA_CUSTOM_FIELDS,
     "classifier_ollama_verify": SYSTEM_PROMPT_OLLAMA_VERIFY,

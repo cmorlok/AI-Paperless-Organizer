@@ -233,22 +233,15 @@ class OllamaLlmProvider(BaseClassifierProvider):
                 type_names = [dt["name"] for dt in doc_types] if doc_types else []
 
                 if type_names:
-                    dtype_prompt = (
-                        f"Bestimme den Dokumenttyp anhand des folgenden Dokuments.\n\n"
-                        f"EXTRAHIERTE METADATEN:\n"
-                        f"- Titel: {result.title or 'unbekannt'}\n"
-                        f"- Korrespondent: {result.correspondent or 'unbekannt'}\n"
-                        f"- KI-Zusammenfassung: {summary}\n\n"
-                        f"DOKUMENTINHALT (Anfang):\n{content_snippet}\n\n"
-                        f"ENTSCHEIDUNGSREGELN:\n"
-                        f"- Rechnungsnummer (RE-..., RG-..., INV-..., R-...) im Inhalt? -> 'Rechnung'\n"
-                        f"- Netto/Brutto/MwSt-Angaben im Inhalt? -> 'Rechnung'\n"
-                        f"- 'Zahlungseingang bestaetigt' + Rechnungsnummer? -> trotzdem 'Rechnung'\n"
-                        f"- 'Bestaetigung' NUR fuer Auftrags-/Bestellbestaetigung OHNE Rechnungsnummer\n"
-                        f"- Monatlicher Kontoauszug? -> 'Kontoauszug'\n"
-                        f"- Vertrag/Kuendigungsschreiben? -> 'Vertrag'\n\n"
-                        f"VERFUEGBARE TYPEN: {', '.join(type_names)}\n\n"
-                        'Antworte als JSON: {"document_type": "Name"}'
+                    dtype_prompt = await self._get_prompt(
+                        "classifier_ollama_doctype",
+                        variables={
+                            "TITLE": result.title or "unbekannt",
+                            "CORRESPONDENT": result.correspondent or "unbekannt",
+                            "SUMMARY": summary,
+                            "CONTENT_SNIPPET": content_snippet,
+                            "AVAILABLE_TYPES": ", ".join(type_names),
+                        },
                     )
                     dtype_schema = _SCHEMA_DOCTYPE
                     if self._use_strict_schemas:
