@@ -37,22 +37,10 @@ class SimilarityService:
 
     async def _get_prompt(self, entity_type: str, variables: Optional[Dict[str, Any]] = None) -> str:
         """Get the prompt template for an entity type, optionally rendered with variables."""
-        from jinja2 import Template
-        if self.session_factory is None:
-            template_str = PROMPTS.get(entity_type, "")
-            if variables:
-                return Template(template_str, autoescape=False).render(**variables)
-            return template_str
         async with self.session_factory() as db:
             if not self._prompts_registered:
                 await self._register_prompts(db)
-            prompt_template = await get_prompt(entity_type, db, variables)
-            if prompt_template:
-                return prompt_template
-            template_str = PROMPTS.get(entity_type, "")
-            if variables:
-                return Template(template_str, autoescape=False).render(**variables)
-            return template_str
+            return await get_prompt(entity_type, db, variables) or ""
 
     async def _get_ignored_patterns(self) -> List[Dict]:
         """Get all ignored tag patterns."""

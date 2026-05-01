@@ -13,10 +13,7 @@ from app.services.classifier.tool_definitions import (
     CLASSIFIER_TOOLS,
 )
 from app.services.classifier.tool_executor import ToolExecutor
-from app.services.classifier.prompts import (
-    SYSTEM_PROMPT_OPENAI, RULES_TITLE, RULES_TAGS, RULES_CORRESPONDENT,
-    RULES_DOCTYPE, RULES_DATE, RULES_CUSTOM_FIELDS, PROMPTS,
-)
+from app.services.classifier.prompts import PROMPTS
 from app.services.classifier.llm_schemas import _MAX_TOOL_ROUNDS
 
 logger = logging.getLogger(__name__)
@@ -63,23 +60,10 @@ class ToolCallingLlmProvider(BaseClassifierProvider):
     async def _get_prompt(self, key: str, variables: Optional[Dict[str, Any]] = None) -> str:
         """Get a prompt template by key, optionally rendered with variables."""
         from app.services.settings_service import get_prompt
-        if self.session_factory is None:
-            template_str = PROMPTS.get(key, "")
-            if variables:
-                from jinja2 import Template
-                return Template(template_str, autoescape=False).render(**variables)
-            return template_str
         async with self.session_factory() as db:
             if not self._prompts_registered:
                 await self._register_prompts(db)
-            prompt_template = await get_prompt(key, db, variables)
-            if prompt_template:
-                return prompt_template
-            template_str = PROMPTS.get(key, "")
-            if variables:
-                from jinja2 import Template
-                return Template(template_str, autoescape=False).render(**variables)
-            return template_str
+            return await get_prompt(key, db, variables) or ""
 
     def get_name(self) -> str:
         return f"{self._provider_label} ({self.model})"

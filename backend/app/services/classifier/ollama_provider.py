@@ -70,21 +70,10 @@ class OllamaLlmProvider(BaseClassifierProvider):
     async def _get_prompt(self, key: str, variables: Optional[Dict[str, Any]] = None) -> str:
         """Get a prompt template by key, optionally rendered with variables."""
         from app.services.settings_service import get_prompt
-        if self.session_factory is None:
-            template_str = PROMPTS.get(key, "")
-            if variables:
-                return Template(template_str, autoescape=False).render(**variables)
-            return template_str
         async with self.session_factory() as db:
             if not self._prompts_registered:
                 await self._register_prompts(db)
-            prompt_template = await get_prompt(key, db, variables)
-            if prompt_template:
-                return prompt_template
-            template_str = PROMPTS.get(key, "")
-            if variables:
-                return Template(template_str, autoescape=False).render(**variables)
-            return template_str
+            return await get_prompt(key, db, variables) or ""
 
     def get_name(self) -> str:
         return f"Ollama ({self.model})"

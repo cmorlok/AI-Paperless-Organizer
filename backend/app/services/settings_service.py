@@ -366,8 +366,7 @@ async def get_prompt(key: str, db: AsyncSession, variables: Optional[Dict[str, A
         return None
     template_str = prompt.prompt_template
     if variables:
-        template = Template(template_str, autoescape=False)
-        return template.render(**variables)
+        return Template(template_str, autoescape=False).render(**variables)
     return template_str
 
 
