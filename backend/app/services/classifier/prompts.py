@@ -339,6 +339,18 @@ INPUT:
 JSON-ANTWORT:"""
 
 
+CLASSIFIER_USER_MESSAGE = """\
+Dokument-ID: {{ DOCUMENT_ID }}
+{% if CURRENT_TITLE %}Aktueller Titel: {{ CURRENT_TITLE }}{% endif %}
+{% if CURRENT_TAGS %}Aktuelle Tags: {{ CURRENT_TAGS | join(', ') }}{% endif %}
+{% if CURRENT_CORRESPONDENT %}Aktueller Korrespondent: {{ CURRENT_CORRESPONDENT }}{% endif %}
+{% if CURRENT_DOCUMENT_TYPE %}Aktueller Dokumenttyp: {{ CURRENT_DOCUMENT_TYPE }}{% endif %}
+--- DOKUMENTINHALT ---
+{% if CONTENT | length > 15000 %}{{ CONTENT[:15000] }}
+[... Inhalt gekuerzt ...]
+{% else %}{{ CONTENT }}{% endif %}"""
+
+
 PROMPTS = {
     "classifier_rules_title": RULES_TITLE,
     "classifier_rules_tags": RULES_TAGS,
@@ -364,6 +376,7 @@ PROMPTS = {
     "classifier_ollama_verify": SYSTEM_PROMPT_OLLAMA_VERIFY,
     "classifier_ollama_generate_wrapper": SYSTEM_PROMPT_OLLAMA_GENERATE_WRAPPER,
     "classifier_openai": SYSTEM_PROMPT_OPENAI,
+    "classifier_user_message": CLASSIFIER_USER_MESSAGE,
 }
 
 

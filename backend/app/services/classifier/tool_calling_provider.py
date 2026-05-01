@@ -117,7 +117,14 @@ class ToolCallingLlmProvider(BaseClassifierProvider):
             },
         )
 
-        user_content = self._build_user_message(document)
+        user_content = await self._get_prompt("classifier_user_message", variables={
+            "DOCUMENT_ID": document.document_id,
+            "CURRENT_TITLE": document.current_title,
+            "CURRENT_TAGS": document.current_tags,
+            "CURRENT_CORRESPONDENT": document.current_correspondent or "",
+            "CURRENT_DOCUMENT_TYPE": document.current_document_type or "",
+            "CONTENT": document.content,
+        })
         logger.info(f"LiteLLM tool-calling user message length: {len(user_content)} chars")
 
         active_tools = self._filter_tools(config)
@@ -232,24 +239,6 @@ class ToolCallingLlmProvider(BaseClassifierProvider):
             if config.get(key, False):
                 fields.append(name)
         return fields
-
-    def _build_user_message(self, doc: DocumentContext) -> str:
-        parts = [f"Dokument-ID: {doc.document_id}"]
-        if doc.current_title:
-            parts.append(f"Aktueller Titel: {doc.current_title}")
-        if doc.current_tags:
-            parts.append(f"Aktuelle Tags: {', '.join(doc.current_tags)}")
-        if doc.current_correspondent:
-            parts.append(f"Aktueller Korrespondent: {doc.current_correspondent}")
-        if doc.current_document_type:
-            parts.append(f"Aktueller Dokumenttyp: {doc.current_document_type}")
-
-        content = doc.content
-        if len(content) > 15000:
-            content = content[:15000] + "\n[... Inhalt gekuerzt ...]"
-
-        parts.append(f"\n--- DOKUMENTINHALT ---\n{content}")
-        return "\n".join(parts)
 
     def _filter_tools(self, config: Dict) -> List[Dict]:
         """Only include tools for enabled features."""
