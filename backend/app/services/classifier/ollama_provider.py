@@ -305,18 +305,19 @@ class OllamaLlmProvider(BaseClassifierProvider):
                     result.debug_info["tags_sent_to_model"] = candidate_tags
                     result.debug_info["summary_used"] = summary
 
-                    tags_rule = await self._get_prompt("classifier_rules_tags")
-                    tag_prompt = (
-                        f"DOKUMENT-KONTEXT:\n"
-                        f"- Titel: {result.title or 'unbekannt'}\n"
-                        f"- Typ: {result.document_type or 'unbekannt'}\n"
-                        f"- Korrespondent: {result.correspondent or 'unbekannt'}\n"
-                        f"- KI-Zusammenfassung: {summary}\n\n"
-                        f"DOKUMENTINHALT (Anfang):\n{content_snippet}\n\n"
-                        f"VERFUEGBARE TAGS:\n{', '.join(candidate_tags)}\n\n"
-                        f"{tags_rule}\n"
-                        f"Waehle {tags_min}-{tags_max} Tags. "
-                        f'Antworte als JSON: {{"tags": ["Tag1", "Tag2"]}}'
+                    tag_prompt = await self._get_prompt(
+                        "classifier_ollama_tags",
+                        variables={
+                            "TITLE": result.title or "unbekannt",
+                            "DOCUMENT_TYPE": result.document_type or "unbekannt",
+                            "CORRESPONDENT": result.correspondent or "unbekannt",
+                            "SUMMARY": summary,
+                            "CONTENT_SNIPPET": content_snippet,
+                            "AVAILABLE_TAGS": ", ".join(candidate_tags),
+                            "TAGS_RULE": await self._get_prompt("classifier_rules_tags"),
+                            "TAG_COUNT_MIN": tags_min,
+                            "TAG_COUNT_MAX": tags_max,
+                        },
                     )
 
                     result.debug_info["tag_prompt_length"] = len(tag_prompt)

@@ -174,16 +174,24 @@ Antworte NUR mit dem JSON, kein anderer Text."""
 
 
 SYSTEM_PROMPT_OLLAMA_TAGS = """Waehle aus der folgenden Tag-Liste die passenden Tags fuer das beschriebene Dokument.
-Waehle 2-5 Tags. Bevorzuge Tags aus dieser Liste:
 
+DOKUMENT-KONTEXT:
+- Titel: {{ TITLE }}
+- Typ: {{ DOCUMENT_TYPE }}
+- Korrespondent: {{ CORRESPONDENT }}
+- KI-Zusammenfassung: {{ SUMMARY }}
+
+DOKUMENTINHALT (Anfang):
+{{ CONTENT_SNIPPET }}
+
+VERFUEGBARE TAGS:
 {{ AVAILABLE_TAGS }}
 
-Falls KEIN passender Tag in der Liste existiert, darfst du EINEN neuen kurzen Tag vorschlagen.
+{{ TAGS_RULE }}
 
-Dokument-Zusammenfassung: {{ SUMMARY }}
+Waehle {{ TAG_COUNT_MIN }}-{{ TAG_COUNT_MAX }} Tags.
 
-Antworte als JSON-Array mit den Tag-Namen:
-["Tag1", "Tag2", "Tag3"]
+Antworte als JSON: {"tags": ["Tag1", "Tag2"]}
 
 Antworte NUR mit dem JSON-Array, kein anderer Text."""
 
@@ -296,6 +304,7 @@ PROMPTS = {
     "classifier_rules_custom_fields": RULES_CUSTOM_FIELDS,
     "classifier_ollama_analyze": SYSTEM_PROMPT_OLLAMA_ANALYZE,
     "classifier_ollama_doctype": SYSTEM_PROMPT_OLLAMA_DOCTYPE,
+    "classifier_ollama_tags": SYSTEM_PROMPT_OLLAMA_TAGS,
     "classifier_ollama_storage_path": SYSTEM_PROMPT_OLLAMA_STORAGE_PATH,
     "classifier_ollama_custom_fields": SYSTEM_PROMPT_OLLAMA_CUSTOM_FIELDS,
     "classifier_ollama_verify": SYSTEM_PROMPT_OLLAMA_VERIFY,
