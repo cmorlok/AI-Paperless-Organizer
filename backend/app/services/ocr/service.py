@@ -268,27 +268,20 @@ class OcrService:
         return text
 
     async def _build_ocr_prompt(self, model: str, page_num: int = 0, total_pages: int = 0) -> str:
-        """Select the appropriate OCR prompt for the given model.
-
-        Model-specific adjustments only where absolutely needed:
-        - deepseek-ocr: Minimal prompt (echoes anything longer)
-        - glm-ocr: Keyword format per official docs
-        - gemma3: Shorter version (echoes/repeats long prompts)
-        - minicpm-v / qwen (default): Full paperless-gpt style prompt
-        """
+        """Build OCR prompt using unified template with model-specific conditionals."""
         name = (model or "").lower()
         page_info = f" This is page {page_num} of {total_pages}." if page_num > 0 and total_pages > 0 else ""
 
         if "deepseek-ocr" in name:
-            return await self._get_prompt("ocr_deepseek")
+            model_key = "deepseek"
+        elif "glm-ocr" in name or "glm_ocr" in name:
+            model_key = "glm"
+        elif "gemma3" in name or "gemma-3" in name:
+            model_key = "gemma3"
+        else:
+            model_key = "default"
 
-        if "glm-ocr" in name or "glm_ocr" in name:
-            return await self._get_prompt("ocr_glm")
-
-        if "gemma3" in name or "gemma-3" in name:
-            return await self._get_prompt("ocr_gemma3", variables={"PAGE_INFO": page_info})
-
-        return await self._get_prompt("ocr_default", variables={"PAGE_INFO": page_info})
+        return await self._get_prompt("ocr_prompt", variables={"MODEL": model_key, "PAGE_INFO": page_info})
 
     @staticmethod
     def _clean_repetitions(text: str) -> str:

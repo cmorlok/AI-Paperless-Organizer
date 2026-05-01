@@ -1,12 +1,9 @@
-OCR_DEEPSEEK_PROMPT = "OCR this document."
-
-OCR_GLM_PROMPT = "Text Recognition:"
-
-OCR_GEMMA3_PROMPT = """Just transcribe the text in this image. Preserve the formatting and layout. Be thorough, continue until the bottom of the page. Use markdown format but without a code block.
-
-{{ PAGE_INFO }}"""
-
-OCR_DEFAULT_PROMPT = """Transcribe ALL text in this image EXACTLY as it appears – high quality OCR.
+OCR_PROMPT = """{% if MODEL == "deepseek" %}OCR this document.
+{% elif MODEL == "glm" %}Text Recognition:
+{% elif MODEL == "gemma3" %}Just transcribe the text in this image. Preserve the formatting and layout. Be thorough, continue until the bottom of the page. Use markdown format but without a code block.
+{{ PAGE_INFO }}
+{% else %}
+Transcribe ALL text in this image EXACTLY as it appears – high quality OCR.
 CRITICAL: Do NOT summarize, skip, or abbreviate any content. Continue until the very bottom of the page.
 CRITICAL: Every single number, amount, percentage, account number, and code MUST be transcribed exactly.
 For tables: transcribe each row completely, including all columns and values.
@@ -17,9 +14,7 @@ Use markdown format without code blocks. Preserve the original layout as closely
 
 The document is in German. Pay special attention to: names, dates (DD.MM.YYYY), IBANs, BIC codes, tax IDs (Steuernummer), amounts in EUR, account numbers, reference numbers, and addresses. Transcribe every value exactly as printed – no rounding, no omitting.
 
-{{ PAGE_INFO }}"""
-
-OCR_ANTI_TABLE_PROMPT = """Transcribe ALL text in this image completely from top to bottom. Do NOT use table formatting, pipes |, or dashes ---. Write each piece of information on its own line, using colons for labels. Include every single line of text: headers, items, prices, totals, footer, company details, IBAN."""
+{{ PAGE_INFO }}{% endif %}"""
 
 OCR_SYSTEM_MESSAGE = (
     "You are a precise OCR module. Output ONLY the verbatim transcribed text from the image – nothing else. "
@@ -111,10 +106,7 @@ WICHTIG:
 
 PROMPTS = {
     "ocr_system_message": OCR_SYSTEM_MESSAGE,
-    "ocr_deepseek": OCR_DEEPSEEK_PROMPT,
-    "ocr_glm": OCR_GLM_PROMPT,
-    "ocr_gemma3": OCR_GEMMA3_PROMPT,
-    "ocr_default": OCR_DEFAULT_PROMPT,
-    "ocr_anti_table": OCR_ANTI_TABLE_PROMPT,
+    "ocr_prompt": OCR_PROMPT,
+    "ocr_anti_table": """Transcribe ALL text in this image completely from top to bottom. Do NOT use table formatting, pipes |, or dashes ---. Write each piece of information on its own line, using colons for labels. Include every single line of text: headers, items, prices, totals, footer, company details, IBAN.""",
     "ocr_evaluation": OCR_EVALUATION_PROMPT,
 }
