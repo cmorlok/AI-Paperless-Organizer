@@ -21,7 +21,6 @@ class ClassifierConfigUpdate(BaseModel):
     prompt_correspondent: Optional[str] = None
     prompt_document_type: Optional[str] = None
     prompt_date: Optional[str] = None
-    system_prompt: Optional[str] = None
     tags_min: Optional[int] = None
     tags_max: Optional[int] = None
     tags_keep_existing: Optional[bool] = None

@@ -85,9 +85,6 @@ class ClassifierConfig(Base):
     prompt_document_type: Mapped[str] = mapped_column(Text, default="")
     prompt_date: Mapped[str] = mapped_column(Text, default="")
 
-    # System prompt override (optional, replaces entire base prompt)
-    system_prompt: Mapped[str] = mapped_column(Text, default="")
-
     # Excluded items: JSON arrays of Paperless IDs to skip
     excluded_tag_ids: Mapped[Any] = mapped_column(JSON, default=[])
     excluded_correspondent_ids: Mapped[Any] = mapped_column(JSON, default=[])
