@@ -114,18 +114,25 @@ class ToolCallingLlmProvider(BaseClassifierProvider):
         enabled_fields = self._get_enabled_fields(config)
 
         trim_prompt = config.get("correspondent_trim_prompt", False)
-        effective_correspondent_rule = config.get("prompt_correspondent") or (
-            get_correspondent_rules(trim_prompt) if trim_prompt else RULES_CORRESPONDENT
+
+        rules_title = await self._get_prompt("classifier_rules_title")
+        rules_tags = await self._get_prompt("classifier_rules_tags")
+        rules_correspondent = await self._get_prompt(
+            "classifier_rules_correspondent_short" if trim_prompt else "classifier_rules_correspondent"
         )
+        rules_doctype = await self._get_prompt("classifier_rules_doctype")
+        rules_date = await self._get_prompt("classifier_rules_date")
+        rules_custom_fields = await self._get_prompt("classifier_rules_custom_fields")
+
         system_prompt = await self._get_prompt(
             "classifier_openai",
             variables={
-                "RULES_TITLE": config.get("prompt_title") or RULES_TITLE,
-                "RULES_TAGS": config.get("prompt_tags") or RULES_TAGS,
-                "RULES_CORRESPONDENT": effective_correspondent_rule or RULES_CORRESPONDENT,
-                "RULES_DOCTYPE": config.get("prompt_document_type") or RULES_DOCTYPE,
-                "RULES_DATE": config.get("prompt_date") or RULES_DATE,
-                "RULES_CUSTOM_FIELDS": RULES_CUSTOM_FIELDS,
+                "RULES_TITLE": rules_title,
+                "RULES_TAGS": rules_tags,
+                "RULES_CORRESPONDENT": rules_correspondent,
+                "RULES_DOCTYPE": rules_doctype,
+                "RULES_DATE": rules_date,
+                "RULES_CUSTOM_FIELDS": rules_custom_fields,
             },
         )
 

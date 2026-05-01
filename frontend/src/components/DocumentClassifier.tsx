@@ -55,6 +55,7 @@ export default function DocumentClassifier() {
   const [storagePathProfiles, setStoragePathProfiles] = useState<api.StoragePathProfile[]>([])
   const [paperlessItemsLoading, setPaperlessItemsLoading] = useState(false)
   const [promptDefaults, setPromptDefaults] = useState<api.PromptDefaults | null>(null)
+  const [classifierCustomPrompts, setClassifierCustomPrompts] = useState<api.CustomPrompt[]>([])
   const [customFieldMappings, setCustomFieldMappings] = useState<api.CustomFieldMapping[]>([])
   const [customFieldsSaving, setCustomFieldsSaving] = useState(false)
 
@@ -324,13 +325,14 @@ export default function DocumentClassifier() {
   const loadPaperlessItems = async () => {
     setPaperlessItemsLoading(true)
     try {
-      const [tags, correspondents, docTypes, profiles, defaults, cfMappings] = await Promise.all([
+      const [tags, correspondents, docTypes, profiles, defaults, cfMappings, allPrompts] = await Promise.all([
         api.getClassifierTags(),
         api.getClassifierCorrespondents(),
         api.getClassifierDocumentTypes(),
         api.getStoragePathProfiles(),
         api.getClassifierPromptDefaults(),
         api.getCustomFieldMappings(),
+        api.getPrompts(),
       ])
       setPaperlessTags(tags)
       setPaperlessCorrespondents(correspondents)
@@ -338,6 +340,10 @@ export default function DocumentClassifier() {
       setStoragePathProfiles(profiles)
       setPromptDefaults(defaults)
       setCustomFieldMappings(cfMappings)
+      const classifierPrompts = (allPrompts as api.CustomPrompt[]).filter(
+        (p: api.CustomPrompt) => p.entity_type.startsWith('classifier_rules_')
+      )
+      setClassifierCustomPrompts(classifierPrompts)
     } catch (e) {
       console.error('Failed to load Paperless items:', e)
     } finally {
@@ -367,6 +373,40 @@ export default function DocumentClassifier() {
   const updateCustomFieldMapping = (fieldId: number, field: string, value: any) => {
     setCustomFieldMappings(prev =>
       prev.map(m => m.paperless_field_id === fieldId ? { ...m, [field]: value } : m)
+    )
+  }
+
+  const getClassifierCustomPrompt = (field: string): api.CustomPrompt | undefined => {
+    return classifierCustomPrompts.find(p => p.entity_type === `classifier_rules_${field}`)
+  }
+
+  const saveClassifierCustomPrompt = async (field: string, template: string) => {
+    const prompt = getClassifierCustomPrompt(field)
+    if (!prompt) return
+    await api.updatePrompt(prompt.id, {
+      entity_type: prompt.entity_type,
+      prompt_template: template,
+      is_active: true,
+    })
+    setClassifierCustomPrompts(prev =>
+      prev.map(p =>
+        p.entity_type === `classifier_rules_${field}`
+          ? { ...p, prompt_template: template }
+          : p
+      )
+    )
+  }
+
+  const resetClassifierCustomPrompt = async (field: string) => {
+    await api.resetPrompt(`classifier_rules_${field}`)
+    const result = await api.resetPrompt(`classifier_rules_${field}`)
+    const defaultPrompt = promptDefaults?.[field as keyof api.PromptDefaults] || ''
+    setClassifierCustomPrompts(prev =>
+      prev.map(p =>
+        p.entity_type === `classifier_rules_${field}`
+          ? { ...p, prompt_template: result.prompt_template || defaultPrompt }
+          : p
+      )
     )
   }
 
@@ -1458,13 +1498,14 @@ export default function DocumentClassifier() {
                 expandable
                 expanded={expandedSections['title']}
                 onToggleExpand={() => toggleSection('title')}
-                badge={config.prompt_title ? 'Prompt' : undefined}
+                badge={getClassifierCustomPrompt('title')?.prompt_template !== promptDefaults?.title ? 'Prompt' : undefined}
               />
               {expandedSections['title'] && config.enable_title && (
                 <PromptSection
                   defaultPrompt={promptDefaults?.title}
-                  userPrompt={config.prompt_title}
-                  onUserPromptChange={(v) => setConfig({ ...config, prompt_title: v })}
+                  userPrompt={getClassifierCustomPrompt('title')?.prompt_template || ''}
+                  onUserPromptChange={(v) => saveClassifierCustomPrompt('title', v)}
+                  onReset={() => resetClassifierCustomPrompt('title')}
                   placeholder='z.B.: "Immer Dokumentnummer mit in den Titel" oder "Produktnamen bevorzugen"'
                 />
               )}
@@ -1478,14 +1519,15 @@ export default function DocumentClassifier() {
                 expandable
                 expanded={expandedSections['tags']}
                 onToggleExpand={() => toggleSection('tags')}
-                badge={config.excluded_tag_ids?.length ? `${config.excluded_tag_ids.length} ausgeschl.` : config.prompt_tags ? 'Prompt' : undefined}
+                badge={config.excluded_tag_ids?.length ? `${config.excluded_tag_ids.length} ausgeschl.` : getClassifierCustomPrompt('tags')?.prompt_template !== promptDefaults?.tags ? 'Prompt' : undefined}
               />
               {expandedSections['tags'] && config.enable_tags && (
                 <div className="ml-8 p-3 rounded-lg bg-surface-800/30 border border-surface-700/50 space-y-3">
                   <PromptSection
                     defaultPrompt={promptDefaults?.tags}
-                    userPrompt={config.prompt_tags}
-                    onUserPromptChange={(v) => setConfig({ ...config, prompt_tags: v })}
+                    userPrompt={getClassifierCustomPrompt('tags')?.prompt_template || ''}
+                    onUserPromptChange={(v) => saveClassifierCustomPrompt('tags', v)}
+                    onReset={() => resetClassifierCustomPrompt('tags')}
                     placeholder='z.B.: "Immer den Lebensbereich taggen (KFZ, Wohnen, Gesundheit...)"'
                   />
                   <div className="grid grid-cols-2 gap-3">
@@ -1685,14 +1727,15 @@ export default function DocumentClassifier() {
                 expandable
                 expanded={expandedSections['correspondents']}
                 onToggleExpand={() => toggleSection('correspondents')}
-                badge={config.excluded_correspondent_ids?.length ? `${config.excluded_correspondent_ids.length} ausgeschl.` : config.prompt_correspondent ? 'Prompt' : undefined}
+                badge={config.excluded_correspondent_ids?.length ? `${config.excluded_correspondent_ids.length} ausgeschl.` : getClassifierCustomPrompt('correspondent')?.prompt_template !== promptDefaults?.correspondent ? 'Prompt' : undefined}
               />
               {expandedSections['correspondents'] && config.enable_correspondent && (
                 <div className="ml-8 p-3 rounded-lg bg-surface-800/30 border border-surface-700/50 space-y-3">
                   <PromptSection
                     defaultPrompt={promptDefaults?.correspondent}
-                    userPrompt={config.prompt_correspondent}
-                    onUserPromptChange={(v) => setConfig({ ...config, prompt_correspondent: v })}
+                    userPrompt={getClassifierCustomPrompt('correspondent')?.prompt_template || ''}
+                    onUserPromptChange={(v) => saveClassifierCustomPrompt('correspondent', v)}
+                    onReset={() => resetClassifierCustomPrompt('correspondent')}
                     placeholder='z.B.: "Offizielle Firmennamen verwenden, keine Abkuerzungen"'
                   />
                   <div>
@@ -1866,14 +1909,15 @@ export default function DocumentClassifier() {
                 expandable
                 expanded={expandedSections['docTypes']}
                 onToggleExpand={() => toggleSection('docTypes')}
-                badge={config.excluded_document_type_ids?.length ? `${config.excluded_document_type_ids.length} ausgeschlossen` : config.prompt_document_type ? 'Prompt' : undefined}
+                badge={config.excluded_document_type_ids?.length ? `${config.excluded_document_type_ids.length} ausgeschlossen` : getClassifierCustomPrompt('doctype')?.prompt_template !== promptDefaults?.document_type ? 'Prompt' : undefined}
               />
               {expandedSections['docTypes'] && config.enable_document_type && (
                 <div className="ml-8 p-3 rounded-lg bg-surface-800/30 border border-surface-700/50 space-y-3">
                   <PromptSection
                     defaultPrompt={promptDefaults?.document_type}
-                    userPrompt={config.prompt_document_type}
-                    onUserPromptChange={(v) => setConfig({ ...config, prompt_document_type: v })}
+                    userPrompt={getClassifierCustomPrompt('doctype')?.prompt_template || ''}
+                    onUserPromptChange={(v) => saveClassifierCustomPrompt('doctype', v)}
+                    onReset={() => resetClassifierCustomPrompt('doctype')}
                     placeholder='z.B.: "Im Zweifel lieber null statt falschen Typ"'
                   />
                   <p className="text-xs text-surface-500">
@@ -2103,14 +2147,15 @@ export default function DocumentClassifier() {
                 expandable
                 expanded={expandedSections['date']}
                 onToggleExpand={() => toggleSection('date')}
-                badge={config.prompt_date ? 'Prompt' : undefined}
+                badge={getClassifierCustomPrompt('date')?.prompt_template !== promptDefaults?.date ? 'Prompt' : undefined}
               />
               {expandedSections['date'] && config.enable_created_date && (
                 <div className="ml-8 space-y-4">
                   <PromptSection
                     defaultPrompt={promptDefaults?.date}
-                    userPrompt={config.prompt_date}
-                    onUserPromptChange={(v) => setConfig({ ...config, prompt_date: v })}
+                    userPrompt={getClassifierCustomPrompt('date')?.prompt_template || ''}
+                    onUserPromptChange={(v) => saveClassifierCustomPrompt('date', v)}
+                    onReset={() => resetClassifierCustomPrompt('date')}
                     placeholder='z.B.: "Bei Kontoauszuegen das Auszugsdatum nehmen, nicht den Zeitraum"'
                   />
                   {/* Datum-Ignorieren-Liste */}
@@ -3099,10 +3144,11 @@ export default function DocumentClassifier() {
 }
 
 
-function PromptSection({ defaultPrompt, userPrompt, onUserPromptChange, placeholder, inline }: {
+function PromptSection({ defaultPrompt, userPrompt, onUserPromptChange, onReset, placeholder, inline }: {
   defaultPrompt?: string
   userPrompt: string
   onUserPromptChange: (v: string) => void
+  onReset?: () => void
   placeholder: string
   inline?: boolean
 }) {
@@ -3126,7 +3172,7 @@ function PromptSection({ defaultPrompt, userPrompt, onUserPromptChange, placehol
           )}
           {isCustomized && defaultPrompt && (
             <button
-              onClick={() => onUserPromptChange('')}
+              onClick={onReset || (() => onUserPromptChange(''))}
               className="text-xs text-surface-500 hover:text-surface-300 underline transition-colors"
               title="Auf Standard zuruecksetzen"
             >

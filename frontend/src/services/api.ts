@@ -44,6 +44,9 @@ export async function fetchJson<T>(url: string, options?: RequestInit & { timeou
   }
 }
 
+// Re-export types from types/index
+export type { CustomPrompt } from '../types'
+
 // Health Check
 export const checkHealth = () => fetchJson<{ status: string }>('/health')
 
@@ -914,11 +917,6 @@ export interface ClassifierConfig {
   storage_path_behavior: string
   storage_path_override_names: string[]
   correspondent_behavior: string
-  prompt_title: string
-  prompt_tags: string
-  prompt_correspondent: string
-  prompt_document_type: string
-  prompt_date: string
   review_mode: string
   batch_size: number
   system_prompt: string

@@ -286,6 +286,13 @@ Antworte NUR mit dem JSON."""
 
 
 PROMPTS = {
+    "classifier_rules_title": RULES_TITLE,
+    "classifier_rules_tags": RULES_TAGS,
+    "classifier_rules_correspondent": RULES_CORRESPONDENT,
+    "classifier_rules_correspondent_short": RULES_CORRESPONDENT_SHORT,
+    "classifier_rules_doctype": RULES_DOCTYPE,
+    "classifier_rules_date": RULES_DATE,
+    "classifier_rules_custom_fields": RULES_CUSTOM_FIELDS,
     "classifier_ollama_analyze": SYSTEM_PROMPT_OLLAMA_ANALYZE,
     "classifier_ollama_storage_path": SYSTEM_PROMPT_OLLAMA_STORAGE_PATH,
     "classifier_ollama_custom_fields": SYSTEM_PROMPT_OLLAMA_CUSTOM_FIELDS,

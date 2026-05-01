@@ -13,13 +13,10 @@ from app.services.classifier.base_provider import (
 from app.services.llm import LLMService
 from app.services.classifier.tool_executor import ToolExecutor
 from app.services.classifier.prompts import (
-    SYSTEM_PROMPT_OLLAMA_ANALYZE,
-    SYSTEM_PROMPT_OLLAMA_STORAGE_PATH, SYSTEM_PROMPT_OLLAMA_CUSTOM_FIELDS,
-    SYSTEM_PROMPT_OLLAMA_VERIFY, RULES_TITLE, RULES_TAGS, RULES_CORRESPONDENT,
-    RULES_DOCTYPE, RULES_DATE, get_correspondent_rules, PROMPTS,
+    PROMPTS,
 )
 from app.services.classifier.llm_schemas import (
-    _MAX_TOOL_ROUNDS, _MAX_CONTENT_CHARS, _LOCAL_LLM_CALL_TIMEOUT,
+    _MAX_CONTENT_CHARS, _LOCAL_LLM_CALL_TIMEOUT,
     _THINKING_MODEL_PREFIXES, _STRICT_SCHEMA_MODELS,
     _SCHEMA_ANALYZE, _SCHEMA_TAGS, _SCHEMA_DOCTYPE,
     _SCHEMA_STORAGE_PATH, _SCHEMA_VERIFY,
@@ -153,17 +150,22 @@ class OllamaLlmProvider(BaseClassifierProvider):
                 result.storage_path_reason = None
             result.custom_fields = {}
 
-            analyze_prompt = SYSTEM_PROMPT_OLLAMA_ANALYZE
-            if config.get("prompt_title") and config["prompt_title"].strip():
-                analyze_prompt = analyze_prompt.replace(RULES_TITLE, config["prompt_title"])
-            if config.get("prompt_correspondent") and config["prompt_correspondent"].strip():
-                analyze_prompt = analyze_prompt.replace(RULES_CORRESPONDENT, config["prompt_correspondent"])
-            elif config.get("correspondent_trim_prompt"):
-                analyze_prompt = analyze_prompt.replace(
-                    RULES_CORRESPONDENT, get_correspondent_rules(trim_prompt=True)
-                )
-            if config.get("prompt_date") and config["prompt_date"].strip():
-                analyze_prompt = analyze_prompt.replace(RULES_DATE, config["prompt_date"])
+            trim_prompt = config.get("correspondent_trim_prompt", False)
+
+            rules_title = await self._get_prompt("classifier_rules_title")
+            rules_correspondent = await self._get_prompt(
+                "classifier_rules_correspondent_short" if trim_prompt else "classifier_rules_correspondent"
+            )
+            rules_date = await self._get_prompt("classifier_rules_date")
+
+            analyze_prompt = await self._get_prompt(
+                "classifier_ollama_analyze",
+                variables={
+                    "RULES_TITLE": rules_title,
+                    "RULES_CORRESPONDENT": rules_correspondent,
+                    "RULES_DATE": rules_date,
+                },
+            )
 
             existing_hints = []
             if document.current_correspondent:
@@ -314,7 +316,7 @@ class OllamaLlmProvider(BaseClassifierProvider):
                     result.debug_info["tags_sent_to_model"] = candidate_tags
                     result.debug_info["summary_used"] = summary
 
-                    tags_rule = config.get("prompt_tags") or RULES_TAGS
+                    tags_rule = await self._get_prompt("classifier_rules_tags")
                     tag_prompt = (
                         f"DOKUMENT-KONTEXT:\n"
                         f"- Titel: {result.title or 'unbekannt'}\n"
