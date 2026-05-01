@@ -13,7 +13,6 @@ from app.services.rag.embedding_service import EmbeddingService
 from app.services.rag.chunking import ChunkingService
 from app.services.llm import LLMResponse
 from app.services.llm import LLMService
-from app.services.rag.prompts import CHUNK_CONTEXT_PROMPT
 
 logger = logging.getLogger(__name__)
 
@@ -328,12 +327,10 @@ class Indexer:
             + (f", Korrespondent: {doc.get('correspondent_name', '')}" if doc.get('correspondent_name') else "")
             + (f", Datum: {(doc.get('created') or '')[:10]}" if doc.get('created') else "")
         )
-        if self._get_prompt:
-            prompt_template = await self._get_prompt("rag_chunk_context")
-        else:
-            prompt_template = CHUNK_CONTEXT_PROMPT
-        from jinja2 import Template
-        prompt = Template(prompt_template, autoescape=False).render(doc_info=doc_info, chunk_text=chunk_text[:500])
+        prompt = await self._get_prompt(
+            "rag_chunk_context",
+            variables={"DOC_INFO": doc_info, "CHUNK_TEXT": chunk_text[:500]},
+        )
         try:
             import re as _re
             result: LLMResponse = await self.llm_service.complete(

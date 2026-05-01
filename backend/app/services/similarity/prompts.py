@@ -163,6 +163,39 @@ Antworte NUR mit validem JSON:
 
 Wenn keine solchen Tags gefunden werden: {"correspondent_tags": []}"""
 
+TAGS_CROSS_BATCH_MERGE = """Du hast mehrere Gruppen aus verschiedenen Batches analysiert.
+
+1. Prüfe ob einige dieser GRUPPEN zusammengehören und zur gleichen Entität gehören.
+2. Prüfe ob UNGRUPPIERTE EINTRÄGE zu einer existierenden Gruppe gehören sollten.
+
+GRUPPEN (mit Beispiel-Mitgliedern):
+{{ GROUP_INFO }}
+
+UNGRUPPIERTE EINTRÄGE (gehören evtl. zu einer Gruppe):
+{{ UNGROUPED_ITEMS }}
+
+Antworte NUR mit validem JSON:
+{
+  "group_merges": [
+    {
+      "target_name": "Bester Name für die zusammengeführte Gruppe",
+      "source_names": ["gruppenname1", "gruppenname2"],
+      "reasoning": "Kurze Begründung"
+    }
+  ],
+  "add_to_groups": [
+    {
+      "group_name": "Name der existierenden Gruppe",
+      "items_to_add": ["ungruppierter_name1", "ungruppierter_name2"],
+      "reasoning": "Kurze Begründung"
+    }
+  ]
+}
+
+Beispiel: Wenn "1&1" in einer Gruppe ist und "1und1 Internet" ungruppiert, sollte "1und1 Internet" zu der "1&1" Gruppe hinzugefügt werden.
+
+Wenn nichts zusammengehört: {"group_merges": [], "add_to_groups": []}"""
+
 TAGS_ARE_DOCUMENT_TYPES = """Du bist ein Experte für Dokumentenmanagement.
 
 Analysiere diese Tags und identifiziere Tags, die eigentlich DOKUMENTENTYPEN sind und nicht als Tag verwendet werden sollten.
@@ -199,4 +232,5 @@ PROMPTS = {
     "similarity_tags_nonsense": TAGS_NONSENSE,
     "similarity_tags_are_correspondents": TAGS_ARE_CORRESPONDENTS,
     "similarity_tags_are_document_types": TAGS_ARE_DOCUMENT_TYPES,
+    "similarity_cross_batch_merge": TAGS_CROSS_BATCH_MERGE,
 }

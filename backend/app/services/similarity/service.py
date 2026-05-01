@@ -460,38 +460,13 @@ class SimilarityService:
             ungrouped_names = [item.get("name", "") for item in ungrouped_items[:100]]  # Limit to 100
         
         # Ask LLM to find similar group names AND check ungrouped items
-        cross_batch_prompt = f"""Du hast mehrere Gruppen aus verschiedenen Batches analysiert.
-        
-1. Prüfe ob einige dieser GRUPPEN zusammengehören und zur gleichen Entität gehören.
-2. Prüfe ob UNGRUPPIERTE EINTRÄGE zu einer existierenden Gruppe gehören sollten.
-
-GRUPPEN (mit Beispiel-Mitgliedern):
-{json.dumps(group_info, ensure_ascii=False, indent=2)}
-
-UNGRUPPIERTE EINTRÄGE (gehören evtl. zu einer Gruppe):
-{json.dumps(ungrouped_names[:50], ensure_ascii=False, indent=2) if ungrouped_names else "[]"}
-
-Antworte NUR mit validem JSON:
-{{
-  "group_merges": [
-    {{
-      "target_name": "Bester Name für die zusammengeführte Gruppe",
-      "source_names": ["gruppenname1", "gruppenname2"],
-      "reasoning": "Kurze Begründung"
-    }}
-  ],
-  "add_to_groups": [
-    {{
-      "group_name": "Name der existierenden Gruppe",
-      "items_to_add": ["ungruppierter_name1", "ungruppierter_name2"],
-      "reasoning": "Kurze Begründung"
-    }}
-  ]
-}}
-
-Beispiel: Wenn "1&1" in einer Gruppe ist und "1und1 Internet" ungruppiert, sollte "1und1 Internet" zu der "1&1" Gruppe hinzugefügt werden.
-
-Wenn nichts zusammengehört: {{"group_merges": [], "add_to_groups": []}}"""
+        cross_batch_prompt = await self._get_prompt(
+            "similarity_cross_batch_merge",
+            variables={
+                "GROUP_INFO": json.dumps(group_info, ensure_ascii=False, indent=2),
+                "UNGROUPED_ITEMS": json.dumps(ungrouped_names[:50], ensure_ascii=False, indent=2) if ungrouped_names else "[]",
+            },
+        )
 
         try:
             provider, model = await self._get_llm_config()
@@ -756,11 +731,12 @@ Wenn nichts zusammengehört: {{"group_merges": [], "add_to_groups": []}}"""
         # Format items
         tags_text = "\n".join([f"- {t['name']}" for t in tags])
         corr_text = "\n".join([f"- {c['name']}" for c in correspondents])
-        
-        prompt_template = await self._get_prompt("similarity_tags_are_correspondents")
-        from jinja2 import Template
-        prompt = Template(prompt_template, autoescape=False).render(items=tags_text, correspondents=corr_text)
-        
+
+        prompt = await self._get_prompt(
+            "similarity_tags_are_correspondents",
+            variables={"ITEMS": tags_text, "CORRESPONDENTS": corr_text},
+        )
+
         # Token estimation
         estimated_input_tokens = self.llm.estimate_tokens(prompt)
         provider, model = await self._get_llm_config()
@@ -859,11 +835,12 @@ Wenn nichts zusammengehört: {{"group_merges": [], "add_to_groups": []}}"""
         # Format items
         tags_text = "\n".join([f"- {t['name']}" for t in tags])
         dt_text = "\n".join([f"- {dt['name']}" for dt in doc_types])
-        
-        prompt_template = await self._get_prompt("similarity_tags_are_document_types")
-        from jinja2 import Template
-        prompt = Template(prompt_template, autoescape=False).render(items=tags_text, document_types=dt_text)
-        
+
+        prompt = await self._get_prompt(
+            "similarity_tags_are_document_types",
+            variables={"ITEMS": tags_text, "DOCUMENT_TYPES": dt_text},
+        )
+
         # Token estimation
         estimated_input_tokens = self.llm.estimate_tokens(prompt)
         provider, model = await self._get_llm_config()
