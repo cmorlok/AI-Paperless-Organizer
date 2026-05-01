@@ -26,11 +26,11 @@ class TestPhase1Smoke:
         p = Path(__file__).parent.parent / "app" / "services" / "classifier" / "openai_provider.py"
         assert not p.exists(), f"openai_provider.py still exists at {p}"
 
-    def test_ollama_provider_deleted(self):
-        """LLM-06: ollama_provider.py must not exist in classifier."""
+    def test_litellm_provider_renamed(self):
+        """LLM-06: litellm_provider.py must not exist in classifier (renamed to per-provider files)."""
         from pathlib import Path
-        p = Path(__file__).parent.parent / "app" / "services" / "classifier" / "ollama_provider.py"
-        assert not p.exists(), f"ollama_provider.py still exists at {p}"
+        p = Path(__file__).parent.parent / "app" / "services" / "classifier" / "litellm_provider.py"
+        assert not p.exists(), f"litellm_provider.py still exists at {p}"
 
     def test_llm_service_importable(self):
         """LLM-01: llm service must be importable with core methods."""
